@@ -23,19 +23,19 @@ public enum LaneStatusMatch: Hashable, Sendable {
         case .session(let id):
             guard !id.isEmpty else { return nil }
             return records.filter { $0.sessionID.map { $0 == id || $0.hasPrefix(id) } ?? false }
-                .max { $0.updatedAt < $1.updatedAt }
+                .laneStatusPick()
         case .firstOf(let matches):
             for match in matches { if let found = match.find(in: records) { return found } }
             return nil
         case .lane(let name):
-            return records.filter { $0.lane == name }.max { $0.updatedAt < $1.updatedAt }
+            return records.filter { $0.lane == name }.laneStatusPick()
         case .directory(let path, let agent):
             let want = Self.normalize(path)
             return records.filter { record in
                 guard record.lane != nil, let dir = record.directory else { return false }
                 if let agent, record.agent != agent { return false }
                 return Self.normalize(dir) == want
-            }.max { $0.updatedAt < $1.updatedAt }
+            }.laneStatusPick()
         }
     }
 
@@ -44,5 +44,23 @@ public enum LaneStatusMatch: Hashable, Sendable {
         var out = URL(fileURLWithPath: expanded).resolvingSymlinksInPath().standardizedFileURL.path
         while out.count > 1, out.hasSuffix("/") { out.removeLast() }
         return out
+    }
+}
+
+extension Array where Element == LaneStatus {
+    /// One lane's status from every record that matched it. A poll is stamped
+    /// now, so the newest record would always be the poll; instead a poll that
+    /// says the agent is working wins, and otherwise an event that says why it
+    /// stopped (a permission prompt, a question, a finished turn) is kept over
+    /// the poll's plain "idle".
+    func laneStatusPick() -> LaneStatus? {
+        let newest = { (a: LaneStatus, b: LaneStatus) in a.updatedAt < b.updatedAt }
+        let polled = filter(\.isPolled).max(by: newest)
+        let event = filter { !$0.isPolled }.max(by: newest)
+        guard let polled else { return event }
+        guard let event else { return polled }
+        if polled.state == .running { return polled }
+        if event.state.wantsAttention { return event }
+        return polled
     }
 }

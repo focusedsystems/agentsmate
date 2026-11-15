@@ -4,6 +4,8 @@ import Foundation
 /// background sessions (`claude --bg`) and the interactive ones already
 /// running, each with its name, folder and what it is doing.
 public enum ClaudeAgentsList {
+    /// The `event` of every record read from the list.
+    public static let event = "claude agents"
     struct Entry: Decodable {
         var id: String?
         var sessionId: String?
@@ -34,13 +36,13 @@ public enum ClaudeAgentsList {
             return LaneStatus(agent: "claude", state: state, lane: entry.name, directory: entry.cwd,
                               sessionID: entry.sessionId ?? entry.id,
                               message: entry.kind.map { "\($0) session" },
-                              event: "claude agents", updatedAt: now)
+                              event: event, updatedAt: now)
         }
     }
 
     /// Run `claude agents --json` and parse it. Empty when Claude is missing
     /// or the call fails or takes longer than `timeout`.
-    public static func fetch(binary: URL, timeout: TimeInterval = 10) -> [LaneStatus] {
+    public static func fetch(binary: URL, includeInteractive: Bool = false, timeout: TimeInterval = 10) -> [LaneStatus] {
         let process = Process()
         process.executableURL = binary
         process.arguments = ["agents", "--json"]
@@ -53,6 +55,6 @@ public enum ClaudeAgentsList {
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         guard process.terminationStatus == 0 else { return [] }
-        return parse(data)
+        return parse(data, includeInteractive: includeInteractive)
     }
 }
