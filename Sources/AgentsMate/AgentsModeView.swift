@@ -376,7 +376,7 @@ struct LaneRow: View {
             Circle().fill(Color.orange).frame(width: 7, height: 7)
         case .waitingForInput:
             Circle().fill(Color.blue).frame(width: 7, height: 7)
-        case .done, .attached:
+        case .done, .idle, .attached:
             Circle().fill(Color.secondary).frame(width: 7, height: 7)
         }
     }

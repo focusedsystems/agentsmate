@@ -6,7 +6,7 @@ import AgentsMateStatus
 /// What a lane row shows: the agent's own report when its hooks have one,
 /// otherwise whether the terminal here is attached.
 public enum LaneDisplayStatus: Equatable, Sendable {
-    case notOpened, attached, running, waitingForInput, permissionRequested, done, detached
+    case notOpened, attached, running, waitingForInput, permissionRequested, done, idle, detached
 
     public var title: String {
         switch self {
@@ -16,6 +16,7 @@ public enum LaneDisplayStatus: Equatable, Sendable {
         case .waitingForInput: "Waiting for you"
         case .permissionRequested: "Asking permission"
         case .done: "Done"
+        case .idle: "Idle"
         case .detached: "Detached"
         }
     }
@@ -71,7 +72,7 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
             case .running: return .running
             case .waitingForInput: return .waitingForInput
             case .permissionRequested: return .permissionRequested
-            case .done: return .done
+            case .done: return record.isPolled ? .idle : .done
             case .ended: break
             }
         }
@@ -103,9 +104,12 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
 
     func update(record new: LaneStatus?) {
         guard new != record else { return }
-        let isNewer = new.map { n in record.map { n.updatedAt > $0.updatedAt } ?? true } ?? false
+        // Only a change into a state that wants a person flags the row: the
+        // first record a lane gets describes what was already so, and a poll
+        // repeating the same state is not news.
+        let changed = record != nil && new?.state != record?.state
         record = new
-        if isNewer, !isShown, new?.state.wantsAttention == true { needsAttention = true }
+        if changed, !isShown, new?.state.wantsAttention == true { needsAttention = true }
         if new?.state.wantsAttention != true { needsAttention = false }
     }
 

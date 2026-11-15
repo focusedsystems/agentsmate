@@ -81,6 +81,8 @@ final class AgentLaneStoreTests: XCTestCase {
         let store = makeStore()
         store.sync(lanes: [lane("a")])
         let session = store.sessions["a"]!
+        session.update(record: LaneStatus(agent: "claude", state: .running, lane: "a", event: "UserPromptSubmit"))
+        XCTAssertFalse(session.needsAttention)
         session.update(record: LaneStatus(agent: "claude", state: .permissionRequested, lane: "a", event: "Notification"))
         XCTAssertEqual(session.status, .permissionRequested)
         XCTAssertTrue(session.needsAttention)
