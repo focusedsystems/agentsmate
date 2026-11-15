@@ -27,7 +27,7 @@ public enum LaneDisplayStatus: Equatable, Sendable {
 @MainActor
 public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, LocalProcessTerminalViewDelegate {
     public private(set) var lane: AgentLane
-    public let backend: any LaneBackend
+    public private(set) var backend: any LaneBackend
     public nonisolated let id: String
 
     /// Replaced on reattach, so a fresh process gets a fresh screen.
@@ -94,6 +94,11 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
 
     func update(lane: AgentLane) {
         self.lane = lane
+    }
+
+    /// Takes effect the next time the lane is attached.
+    func update(backend: any LaneBackend) {
+        self.backend = backend
     }
 
     func update(record new: LaneStatus?) {

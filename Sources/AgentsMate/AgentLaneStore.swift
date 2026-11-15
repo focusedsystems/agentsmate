@@ -69,8 +69,15 @@ public final class AgentLaneStore: ObservableObject {
         statusFeed?.start()
     }
 
+    /// Add a backend, or replace one with the same id. Lanes already
+    /// attached keep running; the new settings apply when each is next
+    /// attached.
     public func register(_ backend: any LaneBackend) {
         backends[backend.id] = backend
+        for session in sessions.values where session.lane.backendID == backend.id {
+            session.update(backend: backend)
+        }
+        apply(statusFeed?.records ?? [])
     }
 
     public func backend(id: String) -> (any LaneBackend)? { backends[id] }
