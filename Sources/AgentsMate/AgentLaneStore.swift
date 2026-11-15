@@ -80,6 +80,30 @@ public final class AgentLaneStore: ObservableObject {
     public let statusFeed: LaneStatusFeed?
     /// What ⌘T opens, when the app allows it.
     public var onNewLane: (() -> Void)?
+    /// Called just before a lane's process starts, so the app can prepare
+    /// it: write a per-lane instructions file, set its environment, or pick
+    /// the backend a lane that follows a default should run. The lane it
+    /// returns is the one started.
+    public var willStartLane: ((AgentLane) -> AgentLane)?
+
+    /// The file the agent in a lane may write its row label to
+    /// (`$AGENTSMATE_SESSION`), or nil when session files are off.
+    public func sessionFile(for id: AgentLane.ID) -> URL? {
+        configuration.sessionFileDirectory?.appendingPathComponent(AgentLaneSession.fileName(id) + ".json")
+    }
+
+    /// Start a lane's process, letting the app prepare it first.
+    private func start(_ session: AgentLaneSession) {
+        if !session.isAttached, let willStartLane, let index = lanes.firstIndex(where: { $0.id == session.id }) {
+            let prepared = willStartLane(lanes[index])
+            if prepared != lanes[index] {
+                lanes[index] = prepared
+                session.update(lane: prepared)
+                if let backend = backends[prepared.backendID] { session.update(backend: backend) }
+            }
+        }
+        session.start(configuration: configuration, font: font)
+    }
 
     /// Sections, pins, order and sort, as the person left them.
     @Published public var layout = LaneLayout() {
@@ -456,7 +480,7 @@ public final class AgentLaneStore: ObservableObject {
         guard let session = sessions[id] else { return }
         if id == splitID { splitID = selectedID == id ? nil : selectedID }
         selectedID = id
-        session.start(configuration: configuration, font: font)
+        start(session)
         if focus { session.wantsFocus = true }
         updateShown()
     }
@@ -571,7 +595,7 @@ public final class AgentLaneStore: ObservableObject {
             splitID = added == current ? nil : added
         } else if let current, let index = lanes.firstIndex(where: { $0.id == current }), lanes.count > 1 {
             let other = lanes[(index + 1) % lanes.count].id
-            sessions[other]?.start(configuration: configuration, font: font)
+            if let other = sessions[other] { start(other) }
             splitID = other
         }
         updateShown()

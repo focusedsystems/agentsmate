@@ -56,3 +56,38 @@ final class NewLaneTests: XCTestCase {
         XCTAssertFalse(fresh.sessions[fresh.lanes[0].id]!.isStarted)
     }
 }
+
+@MainActor
+final class WillStartTests: XCTestCase {
+    func testAppPreparesLaneBeforeStart() {
+        let defaults = UserDefaults(suiteName: "agentsmate-will-\(UUID().uuidString)")!
+        let other = CommandLaneBackend(id: "other", displayName: "Other", command: "true")
+        let store = AgentLaneStore(configuration: .init(termProgram: "T", sessionFileDirectory: URL(fileURLWithPath: "/tmp/s")),
+                                   backends: [CommandLaneBackend.shell, other], statusFeed: nil, defaults: defaults)
+        store.sync(lanes: [AgentLane(id: "a", title: "A", backendID: "shell")])
+        var seen: [String] = []
+        store.willStartLane = { lane in
+            seen.append(lane.id)
+            var lane = lane
+            lane.backendID = "other"
+            lane.environment = ["APP_BRIEF": "/b"]
+            return lane
+        }
+        store.open("a", focus: false)
+        XCTAssertEqual(seen, ["a"])
+        XCTAssertEqual(store.sessions["a"]?.backend.id, "other")
+        XCTAssertEqual(store.lanes[0].environment["APP_BRIEF"], "/b")
+        XCTAssertEqual(store.sessionFile(for: "a")?.path, "/tmp/s/a.json")
+        store.open("a", focus: false)
+        XCTAssertEqual(seen, ["a"], "an attached lane is not prepared again")
+        store.detachAll()
+    }
+
+    func testLanePromptFileWins() {
+        var backend = CommandLaneBackend(id: "c", displayName: "C", command: "claude")
+        backend.promptFile = URL(fileURLWithPath: "/backend.md")
+        var lane = AgentLane(id: "a", title: "A", directory: URL(fileURLWithPath: "/w"), backendID: "c")
+        lane.promptFile = URL(fileURLWithPath: "/lane.md")
+        XCTAssertEqual(backend.launch(for: lane, shell: "/bin/zsh").arguments.last, "claude --append-system-prompt-file '/lane.md'")
+    }
+}
