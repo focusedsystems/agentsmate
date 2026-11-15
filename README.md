@@ -44,6 +44,30 @@ agent's terminal title.
 
 Backends and the case for each: [docs/backends.md](docs/backends.md).
 
+## Keeping the agent CLIs current
+
+The `AgentsMateUpdates` product finds the Claude Code and Codex command-line
+tools, works out how each was installed (Homebrew cask or formula, npm global,
+or the Claude native installer) and updates it with that same tool. It never
+installs a CLI that is absent, never uses sudo and never prompts. A CLI installed
+some other way is reported, not touched.
+
+Create one model with a place to save its state and a defaults key, start it, and
+put the section in a Settings form:
+
+```swift
+let updates = AgentCLIUpdateModel(
+    stateURL: supportFolder.appendingPathComponent("cli-updates.json"),
+    keepCurrentKey: "agents.keepCLIsCurrent")
+updates.start()
+
+Form { AgentCLIUpdatesSection(model: updates) }
+```
+
+The first check runs 20 seconds after `start()`, then every six hours. While
+`keepCurrent` is on, give each agent process `launchEnvironment(for:)` and
+`launchArguments(for:)` so it does not also update itself.
+
 ## Licence
 
 MIT.
