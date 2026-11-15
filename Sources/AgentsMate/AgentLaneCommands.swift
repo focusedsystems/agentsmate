@@ -16,10 +16,13 @@ public struct AgentLaneCommands: Commands {
     let fontCommands: Bool
     /// Called before a menu command acts, so the app can bring its lanes on screen.
     let reveal: () -> Void
+    /// The id of the app's inbox window scene, if it has one.
+    let inboxWindowID: String?
 
     public init(store: AgentLaneStore, menuTitle: String = "Agent", labels: AgentsModeLabels = .init(),
                 numberShortcuts: Bool = true, emptyText: String = "No Lanes", fontCommands: Bool = true,
-                reveal: @escaping () -> Void = {}) {
+                inboxWindowID: String? = nil, reveal: @escaping () -> Void = {}) {
+        self.inboxWindowID = inboxWindowID
         self.fontCommands = fontCommands
         self.store = store
         self.menuTitle = menuTitle
@@ -53,6 +56,9 @@ public struct AgentLaneCommands: Commands {
             .keyboardShortcut("[", modifiers: [.command, .shift])
             .disabled(store.lanes.isEmpty)
             Divider()
+            if let inboxWindowID {
+                AgentInboxMenuItem(store: store, windowID: inboxWindowID)
+            }
             Button("Jump to Unread") {
                 reveal()
                 store.jumpToUnread()
