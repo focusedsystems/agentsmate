@@ -37,6 +37,11 @@ store.sync(lanes: [AgentLane(id: "docs", title: "Docs", symbol: "book",
 Show it with `AgentsModeView(store:labels:empty:)` and add
 `AgentLaneCommands(store:)` to the scene's commands.
 
+An agent can label its own row: each lane's environment has
+`AGENTSMATE_SESSION`, a path where it may write `{"title": "…", "section": "…"}`.
+A name the person gives the row wins over that, which wins over the task in the
+agent's terminal title.
+
 Backends and the case for each: [docs/backends.md](docs/backends.md).
 
 ## Licence

@@ -68,3 +68,50 @@ final class StoreLayoutTests: XCTestCase {
         XCTAssertEqual(reloaded.layout.pinned, ["b"])
     }
 }
+
+final class LaneNamingTests: XCTestCase {
+    func testTitleTaskStripsGlyphsAndIgnoresShellTitles() {
+        XCTAssertEqual(TerminalTitle.task(from: "⠋ Fix the login bug"), "Fix the login bug")
+        XCTAssertEqual(TerminalTitle.task(from: "✳ Review PR"), "Review PR")
+        XCTAssertNil(TerminalTitle.task(from: "rod@mac: ~/src"))
+        XCTAssertNil(TerminalTitle.task(from: "zsh"))
+        XCTAssertNil(TerminalTitle.task(from: "✳"))
+    }
+
+    func testCopyNames() {
+        XCTAssertEqual("Docs".nextCopyName(taken: []), "Docs 2")
+        XCTAssertEqual("Docs 2".nextCopyName(taken: ["Docs 3"]), "Docs 4")
+    }
+
+    func testMetadataIsTidied() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("meta-\(UUID().uuidString).json")
+        try Data(#"{"title":"  Ship \u001b[31mit  ","section":""}"#.utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let meta = try XCTUnwrap(LaneSessionMetadata.read(url))
+        XCTAssertEqual(meta.title, "Ship [31mit")
+        XCTAssertNil(meta.section)
+    }
+}
+
+@MainActor
+final class DuplicateSwitchTests: XCTestCase {
+    func testDuplicateAndSwitchKeepPlaceAndName() {
+        let defaults = UserDefaults(suiteName: "agentsmate-dup-\(UUID().uuidString)")!
+        let other = CommandLaneBackend(id: "other", displayName: "Other", command: "true")
+        let store = AgentLaneStore(configuration: .init(termProgram: "T", sessionFileDirectory: nil),
+                                   backends: [CommandLaneBackend.shell, other], statusFeed: nil, defaults: defaults)
+        store.sync(lanes: [AgentLane(id: "a", title: "A", backendID: "shell", section: "Work"),
+                           AgentLane(id: "b", title: "B", backendID: "shell")])
+        let copy = store.duplicate("a", focus: false)
+        XCTAssertEqual(copy?.title, "A 2")
+        XCTAssertEqual(store.displayOrder.map { store.sessions[$0.id]!.title }, ["B", "A", "A 2"])
+        XCTAssertEqual(store.layout.section(of: copy!.lane), "Work")
+        store.switchBackend(copy!.id, to: "other")
+        XCTAssertEqual(store.lanes.first { $0.id == copy!.id }?.backendID, "other")
+        XCTAssertEqual(store.sessions[copy!.id]?.title, "A 2")
+        store.rename("a", to: "Alpha")
+        XCTAssertEqual(store.sessions["a"]?.title, "Alpha")
+        store.rename("a", to: "")
+        XCTAssertEqual(store.sessions["a"]?.title, "A")
+    }
+}

@@ -30,8 +30,21 @@ public struct LaneLayout: Codable, Equatable, Sendable {
     public var pinned: Set<String> = []
     public var order: [String] = []
     public var sort: Sort = .manual
+    /// Names the person gave rows, by lane id.
+    public var names: [String: String] = [:]
 
     public init() {}
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        sections = try c.decodeIfPresent([String].self, forKey: .sections) ?? []
+        collapsed = try c.decodeIfPresent(Set<String>.self, forKey: .collapsed) ?? []
+        assignments = try c.decodeIfPresent([String: String].self, forKey: .assignments) ?? [:]
+        pinned = try c.decodeIfPresent(Set<String>.self, forKey: .pinned) ?? []
+        order = try c.decodeIfPresent([String].self, forKey: .order) ?? []
+        sort = try c.decodeIfPresent(Sort.self, forKey: .sort) ?? .manual
+        names = try c.decodeIfPresent([String: String].self, forKey: .names) ?? [:]
+    }
 
     /// The name of the group pinned lanes are shown in.
     public static let pinnedSection = "Pinned"

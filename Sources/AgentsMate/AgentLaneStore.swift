@@ -27,12 +27,22 @@ public final class AgentLaneStore: ObservableObject {
         /// Closing a lane the person opened also stops its session, as
         /// closing a workspace in a terminal multiplexer does.
         public var closeStopsLane: Bool
+        /// Where each lane's `$AGENTSMATE_SESSION` file lives, for agents to
+        /// label their row. Nil turns the files off.
+        public var sessionFileDirectory: URL?
+        /// ⌃Tab and ⇧⌘[ ] skip lanes that have not been started yet.
+        public var cycleSkipsUnstarted: Bool
 
         public init(termProgram: String, environment: [String: String] = [:],
                     baseFontSize: CGFloat = NSFont.systemFontSize,
                     scrollback: Int = 20_000, shortcuts: TerminalShortcut.Set = .fixedLanes,
                     defaultsPrefix: String = "agentsmate.", highlightsOrphans: Bool = false,
-                    closeStopsLane: Bool = true) {
+                    closeStopsLane: Bool = true,
+                    sessionFileDirectory: URL? = FileManager.default.temporaryDirectory
+                        .appendingPathComponent("agentsmate-sessions", isDirectory: true),
+                    cycleSkipsUnstarted: Bool = false) {
+            self.sessionFileDirectory = sessionFileDirectory
+            self.cycleSkipsUnstarted = cycleSkipsUnstarted
             self.highlightsOrphans = highlightsOrphans
             self.closeStopsLane = closeStopsLane
             self.termProgram = termProgram
@@ -140,14 +150,73 @@ public final class AgentLaneStore: ObservableObject {
 
     /// Add a lane the person opened, and open it.
     @discardableResult
-    public func add(_ lane: AgentLane, focus: Bool = true) -> AgentLaneSession? {
+    public func add(_ lane: AgentLane, focus: Bool = true, open shouldOpen: Bool = true,
+                    after anchor: AgentLane.ID? = nil) -> AgentLaneSession? {
         if sessions[lane.id] == nil {
-            lanes.append(lane)
+            if let anchor, let index = lanes.firstIndex(where: { $0.id == anchor }) {
+                lanes.insert(lane, at: index + 1)
+                let ordered = layout.orderedIDs(lanes)
+                if let at = ordered.firstIndex(of: anchor), at + 1 < ordered.count, ordered[at + 1] != lane.id {
+                    layout.moveLane(lane.id, before: ordered[at + 1], lanes: lanes)
+                }
+            } else {
+                lanes.append(lane)
+            }
             makeSession(for: lane)
             apply(statusFeed?.records ?? [])
         }
-        open(lane.id, focus: focus)
+        // A lane added without opening waits as a bookmark until first shown.
+        if shouldOpen { open(lane.id, focus: focus) }
         return sessions[lane.id]
+    }
+
+    // MARK: Naming, duplicating, switching agent
+
+    /// Give a row a name of the person's own; nil returns to the automatic name.
+    public func rename(_ id: AgentLane.ID, to name: String?) {
+        let name = name?.trimmingCharacters(in: .whitespaces)
+        let value = name?.isEmpty == false ? name : nil
+        sessions[id]?.customTitle = value
+        if let value { layout.names[id] = value } else { layout.names.removeValue(forKey: id) }
+    }
+
+    /// Every backend a lane can run on, by name.
+    public var availableBackends: [any LaneBackend] {
+        backends.values.sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
+    }
+
+    /// A new lane like this one, in the same folder and section, just after
+    /// it, named "<name> 2" (or the next free number), running `backendID`
+    /// or the same backend.
+    @discardableResult
+    public func duplicate(_ id: AgentLane.ID, backendID: String? = nil, focus: Bool = true) -> AgentLaneSession? {
+        guard let source = lanes.first(where: { $0.id == id }), let session = sessions[id] else { return nil }
+        var lane = source
+        lane.id = UUID().uuidString
+        lane.isClosable = true
+        lane.backendID = backendID ?? source.backendID
+        lane.section = layout.section(of: source)
+        lane.statusMatch = nil
+        if source.directory == nil { lane.directory = URL(fileURLWithPath: session.currentDirectory) }
+        let taken = Set(sessions.values.map(\.title))
+        let name = session.title.nextCopyName(taken: taken)
+        let added = add(lane, focus: focus, after: id)
+        rename(lane.id, to: name)
+        return added
+    }
+
+    /// Run a lane the person opened on another backend, keeping its name,
+    /// section and place. Its terminal restarts.
+    public func switchBackend(_ id: AgentLane.ID, to backendID: String) {
+        guard let index = lanes.firstIndex(where: { $0.id == id }), lanes[index].isClosable,
+              lanes[index].backendID != backendID, let backend = backends[backendID],
+              let session = sessions[id] else { return }
+        let wasAttached = session.isAttached
+        lanes[index].backendID = backendID
+        session.update(lane: lanes[index])
+        session.update(backend: backend)
+        if wasAttached { reattach(id) }
+        apply(statusFeed?.records ?? [])
     }
 
     private func makeSession(for lane: AgentLane) {
@@ -158,7 +227,12 @@ public final class AgentLaneStore: ObservableObject {
         guard let backend = backends[lane.backendID] ?? backends["shell"] ?? Optional(CommandLaneBackend.shell) else { return }
         let session = AgentLaneSession(lane: lane, backend: backend)
         let id = lane.id
+        session.customTitle = layout.names[id]
         session.onShortcut = { [weak self] shortcut in self?.handle(shortcut, from: id) ?? false }
+        session.onSectionFromAgent = { [weak self] section in
+            guard let self, self.layout.assignments[id] == nil, self.layout.section(of: lane) != section else { return }
+            self.layout.move(id, to: section)
+        }
         sessions[lane.id] = session
     }
 
@@ -257,10 +331,14 @@ public final class AgentLaneStore: ObservableObject {
     }
 
     public func cycle(by offset: Int) {
-        let ordered = displayOrder
+        var ordered = displayOrder
+        if configuration.cycleSkipsUnstarted {
+            let started = ordered.filter { sessions[$0.id]?.isStarted == true || $0.id == selectedID }
+            if !started.isEmpty { ordered = started }
+        }
         guard !ordered.isEmpty else { return }
         let index = ordered.firstIndex { $0.id == selectedID } ?? 0
-        open(index: (index + offset + ordered.count) % ordered.count)
+        open(ordered[(index + offset + ordered.count) % ordered.count].id)
     }
 
     /// Show a second lane beside the selected one, or stop showing it. The
