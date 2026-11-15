@@ -16,7 +16,7 @@ AgentsMate reads that folder.
 
 `$AGENTSMATE_STATUS_DIR`, else `$XDG_STATE_HOME/agentsmate/lanes`, else
 `~/.local/state/agentsmate/lanes`. A record is replaced whole on every write.
-Its file is named after the agent and the tmux session it runs in, so one lane
+Its file is named after the agent and its lane: the tmux session it runs in, or outside tmux `$CLAUDE_LANE` (set by a background-session launcher) or `$AGENTSMATE_LANE` (set by the app), so one lane
 has one file whichever device attached it last.
 
 ## Record
