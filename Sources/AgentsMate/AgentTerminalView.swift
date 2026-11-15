@@ -4,10 +4,15 @@ import SwiftTerm
 /// SwiftTerm's view with what a lane list needs: the app's light or dark
 /// appearance followed and reported to the program, the list's shortcuts
 /// caught while it has focus, Terminal's editing keys, and drops typed in.
-public final class AgentTerminalView: LocalProcessTerminalView {
+open class AgentTerminalView: LocalProcessTerminalView {
     /// Answers a shortcut pressed while the terminal has focus. Returns
     /// whether it was handled; an unhandled one goes on to the menus.
-    var onShortcut: ((TerminalShortcut) -> Bool)?
+    public var onShortcut: ((TerminalShortcut) -> Bool)?
+    /// Called after each chunk of output is drawn.
+    public var onOutput: (() -> Void)?
+    /// Cleans text before it is typed in as a paste. The default keeps
+    /// newlines and tabs and drops every other control character.
+    public var pasteSanitizer: (String) -> String = ShellQuote.pasteSafe
 
     private var colorRequests = TerminalColorSchemeRequests()
     private var reportsColorScheme = false
@@ -15,14 +20,15 @@ public final class AgentTerminalView: LocalProcessTerminalView {
     private var appAppearanceObservation: NSKeyValueObservation?
     private var inputMonitor: Any?
 
-    public override func dataReceived(slice: ArraySlice<UInt8>) {
+    open override func dataReceived(slice: ArraySlice<UInt8>) {
         let requests = colorRequests.scan(slice)
         super.dataReceived(slice: slice)
         for request in requests { handleColorRequest(request) }
+        onOutput?()
     }
 
     /// Draw in the app's appearance and follow it from now on.
-    func followAppearance() {
+    public func followAppearance() {
         getTerminal().ansi256PaletteStrategy = .xterm
         applyColorScheme()
         appAppearanceObservation = NSApp.observe(\.effectiveAppearance) { [weak self] _, _ in
@@ -30,17 +36,17 @@ public final class AgentTerminalView: LocalProcessTerminalView {
         }
     }
 
-    public override func viewDidChangeEffectiveAppearance() {
+    open override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         applyColorScheme()
     }
 
-    public override func viewDidMoveToWindow() {
+    open override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         applyColorScheme()
     }
 
-    func applyColorScheme() {
+    public func applyColorScheme() {
         let appearance = window?.effectiveAppearance ?? NSApp.effectiveAppearance
         let scheme: TerminalColorScheme = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? .dark : .light
         guard scheme != colorScheme else { return }
@@ -69,21 +75,27 @@ public final class AgentTerminalView: LocalProcessTerminalView {
         }
     }
 
-    /// Terminal-style editing keys SwiftTerm leaves to the host.
-    func installInputHandling() {
+    /// Terminal-style editing keys SwiftTerm leaves to the host, and the
+    /// scroll wheel for full-screen programs.
+    public func installInputHandling() {
         removeInputHandling()
         // Local monitors run on the main thread, inside the app's event loop.
-        inputMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
+        inputMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .scrollWheel]) { [weak self] event in
             guard let self else { return event }
             let handled = MainActor.assumeIsolated { () -> Bool in
-                guard event.window === self.window, self.window?.firstResponder === self else { return false }
-                return self.handleKeyDown(event)
+                guard event.window === self.window else { return false }
+                if event.type == .keyDown {
+                    return self.window?.firstResponder === self && self.handleKeyDown(event)
+                }
+                guard !self.isHiddenOrHasHiddenAncestor,
+                      self.bounds.contains(self.convert(event.locationInWindow, from: nil)) else { return false }
+                return self.handleScrollWheel(event)
             }
             return handled ? nil : event
         }
     }
 
-    func removeInputHandling() {
+    public func removeInputHandling() {
         if let inputMonitor { NSEvent.removeMonitor(inputMonitor) }
         inputMonitor = nil
     }
@@ -98,10 +110,43 @@ public final class AgentTerminalView: LocalProcessTerminalView {
             send([0x0a]) // ⇧↩ is a newline in Claude Code's and Codex's prompts.
             return true
         }
+        if flags == .shift {
+            // ⇧ with Page Up, Page Down, Home and End browses the scrollback.
+            switch event.keyCode {
+            case 116: pageUp(); return true
+            case 121: pageDown(); return true
+            case 115: scroll(toPosition: 0); return true
+            case 119: scroll(toPosition: 1); return true
+            default: break
+            }
+        }
         return false
     }
 
-    public override func performKeyEquivalent(with event: NSEvent) -> Bool {
+    /// A full-screen program (an agent's TUI) has no scrollback of its own
+    /// here, so the wheel goes to it: as mouse wheel events when it reports
+    /// the mouse, else as arrow keys. ⇧ always scrolls the local history.
+    private func handleScrollWheel(_ event: NSEvent) -> Bool {
+        let terminal = getTerminal()
+        guard terminal.isCurrentBufferAlternate, !event.modifierFlags.contains(.shift) else { return false }
+        guard event.scrollingDeltaY != 0 else { return true }
+        let count = min(10, max(1, Int(abs(event.scrollingDeltaY))))
+        if allowMouseReporting, terminal.mouseMode != .off {
+            let point = convert(event.locationInWindow, from: nil)
+            let column = min(terminal.cols - 1, max(0, Int(point.x / max(bounds.width, 1) * CGFloat(terminal.cols))))
+            let row = min(terminal.rows - 1, max(0, Int((bounds.height - point.y) / max(bounds.height, 1) * CGFloat(terminal.rows))))
+            for _ in 0..<count {
+                terminal.sendEvent(buttonFlags: event.scrollingDeltaY > 0 ? 64 : 65,
+                                   x: column, y: row, pixelX: Int(point.x), pixelY: Int(bounds.height - point.y))
+            }
+        } else {
+            let sequence = event.scrollingDeltaY > 0 ? "\u{1b}[A" : "\u{1b}[B"
+            for _ in 0..<count { send(txt: sequence) }
+        }
+        return true
+    }
+
+    open override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if window?.firstResponder === self, let shortcut = TerminalShortcut(event), onShortcut?(shortcut) == true {
             return true
         }
@@ -118,17 +163,17 @@ public final class AgentTerminalView: LocalProcessTerminalView {
 
     /// Text dropped on the terminal is typed in; files arrive as quoted
     /// paths, the way Terminal does it.
-    static let droppedTypes: [NSPasteboard.PasteboardType] = [.fileURL, .URL, .string]
+    public static let droppedTypes: [NSPasteboard.PasteboardType] = [.fileURL, .URL, .string]
 
-    public override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+    open override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
         sender.draggingPasteboard.availableType(from: Self.droppedTypes) == nil ? [] : .copy
     }
 
-    public override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+    open override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
         draggingEntered(sender)
     }
 
-    public override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+    open override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         let pasteboard = sender.draggingPasteboard
         let text: String
         if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL], !urls.isEmpty {
@@ -148,8 +193,11 @@ public final class AgentTerminalView: LocalProcessTerminalView {
     /// Type `text` in as a paste, never followed by Return. Control
     /// characters are stripped so the text cannot end the paste early or
     /// drive the terminal.
+    /// Whether the program takes a paste as one block.
+    public var acceptsBracketedPaste: Bool { getTerminal().bracketedPasteMode }
+
     public func pasteText(_ text: String) {
-        let cleaned = ShellQuote.pasteSafe(text)
+        let cleaned = pasteSanitizer(text)
         if getTerminal().bracketedPasteMode {
             send(txt: "\u{1b}[200~" + cleaned + "\u{1b}[201~")
         } else {
