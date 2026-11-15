@@ -74,6 +74,34 @@ public protocol LaneBackend: Sendable {
     func launch(for lane: AgentLane, shell: String) -> TerminalLaunch
     /// How to pick this lane's record out of the status feed.
     func statusMatch(for lane: AgentLane) -> LaneStatusMatch
+    /// Whether ``stop(_:)`` ends the lane's session.
+    var canStop: Bool { get }
+    /// End the lane's persistent session, as closing its workspace in a
+    /// terminal multiplexer would. The agent's conversation is kept, so
+    /// opening the lane again resumes it.
+    func stop(_ lane: AgentLane)
+}
+
+public extension LaneBackend {
+    var canStop: Bool { false }
+    func stop(_ lane: AgentLane) {}
+}
+
+/// Runs a command without waiting for it, for stopping a lane.
+public enum LaneCommand {
+    public static func run(_ arguments: [String]) {
+        guard !arguments.isEmpty else { return }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = arguments
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        var env = ProcessInfo.processInfo.environment
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        env["PATH"] = (env["PATH"].map { $0 + ":" } ?? "") + "/opt/homebrew/bin:/usr/local/bin:\(home)/.local/bin:/usr/bin:/bin"
+        process.environment = env
+        try? process.run()
+    }
 }
 
 /// A lane that runs one shell command in an interactive login shell, so the
@@ -98,11 +126,16 @@ public struct CommandLaneBackend: LaneBackend {
     /// a lane. When it exists, status is matched by that id; folders are
     /// only the fallback, because several lanes can share one folder.
     public var sessionIDFile: (@Sendable (AgentLane) -> URL?)?
+    /// The command that ends a lane's session (`argv`, found on PATH), such
+    /// as killing its tmux session. Nil means the lane cannot be stopped here.
+    public var stopCommand: (@Sendable (AgentLane) -> [String])?
 
     public init(id: String, displayName: String, command: String, passesDirectory: Bool = false,
                 returnsToShell: Bool = false, statusAgent: String? = nil, keepsRunningWhenDetached: Bool = false,
-                sessionIDFile: (@Sendable (AgentLane) -> URL?)? = nil) {
+                sessionIDFile: (@Sendable (AgentLane) -> URL?)? = nil,
+                stopCommand: (@Sendable (AgentLane) -> [String])? = nil) {
         self.sessionIDFile = sessionIDFile
+        self.stopCommand = stopCommand
         self.id = id
         self.displayName = displayName
         self.command = command
@@ -116,10 +149,11 @@ public struct CommandLaneBackend: LaneBackend {
     /// given, so opening the row again — here, in another terminal, or from
     /// another device — attaches the same conversation.
     public static func tmuxLane(id: String, displayName: String, command: String, statusAgent: String?,
-                                sessionIDFile: (@Sendable (AgentLane) -> URL?)? = nil) -> CommandLaneBackend {
+                                sessionIDFile: (@Sendable (AgentLane) -> URL?)? = nil,
+                                stopCommand: (@Sendable (AgentLane) -> [String])? = nil) -> CommandLaneBackend {
         CommandLaneBackend(id: id, displayName: displayName, command: command, passesDirectory: true,
                            returnsToShell: false, statusAgent: statusAgent, keepsRunningWhenDetached: true,
-                           sessionIDFile: sessionIDFile)
+                           sessionIDFile: sessionIDFile, stopCommand: stopCommand)
     }
 
     /// The person's login shell.
@@ -135,6 +169,13 @@ public struct CommandLaneBackend: LaneBackend {
         if passesDirectory { line += " " + ShellQuote.quote(directory) }
         if returnsToShell { line += "; exec " + ShellQuote.quote(shell) + " -l" }
         return TerminalLaunch(executable: shell, arguments: ["-l", "-i", "-c", line], directory: directory)
+    }
+
+    public var canStop: Bool { stopCommand != nil }
+
+    public func stop(_ lane: AgentLane) {
+        guard let stopCommand else { return }
+        LaneCommand.run(stopCommand(lane))
     }
 
     public func statusMatch(for lane: AgentLane) -> LaneStatusMatch {

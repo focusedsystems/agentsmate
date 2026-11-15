@@ -48,6 +48,13 @@ public struct ClaudeBackgroundLaneBackend: LaneBackend {
     public func statusMatch(for lane: AgentLane) -> LaneStatusMatch {
         .lane(name(lane))
     }
+
+    public var canStop: Bool { true }
+
+    /// `claude stop` ends the session and keeps its conversation.
+    public func stop(_ lane: AgentLane) {
+        LaneCommand.run([claude.isEmpty ? "claude" : claude, "stop", name(lane)])
+    }
 }
 
 /// Polls `claude agents --json` and hands its sessions to a ``LaneStatusFeed``.

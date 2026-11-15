@@ -43,6 +43,8 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
     @Published public private(set) var record: LaneStatus?
     /// Set when a record that wants a person arrives while the lane is out of sight.
     @Published public private(set) var needsAttention = false
+    /// The lane's session runs with no terminal attached anywhere.
+    @Published public private(set) var isOrphan = false
     /// Bumped on every start, so SwiftUI re-hosts the new view.
     @Published public private(set) var generation = 0
     @Published public var wantsFocus = false
@@ -95,6 +97,10 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
 
     func update(lane: AgentLane) {
         self.lane = lane
+    }
+
+    func update(orphan: Bool) {
+        if orphan != isOrphan { isOrphan = orphan }
     }
 
     /// Takes effect the next time the lane is attached.

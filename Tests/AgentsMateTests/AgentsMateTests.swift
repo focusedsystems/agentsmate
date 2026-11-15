@@ -116,3 +116,14 @@ final class SessionIDFileTests: XCTestCase {
         XCTAssertEqual(backend.statusMatch(for: lane), .session("73f6db7c"))
     }
 }
+
+final class TmuxPresenceTests: XCTestCase {
+    func testParsesSessionList() {
+        let list = TmuxPresenceSource.parse("a\t0\t/w/a\nb\t2\t\nbad line\n")
+        XCTAssertEqual(list, [LanePresence(name: "a", directory: "/w/a", attachedClients: 0),
+                              LanePresence(name: "b", directory: nil, attachedClients: 2)])
+        let lane = AgentLane(id: "x", title: "X", directory: URL(fileURLWithPath: "/w/a"), backendID: "s")
+        XCTAssertEqual(list.find(for: lane, match: .directory("/w/a", agent: nil))?.name, "a")
+        XCTAssertEqual(list.find(for: lane, match: .lane("b"))?.attachedClients, 2)
+    }
+}

@@ -17,6 +17,9 @@ public protocol LaneStatusSource: Sendable {
 @MainActor
 public final class LaneStatusFeed: ObservableObject {
     @Published public private(set) var records: [LaneStatus] = []
+    /// The running sessions the presence sources list.
+    @Published public private(set) var presence: [LanePresence] = []
+    public let presenceSources: [any LanePresenceSource]
     public let directory: LaneStatusDirectory
     public let sources: [any LaneStatusSource]
     public let pollInterval: TimeInterval
@@ -27,9 +30,11 @@ public final class LaneStatusFeed: ObservableObject {
     private var timer: Timer?
     private var polling = false
 
-    public init(directory: LaneStatusDirectory = .default(), sources: [any LaneStatusSource] = [], pollInterval: TimeInterval = 5) {
+    public init(directory: LaneStatusDirectory = .default(), sources: [any LaneStatusSource] = [],
+                presenceSources: [any LanePresenceSource] = [], pollInterval: TimeInterval = 5) {
         self.directory = directory
         self.sources = sources
+        self.presenceSources = presenceSources
         self.pollInterval = pollInterval
     }
 
@@ -69,13 +74,16 @@ public final class LaneStatusFeed: ObservableObject {
     }
 
     private func poll() {
-        guard !sources.isEmpty, !polling else { return }
+        guard !sources.isEmpty || !presenceSources.isEmpty, !polling else { return }
         polling = true
-        let sources = sources
+        let sources = sources, presenceSources = presenceSources
         Task { [weak self] in
             var all: [LaneStatus] = []
             for source in sources { all += await source.records() }
+            var running: [LanePresence] = []
+            for source in presenceSources { running += await source.sessions() }
             self?.sourceRecords = all
+            if self?.presence != running { self?.presence = running }
             self?.polling = false
             self?.publish()
         }
