@@ -11,11 +11,16 @@ public struct AgentLaneCommands: Commands {
     let labels: AgentsModeLabels
     let numberShortcuts: Bool
     let emptyText: String
+    /// Bigger Text, Smaller Text and Actual Size on ⌘+, ⌘- and ⌘0. Off for
+    /// an app whose View menu already owns those keys.
+    let fontCommands: Bool
     /// Called before a menu command acts, so the app can bring its lanes on screen.
     let reveal: () -> Void
 
     public init(store: AgentLaneStore, menuTitle: String = "Agent", labels: AgentsModeLabels = .init(),
-                numberShortcuts: Bool = true, emptyText: String = "No Lanes", reveal: @escaping () -> Void = {}) {
+                numberShortcuts: Bool = true, emptyText: String = "No Lanes", fontCommands: Bool = true,
+                reveal: @escaping () -> Void = {}) {
+        self.fontCommands = fontCommands
         self.store = store
         self.menuTitle = menuTitle
         self.labels = labels
@@ -61,6 +66,18 @@ public struct AgentLaneCommands: Commands {
             Button("Clear Screen") { store.clearSelected() }
                 .keyboardShortcut("k", modifiers: .command)
                 .disabled(!store.selectedIsAttached)
+            if fontCommands {
+                Divider()
+                Button("Bigger Text") { store.adjustFont(by: 1) }
+                    .keyboardShortcut("+", modifiers: .command)
+                    .disabled(store.fontSize >= AgentLaneStore.fontSizeRange.upperBound)
+                Button("Smaller Text") { store.adjustFont(by: -1) }
+                    .keyboardShortcut("-", modifiers: .command)
+                    .disabled(store.fontSize <= AgentLaneStore.fontSizeRange.lowerBound)
+                Button("Actual Size") { store.resetFont() }
+                    .keyboardShortcut("0", modifiers: .command)
+                    .disabled(store.fontOffset == 0)
+            }
             Divider()
             Button("Show \(noun) in Finder") {
                 if let path = store.selected?.currentDirectory {

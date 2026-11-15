@@ -30,117 +30,81 @@ public struct LaneAction: Identifiable {
     }
 }
 
-/// Agents mode: the lanes down the left, the selected lane's live terminal
-/// on the right, and a second one beside it when split. Every row attaches
-/// its lane's persistent session, so the conversation open here is the same
-/// one other terminals and devices see.
-public struct AgentsModeView<Accessory: View, Empty: View>: View {
+/// The lanes as a native sidebar list: put it in a `NavigationSplitView`'s
+/// sidebar column, so it collapses, resizes and draws like every other Mac
+/// sidebar. Status filters sit above the list and search is the sidebar's own
+/// search field. Every row attaches its lane's persistent session, so the
+/// conversation open here is the one other terminals and devices see.
+public struct AgentLaneSidebar<Accessory: View>: View {
     @ObservedObject var store: AgentLaneStore
     let labels: AgentsModeLabels
     let rowActions: [LaneAction]
     let accessory: Accessory
-    let empty: Empty
 
-    @AppStorage private var listWidth: Double
-    @AppStorage private var listCollapsed: Bool
-    @AppStorage private var filterOpen: Bool
+    @AppStorage private var filterAttached: Bool
     @AppStorage private var filterRunning: Bool
-    @AppStorage private var filterWaiting: Bool
+    @AppStorage private var filterNeedsYou: Bool
     @State private var searchText = ""
-    @State private var listDragStart: Double?
-
-    public static var listWidthRange: ClosedRange<Double> { 170...420 }
 
     public init(store: AgentLaneStore, labels: AgentsModeLabels = .init(), rowActions: [LaneAction] = [],
-                @ViewBuilder accessory: () -> Accessory, @ViewBuilder empty: () -> Empty) {
+                @ViewBuilder accessory: () -> Accessory) {
         self.store = store
         self.labels = labels
         self.rowActions = rowActions
         self.accessory = accessory()
-        self.empty = empty()
         let keys = store.keys
-        _listWidth = AppStorage(wrappedValue: 230, keys.listWidth)
-        _listCollapsed = AppStorage(wrappedValue: false, keys.listCollapsed)
-        _filterOpen = AppStorage(wrappedValue: false, keys.filterOpen)
+        _filterAttached = AppStorage(wrappedValue: false, keys.filterOpen)
         _filterRunning = AppStorage(wrappedValue: false, keys.filterRunning)
-        _filterWaiting = AppStorage(wrappedValue: false, keys.filterWaiting)
+        _filterNeedsYou = AppStorage(wrappedValue: false, keys.filterWaiting)
     }
 
     public var body: some View {
-        Group {
-            if store.lanes.isEmpty {
-                empty.frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                HStack(spacing: 0) {
-                    laneList
-                        .frame(width: listCollapsed ? 44 : CGFloat(listWidth.clamped(to: Self.listWidthRange)))
-                    listDivider
-                    terminalPanes
-                }
-            }
-        }
-        .background(Color(nsColor: .textBackgroundColor))
-        .onAppear {
-            store.isShowing = true
-            store.openSelected(focus: true)
-        }
-        .onDisappear { store.isShowing = false }
-    }
-
-    // MARK: Lane list
-
-    private var sessions: [AgentLaneSession] { store.lanes.compactMap { store.sessions[$0.id] } }
-
-    private var laneList: some View {
-        VStack(spacing: 0) {
-            if !listCollapsed {
-                HStack(spacing: 6) {
-                    Text(labels.listTitle).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
-                    Text("\(sessions.filter(\.isAttached).count) open")
-                        .font(.caption).monospacedDigit().foregroundStyle(.secondary)
-                    Spacer(minLength: 4)
-                    accessory
-                }
-                .padding(.horizontal, 10)
-                .padding(.top, 8)
-                .padding(.bottom, 4)
-                filterBar
-                    .padding(.horizontal, 8)
-                    .padding(.bottom, 6)
-                Divider()
-            }
-            List(selection: selectionBinding) {
+        List(selection: selectionBinding) {
+            Section {
                 ForEach(visibleLanes) { lane in
                     if let session = store.session(for: lane) {
                         LaneRow(session: session,
                                 index: store.lanes.firstIndex(of: lane) ?? 0,
-                                collapsed: listCollapsed,
                                 isSplit: lane.id == store.splitID)
                             .tag(lane.id)
                     }
                 }
-            }
-            .listStyle(.sidebar)
-            .contextMenu(forSelectionType: AgentLane.ID.self) { ids in
-                if let id = ids.first, let session = store.sessions[id] {
-                    rowMenu(session)
+            } header: {
+                HStack {
+                    Text(labels.listTitle)
+                    Spacer()
+                    accessory
                 }
-            } primaryAction: { ids in
-                if let id = ids.first { store.open(id) }
             }
-            .onDeleteCommand {
-                if let id = store.selectedID, store.selected?.lane.isClosable == true { store.close(id) }
+        }
+        .listStyle(.sidebar)
+        .searchable(text: $searchText, placement: .sidebar, prompt: "Search \(labels.laneNoun)s")
+        .safeAreaInset(edge: .top, spacing: 0) {
+            filterBar
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+        }
+        .contextMenu(forSelectionType: AgentLane.ID.self) { ids in
+            if let id = ids.first, let session = store.sessions[id] {
+                rowMenu(session)
             }
-            .overlay {
-                if !listCollapsed, visibleLanes.isEmpty {
-                    VStack(spacing: 6) {
-                        Text("No Matching \(labels.listTitle)").font(.callout).foregroundStyle(.secondary)
-                        Button("Show All", action: clearFilters).controlSize(.small)
-                    }
+        } primaryAction: { ids in
+            if let id = ids.first { store.open(id) }
+        }
+        .onDeleteCommand {
+            if let id = store.selectedID, store.selected?.lane.isClosable == true { store.close(id) }
+        }
+        .overlay {
+            if visibleLanes.isEmpty, !store.lanes.isEmpty {
+                VStack(spacing: 6) {
+                    Text("No Matching \(labels.listTitle)").font(.callout).foregroundStyle(.secondary)
+                    Button("Show All", action: clearFilters).controlSize(.small)
                 }
             }
         }
     }
+
+    private var sessions: [AgentLaneSession] { store.lanes.compactMap { store.sessions[$0.id] } }
 
     private var selectionBinding: Binding<AgentLane.ID?> {
         Binding(get: { store.selectedID },
@@ -186,9 +150,9 @@ public struct AgentsModeView<Accessory: View, Empty: View>: View {
             guard let session = store.session(for: lane) else { return false }
             if !query.isEmpty, !session.title.lowercased().contains(query),
                !lane.path.lowercased().contains(query) { return false }
-            if filterOpen, !session.isAttached { return false }
+            if filterAttached, !session.isAttached { return false }
             if filterRunning, session.status != .running { return false }
-            if filterWaiting, !Self.wantsYou(session.status) { return false }
+            if filterNeedsYou, !Self.wantsYou(session.status) { return false }
             return true
         }
     }
@@ -198,74 +162,102 @@ public struct AgentsModeView<Accessory: View, Empty: View>: View {
     }
 
     private func clearFilters() {
-        filterOpen = false
+        filterAttached = false
         filterRunning = false
-        filterWaiting = false
+        filterNeedsYou = false
         searchText = ""
     }
 
-    /// Status toggles with their counts, and search.
+    /// Status toggles with their counts.
     private var filterBar: some View {
         let all = sessions
         return HStack(spacing: 2) {
-            LaneFilterToggle(symbol: "circle.fill", symbolScale: 0.7, title: "Open",
+            LaneFilterToggle(symbol: "circle.fill", symbolScale: 0.7, title: "Attached",
                              help: "Show only \(labels.laneNoun)s attached here",
-                             count: all.filter(\.isAttached).count, isOn: $filterOpen)
+                             count: all.filter(\.isAttached).count, isOn: $filterAttached)
             LaneFilterToggle(symbol: "bolt.fill", symbolScale: 1, title: "Running",
                              help: "Show only \(labels.laneNoun)s whose agent is working",
                              count: all.filter { $0.status == .running }.count, isOn: $filterRunning)
             LaneFilterToggle(symbol: "hand.raised.fill", symbolScale: 1, title: "Needs You",
                              help: "Show only \(labels.laneNoun)s waiting for input or permission",
-                             count: all.filter { Self.wantsYou($0.status) }.count, isOn: $filterWaiting)
-            LaneSearchField(text: $searchText, label: "Search \(labels.laneNoun)s")
-                .frame(minWidth: 60, maxWidth: .infinity)
-                .frame(height: 22)
+                             count: all.filter { Self.wantsYou($0.status) }.count, isOn: $filterNeedsYou)
+            Spacer(minLength: 0)
         }
     }
+}
 
-    /// Drag to resize the list; double-click collapses it to its icons.
-    private var listDivider: some View {
-        Rectangle()
-            .fill(Color(nsColor: .separatorColor))
-            .frame(width: 1)
-            .contentShape(Rectangle().inset(by: -3))
-            .onHover { inside in
-                if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
-            }
-            .gesture(
-                DragGesture(minimumDistance: 1, coordinateSpace: .global)
-                    .onChanged { value in
-                        if listCollapsed { listCollapsed = false }
-                        let start = listDragStart ?? listWidth
-                        listDragStart = start
-                        listWidth = (start + value.translation.width).clamped(to: Self.listWidthRange)
-                    }
-                    .onEnded { _ in listDragStart = nil }
-            )
-            .onTapGesture(count: 2) { listCollapsed.toggle() }
-            .help("Drag to resize the list; double-click to collapse or expand it")
-            .accessibilityElement()
-            .accessibilityLabel("\(labels.listTitle) list divider")
-            .accessibilityAddTraits(.isButton)
-            .accessibilityAction(named: listCollapsed ? "Expand List" : "Collapse List") {
-                listCollapsed.toggle()
-            }
+public extension AgentLaneSidebar where Accessory == EmptyView {
+    init(store: AgentLaneStore, labels: AgentsModeLabels = .init(), rowActions: [LaneAction] = []) {
+        self.init(store: store, labels: labels, rowActions: rowActions, accessory: { EmptyView() })
+    }
+}
+
+/// The selected lane's live terminal, and a second beside it when split: put
+/// it in a `NavigationSplitView`'s detail column. `empty` shows when the app
+/// has no lanes.
+public struct AgentLaneDetail<Empty: View>: View {
+    @ObservedObject var store: AgentLaneStore
+    let empty: Empty
+
+    public init(store: AgentLaneStore, @ViewBuilder empty: () -> Empty) {
+        self.store = store
+        self.empty = empty()
     }
 
-    // MARK: Terminals
-
-    @ViewBuilder
-    private var terminalPanes: some View {
-        HStack(spacing: 0) {
-            if let session = store.selected {
-                LaneTerminalPane(session: session, store: store)
+    public var body: some View {
+        Group {
+            if store.lanes.isEmpty {
+                empty
             } else {
-                Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
+                HStack(spacing: 0) {
+                    if let session = store.selected {
+                        LaneTerminalPane(session: session, store: store)
+                    } else {
+                        Color.clear
+                    }
+                    if let split = store.split, split.id != store.selectedID {
+                        Divider()
+                        LaneTerminalPane(session: split, store: store)
+                    }
+                }
             }
-            if let split = store.split, split.id != store.selectedID {
-                Divider()
-                LaneTerminalPane(session: split, store: store)
-            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(nsColor: .textBackgroundColor))
+        .onAppear {
+            store.isShowing = true
+            store.openSelected(focus: true)
+        }
+        .onDisappear { store.isShowing = false }
+    }
+}
+
+/// Agents mode as a whole window's content: the native sidebar of lanes and
+/// the terminal beside it. An app that already has a `NavigationSplitView`
+/// puts ``AgentLaneSidebar`` and ``AgentLaneDetail`` in its own columns
+/// instead, so switching modes keeps the same window chrome.
+public struct AgentsModeView<Accessory: View, Empty: View>: View {
+    @ObservedObject var store: AgentLaneStore
+    let labels: AgentsModeLabels
+    let rowActions: [LaneAction]
+    let accessory: Accessory
+    let empty: Empty
+
+    public init(store: AgentLaneStore, labels: AgentsModeLabels = .init(), rowActions: [LaneAction] = [],
+                @ViewBuilder accessory: () -> Accessory, @ViewBuilder empty: () -> Empty) {
+        self.store = store
+        self.labels = labels
+        self.rowActions = rowActions
+        self.accessory = accessory()
+        self.empty = empty()
+    }
+
+    public var body: some View {
+        NavigationSplitView {
+            AgentLaneSidebar(store: store, labels: labels, rowActions: rowActions) { accessory }
+                .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 420)
+        } detail: {
+            AgentLaneDetail(store: store) { empty }
         }
     }
 }
@@ -316,7 +308,6 @@ struct LaneTerminalPane: View {
 struct LaneRow: View {
     @ObservedObject var session: AgentLaneSession
     let index: Int
-    let collapsed: Bool
     let isSplit: Bool
 
     var body: some View {
@@ -326,23 +317,21 @@ struct LaneRow: View {
                 .foregroundStyle(session.lane.tintHex.flatMap(Color.init(laneHex:)) ?? Color.accentColor)
                 .frame(width: 20)
                 .overlay(alignment: .bottomTrailing) { statusDot.offset(x: 3, y: 3) }
-            if !collapsed {
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(session.title).lineLimit(1)
-                    Text(subtitle)
-                        .font(.caption)
-                        .foregroundStyle(isActive ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
-                        .lineLimit(1)
-                        .truncationMode(.head)
-                }
-                Spacer(minLength: 2)
-                if session.needsAttention {
-                    Image(systemName: "circle.fill").font(.system(size: 6)).foregroundStyle(.tint)
-                        .accessibilityHidden(true)
-                }
-                if index < 9 {
-                    Text("⌘\(index + 1)").font(.caption).foregroundStyle(.secondary)
-                }
+            VStack(alignment: .leading, spacing: 1) {
+                Text(session.title).lineLimit(1)
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(isActive ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                    .lineLimit(1)
+                    .truncationMode(.head)
+            }
+            Spacer(minLength: 2)
+            if session.needsAttention {
+                Image(systemName: "circle.fill").font(.system(size: 6)).foregroundStyle(.tint)
+                    .accessibilityHidden(true)
+            }
+            if index < 9 {
+                Text("⌘\(index + 1)").font(.caption).foregroundStyle(.secondary)
             }
         }
         .padding(.vertical, 2)
@@ -434,42 +423,6 @@ struct LaneFilterToggle: View {
     }
 }
 
-/// A native search field, so clicking it takes the keyboard from the
-/// terminal and Escape or its clear button empties it.
-struct LaneSearchField: NSViewRepresentable {
-    @Binding var text: String
-    let label: String
-
-    final class Coordinator: NSObject, NSSearchFieldDelegate {
-        var parent: LaneSearchField
-        init(_ parent: LaneSearchField) { self.parent = parent }
-
-        func controlTextDidChange(_ notification: Notification) {
-            guard let field = notification.object as? NSSearchField else { return }
-            parent.text = field.stringValue
-        }
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator(self) }
-
-    func makeNSView(context: Context) -> NSSearchField {
-        let field = NSSearchField()
-        field.delegate = context.coordinator
-        field.placeholderString = "Search"
-        field.controlSize = .small
-        field.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-        field.sendsSearchStringImmediately = true
-        field.setAccessibilityLabel(label)
-        field.stringValue = text
-        return field
-    }
-
-    func updateNSView(_ field: NSSearchField, context: Context) {
-        context.coordinator.parent = self
-        if field.stringValue != text { field.stringValue = text }
-    }
-}
-
 /// Hosts a session's terminal and hands it keyboard focus once it is
 /// actually in a window — focus asked for before then is silently dropped.
 final class TerminalContainer: NSView {
@@ -534,6 +487,3 @@ extension Color {
     }
 }
 
-extension Double {
-    func clamped(to range: ClosedRange<Double>) -> Double { Swift.min(Swift.max(self, range.lowerBound), range.upperBound) }
-}

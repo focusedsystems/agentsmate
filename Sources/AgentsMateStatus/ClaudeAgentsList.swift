@@ -4,6 +4,8 @@ import Foundation
 /// background sessions (`claude --bg`) and the interactive ones already
 /// running, each with its name, folder and what it is doing.
 public enum ClaudeAgentsList {
+    /// The `event` of every record read from the list.
+    public static let event = "claude agents"
     struct Entry: Decodable {
         var id: String?
         var sessionId: String?
@@ -34,7 +36,7 @@ public enum ClaudeAgentsList {
             return LaneStatus(agent: "claude", state: state, lane: entry.name, directory: entry.cwd,
                               sessionID: entry.sessionId ?? entry.id,
                               message: entry.kind.map { "\($0) session" },
-                              event: "claude agents", updatedAt: now)
+                              event: event, updatedAt: now)
         }
     }
 

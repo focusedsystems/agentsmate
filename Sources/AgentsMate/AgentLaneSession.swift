@@ -10,7 +10,7 @@ public enum LaneDisplayStatus: Equatable, Sendable {
 
     public var title: String {
         switch self {
-        case .notOpened: "Not opened"
+        case .notOpened: "Not attached"
         case .attached: "Attached"
         case .running: "Running"
         case .waitingForInput: "Waiting for you"
@@ -111,7 +111,7 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
 
     /// Start the backend's process, or start it again after it ended. A
     /// running session is left alone: it is already attached.
-    func start(configuration: AgentLaneStore.Configuration) {
+    func start(configuration: AgentLaneStore.Configuration, font: NSFont) {
         if isAttached { return }
         if isStarted {
             view.removeInputHandling()
@@ -122,7 +122,7 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
         generation += 1
         let view = self.view
         view.processDelegate = self
-        view.font = configuration.font
+        view.font = font
         view.followAppearance()
         view.installInputHandling()
         view.getTerminal().changeHistorySize(configuration.scrollback)

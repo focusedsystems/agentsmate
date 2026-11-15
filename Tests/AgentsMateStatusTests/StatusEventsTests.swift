@@ -131,3 +131,16 @@ final class SessionMatchTests: XCTestCase {
         XCTAssertEqual(LaneStatusMatch.firstOf([.session("zz"), .lane("Other")]).find(in: records)?.state, .done)
     }
 }
+
+final class LaneStatusPickTests: XCTestCase {
+    func testPollsAndEventsCombine() {
+        let permission = LaneStatus(agent: "claude", state: .permissionRequested, lane: "a", directory: "/w", event: "Notification",
+                                    updatedAt: Date(timeIntervalSinceNow: -120))
+        let idle = LaneStatus(agent: "claude", state: .done, lane: "A · Title", directory: "/w", event: ClaudeAgentsList.event)
+        let busy = LaneStatus(agent: "claude", state: .running, lane: "A · Title", directory: "/w", event: ClaudeAgentsList.event)
+        let match = LaneStatusMatch.directory("/w", agent: "claude")
+        XCTAssertEqual(match.find(in: [permission, idle])?.state, .permissionRequested)
+        XCTAssertEqual(match.find(in: [permission, busy])?.state, .running)
+        XCTAssertEqual(match.find(in: [idle])?.state, .done)
+    }
+}

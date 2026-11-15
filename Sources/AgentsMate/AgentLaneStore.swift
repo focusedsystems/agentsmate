@@ -12,7 +12,10 @@ public final class AgentLaneStore: ObservableObject {
         public var termProgram: String
         /// Added to every lane's environment.
         public var environment: [String: String]
-        public var font: NSFont
+        /// The terminals' text size before the person's ⌘+ / ⌘- changes.
+        /// Apps with a text size setting pass it; the default follows the
+        /// system's.
+        public var baseFontSize: CGFloat
         public var scrollback: Int
         /// The shortcuts a focused terminal answers itself.
         public var shortcuts: TerminalShortcut.Set
@@ -20,12 +23,12 @@ public final class AgentLaneStore: ObservableObject {
         public var defaultsPrefix: String
 
         public init(termProgram: String, environment: [String: String] = [:],
-                    font: NSFont = .monospacedSystemFont(ofSize: 12, weight: .regular),
+                    baseFontSize: CGFloat = NSFont.systemFontSize,
                     scrollback: Int = 20_000, shortcuts: TerminalShortcut.Set = .fixedLanes,
                     defaultsPrefix: String = "agentsmate.") {
             self.termProgram = termProgram
             self.environment = environment
-            self.font = font
+            self.baseFontSize = baseFontSize
             self.scrollback = scrollback
             self.shortcuts = shortcuts
             self.defaultsPrefix = defaultsPrefix
@@ -45,7 +48,12 @@ public final class AgentLaneStore: ObservableObject {
     /// Whether the lanes are on screen; set by the view that shows them.
     public var isShowing = false { didSet { updateShown() } }
 
-    public var configuration: Configuration
+    public var configuration: Configuration {
+        didSet { if configuration.baseFontSize != oldValue.baseFontSize { applyFont() } }
+    }
+    /// Points added to the base size with ⌘+ and ⌘-, kept across launches.
+    @Published public private(set) var fontOffset: CGFloat = 0
+    public static let fontSizeRange: ClosedRange<CGFloat> = 8...36
     public let keys: AgentsModeKeys
     public let statusFeed: LaneStatusFeed?
     /// What ⌘T opens, when the app allows it.
@@ -63,6 +71,7 @@ public final class AgentLaneStore: ObservableObject {
         self.defaults = defaults
         for backend in backends { self.backends[backend.id] = backend }
         self.selectedID = defaults.string(forKey: keys.selectedLane)
+        self.fontOffset = CGFloat(defaults.double(forKey: keys.fontOffset))
         feedSubscription = statusFeed?.$records.sink { [weak self] records in
             MainActor.assumeIsolated { self?.apply(records) }
         }
@@ -134,7 +143,7 @@ public final class AgentLaneStore: ObservableObject {
         guard let session = sessions[id] else { return }
         if id == splitID { splitID = selectedID == id ? nil : selectedID }
         selectedID = id
-        session.start(configuration: configuration)
+        session.start(configuration: configuration, font: font)
         if focus { session.wantsFocus = true }
         updateShown()
     }
@@ -193,13 +202,41 @@ public final class AgentLaneStore: ObservableObject {
             splitID = added == current ? nil : added
         } else if let current, let index = lanes.firstIndex(where: { $0.id == current }), lanes.count > 1 {
             let other = lanes[(index + 1) % lanes.count].id
-            sessions[other]?.start(configuration: configuration)
+            sessions[other]?.start(configuration: configuration, font: font)
             splitID = other
         }
         updateShown()
     }
 
     public func clearSelected() { selected?.view.clearScreen() }
+
+    // MARK: Text size
+
+    public var fontSize: CGFloat {
+        min(max(configuration.baseFontSize + fontOffset, Self.fontSizeRange.lowerBound), Self.fontSizeRange.upperBound)
+    }
+
+    public var font: NSFont { .monospacedSystemFont(ofSize: fontSize, weight: .regular) }
+
+    public func adjustFont(by points: CGFloat) {
+        let target = min(max(fontSize + points, Self.fontSizeRange.lowerBound), Self.fontSizeRange.upperBound)
+        setFontOffset(target - configuration.baseFontSize)
+    }
+
+    /// Back to the app's or the system's size.
+    public func resetFont() { setFontOffset(0) }
+
+    private func setFontOffset(_ offset: CGFloat) {
+        guard offset != fontOffset else { return }
+        fontOffset = offset
+        defaults.set(Double(offset), forKey: keys.fontOffset)
+        applyFont()
+    }
+
+    private func applyFont() {
+        let font = self.font
+        for session in sessions.values where session.isStarted { session.view.font = font }
+    }
 
     public func detachAll() { sessions.values.forEach { $0.detach() } }
 
@@ -222,6 +259,9 @@ public final class AgentLaneStore: ObservableObject {
         case .previous: cycle(by: -1)
         case .select(let n): open(index: n)
         case .maximize, .togglePanel: return false
+        case .biggerFont: adjustFont(by: 1)
+        case .smallerFont: adjustFont(by: -1)
+        case .resetFont: resetFont()
         }
         return true
     }
@@ -246,9 +286,8 @@ public struct AgentsModeKeys: Sendable {
     public let prefix: String
     public init(prefix: String) { self.prefix = prefix }
     public var selectedLane: String { prefix + "selectedLane" }
-    public var listWidth: String { prefix + "listWidth" }
-    public var listCollapsed: String { prefix + "listCollapsed" }
     public var filterOpen: String { prefix + "filterOpen" }
     public var filterRunning: String { prefix + "filterRunning" }
     public var filterWaiting: String { prefix + "filterWaiting" }
+    public var fontOffset: String { prefix + "fontOffset" }
 }

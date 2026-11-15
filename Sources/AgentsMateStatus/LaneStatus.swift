@@ -51,6 +51,10 @@ public struct LaneStatus: Codable, Equatable, Sendable {
         self.updatedAt = updatedAt
     }
 
+    /// Whether this record came from polling a session list rather than from
+    /// an event the agent sent. A poll is always fresh but knows less.
+    public var isPolled: Bool { event == ClaudeAgentsList.event }
+
     /// The file name a record is stored under: one file per lane, or per
     /// conversation when the agent is not in a lane.
     public var key: String {

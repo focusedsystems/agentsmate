@@ -75,12 +75,17 @@ open class AgentTerminalView: LocalProcessTerminalView {
         }
     }
 
-    /// Terminal-style editing keys SwiftTerm leaves to the host, and the
-    /// scroll wheel for full-screen programs.
+    /// Terminal-style editing keys SwiftTerm leaves to the host, the scroll
+    /// wheel for full-screen programs, and plain pointer movement.
+    ///
+    /// Plain movement is not passed on: a program that asks for every mouse
+    /// event (mode 1003) otherwise hears each pixel the pointer crosses, and
+    /// agent TUIs redraw hover states as it passes over them. Clicks, drags
+    /// and the wheel still reach it, and ⌘ keeps link previews.
     public func installInputHandling() {
         removeInputHandling()
         // Local monitors run on the main thread, inside the app's event loop.
-        inputMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .scrollWheel]) { [weak self] event in
+        inputMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .scrollWheel, .mouseMoved]) { [weak self] event in
             guard let self else { return event }
             let handled = MainActor.assumeIsolated { () -> Bool in
                 guard event.window === self.window else { return false }
@@ -89,6 +94,9 @@ open class AgentTerminalView: LocalProcessTerminalView {
                 }
                 guard !self.isHiddenOrHasHiddenAncestor,
                       self.bounds.contains(self.convert(event.locationInWindow, from: nil)) else { return false }
+                if event.type == .mouseMoved {
+                    return !event.modifierFlags.contains(.command)
+                }
                 return self.handleScrollWheel(event)
             }
             return handled ? nil : event
