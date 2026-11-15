@@ -535,6 +535,12 @@ struct LaneRow: View {
                     .help("Pull request #\(pr.number), \(pr.state.rawValue)")
                     .accessibilityLabel("Pull request \(pr.number), \(pr.state.rawValue)")
             }
+            if let progress = session.note?.progress {
+                ProgressView(value: progress)
+                    .progressViewStyle(.circular)
+                    .controlSize(.mini)
+                    .help("\(Int(progress * 100))% done")
+            }
             if !session.rowMetadata.ports.isEmpty {
                 Image(systemName: "network")
                     .font(.caption)
@@ -572,6 +578,7 @@ struct LaneRow: View {
     }
 
     private var statusSubtitle: String {
+        if let text = session.note?.text { return text }
         if session.isOrphan, !session.isAttached { return "Running, nothing attached" }
         if session.lane.isClosable, session.status == .attached || session.status == .detached {
             return session.shortDirectory
@@ -590,6 +597,10 @@ struct LaneRow: View {
 
     private var helpText: String {
         var lines = ["\(session.title) — \(session.status.title)", session.shortDirectory]
+        if let note = session.note {
+            if let progress = note.progress { lines.append("\(Int(progress * 100))% done") }
+            lines.append(contentsOf: note.log.suffix(5))
+        }
         if let message = session.record?.message, !message.isEmpty { lines.append(message) }
         return lines.joined(separator: "\n")
     }

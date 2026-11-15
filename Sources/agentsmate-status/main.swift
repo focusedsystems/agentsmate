@@ -11,6 +11,11 @@ import AgentsMateStatus
 //       because Codex takes only one.
 //   agentsmate-status list
 //       Print every record as JSON.
+//   agentsmate-status note [--lane <lane>] [--text <text>] [--progress <0-1>]
+//                          [--log <line>] [--clear]
+//       From a script in a lane: set the line of status text and progress its
+//       row shows, or add a log line. The lane is found as the hooks find it,
+//       or named with --lane. --progress -1 removes the bar.
 //
 // A hook must never block or fail its agent, so every error is swallowed
 // and the exit status is always 0.
@@ -67,6 +72,27 @@ case "codex":
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = Array(rest.dropFirst()) + [payload]
         try? process.run()
+    }
+
+case "note":
+    var rest = Array(args.dropFirst())
+    var lane: String?, text: String?, progress: Double?, line: String?, clear = false
+    while !rest.isEmpty {
+        let flag = rest.removeFirst()
+        func value() -> String? { rest.isEmpty ? nil : rest.removeFirst() }
+        switch flag {
+        case "--lane": lane = value()
+        case "--text": text = value()
+        case "--progress": progress = value().flatMap(Double.init)
+        case "--log": line = value()
+        case "--clear": clear = true
+        default: break
+        }
+    }
+    if let lane = lane ?? tmuxLane() {
+        try? directory.updateNote(lane: lane, text: text, progress: progress, log: line, clear: clear)
+    } else {
+        FileHandle.standardError.write(Data("agentsmate-status: not in a lane; pass --lane\n".utf8))
     }
 
 case "list":

@@ -52,6 +52,8 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
         [lastOutputAt, record?.updatedAt].compactMap { $0 }.max()
     }
 
+    /// What a script in the lane last said about its work.
+    @Published public internal(set) var note: LaneNote?
     /// Branch, pull request and ports, when the store reads them.
     @Published public internal(set) var rowMetadata = LaneRowMetadata()
 

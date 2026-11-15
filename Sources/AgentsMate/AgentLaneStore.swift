@@ -134,6 +134,7 @@ public final class AgentLaneStore: ObservableObject {
     private let defaults: UserDefaults
     private var feedSubscription: AnyCancellable?
     private var presenceSubscription: AnyCancellable?
+    private var notesSubscription: AnyCancellable?
 
     public init(configuration: Configuration, backends: [any LaneBackend],
                 statusFeed: LaneStatusFeed? = LaneStatusFeed(), defaults: UserDefaults = .standard) {
@@ -153,6 +154,9 @@ public final class AgentLaneStore: ObservableObject {
         }
         presenceSubscription = statusFeed?.$presence.sink { [weak self] presence in
             MainActor.assumeIsolated { self?.apply(presence: presence) }
+        }
+        notesSubscription = statusFeed?.$notes.sink { [weak self] notes in
+            MainActor.assumeIsolated { self?.apply(notes: notes) }
         }
         statusFeed?.start()
         if configuration.showsRowMetadata { startRowMetadata() }
@@ -801,6 +805,19 @@ public final class AgentLaneStore: ObservableObject {
             session.update(record: match.find(in: records))
         }
         objectWillChange.send()
+    }
+
+    /// A note is found by the lane's id, or by the tmux session its status
+    /// matches by name.
+    private func apply(notes: [String: LaneNote]) {
+        for session in sessions.values {
+            var note = notes[session.id]
+            if note == nil, case .lane(let name)? = session.lane.statusMatch ?? Optional(session.backend.statusMatch(for: session.lane)) {
+                note = notes[name]
+            }
+            if note == nil, let lane = session.record?.lane { note = notes[lane] }
+            if session.note != note { session.note = note }
+        }
     }
 
     private func apply(presence: [LanePresence]) {

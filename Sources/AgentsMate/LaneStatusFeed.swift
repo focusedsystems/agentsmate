@@ -17,6 +17,8 @@ public protocol LaneStatusSource: Sendable {
 @MainActor
 public final class LaneStatusFeed: ObservableObject {
     @Published public private(set) var records: [LaneStatus] = []
+    /// What scripts in the lanes say about their work, by lane.
+    @Published public private(set) var notes: [String: LaneNote] = [:]
     /// The running sessions the presence sources list.
     @Published public private(set) var presence: [LanePresence] = []
     public let presenceSources: [any LanePresenceSource]
@@ -41,6 +43,7 @@ public final class LaneStatusFeed: ObservableObject {
     public func start() {
         guard timer == nil else { return }
         try? FileManager.default.createDirectory(at: directory.url, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: directory.notesURL, withIntermediateDirectories: true)
         reload()
         let fd = open(directory.url.path, O_EVTONLY)
         if fd >= 0 {
@@ -70,6 +73,8 @@ public final class LaneStatusFeed: ObservableObject {
 
     public func reload() {
         hookRecords = directory.readAll()
+        let fresh = Dictionary(directory.readNotes().map { ($0.lane, $0) }, uniquingKeysWith: { a, b in a.updatedAt > b.updatedAt ? a : b })
+        if fresh != notes { notes = fresh }
         publish()
     }
 
