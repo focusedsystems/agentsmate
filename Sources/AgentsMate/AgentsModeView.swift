@@ -87,6 +87,14 @@ public struct AgentLaneSidebar<Accessory: View>: View {
             }
         }
         .listStyle(.sidebar)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if let usage = store.usage {
+                VStack(spacing: 0) {
+                    Divider()
+                    AgentUsageMeter(model: usage).padding(.horizontal, 12).padding(.vertical, 8)
+                }
+            }
+        }
         .alert("New Section", isPresented: $showingNewSection) {
             TextField("Name", text: $sectionName)
             Button("Add") { store.addSection(sectionName) }
