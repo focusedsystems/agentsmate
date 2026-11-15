@@ -48,6 +48,9 @@ public struct AgentLaneSidebar<Accessory: View>: View {
     @State private var showingNewSection = false
     @State private var renaming: String?
     @State private var sectionName = ""
+    @State private var renamingLane: AgentLane.ID?
+    @State private var laneName = ""
+    @State private var pendingSwitch: (id: AgentLane.ID, backendID: String, title: String)?
 
     public init(store: AgentLaneStore, labels: AgentsModeLabels = .init(), rowActions: [LaneAction] = [],
                 @ViewBuilder accessory: () -> Accessory) {
@@ -84,6 +87,19 @@ public struct AgentLaneSidebar<Accessory: View>: View {
             TextField("Name", text: $sectionName)
             Button("Add") { store.addSection(sectionName) }
             Button("Cancel", role: .cancel) {}
+        }
+        .alert("Rename", isPresented: Binding(get: { renamingLane != nil }, set: { if !$0 { renamingLane = nil } })) {
+            TextField("Name", text: $laneName)
+            Button("Rename") { if let id = renamingLane { store.rename(id, to: laneName) } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Leave it empty to go back to the automatic name.")
+        }
+        .alert("Switch the agent?", isPresented: Binding(get: { pendingSwitch != nil }, set: { if !$0 { pendingSwitch = nil } })) {
+            Button("Switch") { if let p = pendingSwitch { store.switchBackend(p.id, to: p.backendID) } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("\(pendingSwitch?.title ?? "This lane") is working. Switching restarts its terminal.")
         }
         .alert("Rename Section", isPresented: renamingBinding) {
             TextField("Name", text: $sectionName)
@@ -204,6 +220,32 @@ public struct AgentLaneSidebar<Accessory: View>: View {
             .disabled(!session.isStarted)
         Button("Detach") { store.detach(lane.id) }
             .disabled(!session.isAttached)
+        Button("Rename…") { laneName = session.customTitle ?? session.title; renamingLane = lane.id }
+        if session.customTitle != nil {
+            Button("Use Automatic Name") { store.rename(lane.id, to: nil) }
+        }
+        Menu("Duplicate") {
+            Button("Same Agent") { store.duplicate(lane.id) }
+            Divider()
+            ForEach(store.availableBackends, id: \.id) { backend in
+                Button(backend.displayName) { store.duplicate(lane.id, backendID: backend.id) }
+            }
+        }
+        if lane.isClosable {
+            Menu("Switch Agent") {
+                ForEach(store.availableBackends, id: \.id) { backend in
+                    Button(backend.displayName) {
+                        if session.status == .running {
+                            pendingSwitch = (lane.id, backend.id, session.title)
+                        } else {
+                            store.switchBackend(lane.id, to: backend.id)
+                        }
+                    }
+                    .disabled(backend.id == lane.backendID)
+                }
+            }
+        }
+        Divider()
         Button(store.layout.pinned.contains(lane.id) ? "Unpin" : "Pin") {
             store.setPinned(lane.id, !store.layout.pinned.contains(lane.id))
         }

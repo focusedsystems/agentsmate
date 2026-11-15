@@ -94,9 +94,27 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
     /// The row's title: the app's name for the lane, or for a lane the
     /// person opened, what the program running in it calls itself.
     public var title: String {
-        if lane.isClosable, let programTitle, !programTitle.isEmpty { return programTitle }
+        if let customTitle, !customTitle.isEmpty { return customTitle }
+        guard lane.isClosable else { return lane.title }
+        if let title = metadata?.title { return title }
+        if let task = programTitle.flatMap(TerminalTitle.task(from:)) { return task }
         return lane.title
     }
+
+    /// The task the agent's terminal title names, for a lane whose row keeps
+    /// the app's name.
+    public var task: String? {
+        metadata?.title ?? programTitle.flatMap(TerminalTitle.task(from:))
+    }
+
+    /// The name the person gave the row; it wins over every other name.
+    @Published public internal(set) var customTitle: String?
+    /// What the agent wrote to its session file.
+    @Published public private(set) var metadata: LaneSessionMetadata?
+    /// Called when the agent's session file names a section for the lane.
+    var onSectionFromAgent: ((String) -> Void)?
+    private var metadataURL: URL?
+    private var metadataModified: Date?
 
     /// The working directory with the home folder as ~.
     public var shortDirectory: String {
@@ -158,7 +176,10 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
         startProcess(configuration: configuration)
         poll?.invalidate()
         poll = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.followDirectory() }
+            MainActor.assumeIsolated {
+                self?.followDirectory()
+                self?.readMetadata()
+            }
         }
     }
 
@@ -172,6 +193,11 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
         env["TERM_PROGRAM"] = configuration.termProgram
         env["COLORFGBG"] = (view.colorScheme ?? .light).colorFgBg
         env["AGENTSMATE_LANE"] = lane.id
+        if let url = configuration.sessionFileDirectory?.appendingPathComponent(Self.fileName(lane.id) + ".json") {
+            try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            metadataURL = url
+            env["AGENTSMATE_SESSION"] = url.path
+        }
         for (key, value) in configuration.environment { env[key] = value }
         for (key, value) in launch.environment { env[key] = value }
         view.startProcess(executable: launch.executable, args: launch.arguments,
@@ -188,6 +214,20 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
             env.removeValue(forKey: key)
         }
         return env
+    }
+
+    static func fileName(_ id: String) -> String {
+        String(id.map { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" ? $0 : "_" }.prefix(100))
+    }
+
+    private func readMetadata() {
+        guard let url = metadataURL,
+              let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate,
+              modified != metadataModified else { return }
+        metadataModified = modified
+        let read = LaneSessionMetadata.read(url)
+        if read != metadata { metadata = read }
+        if let section = read?.section { onSectionFromAgent?(section) }
     }
 
     private func followDirectory() {
