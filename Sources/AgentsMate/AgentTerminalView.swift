@@ -8,6 +8,9 @@ open class AgentTerminalView: LocalProcessTerminalView {
     /// Answers a shortcut pressed while the terminal has focus. Returns
     /// whether it was handled; an unhandled one goes on to the menus.
     public var onShortcut: ((TerminalShortcut) -> Bool)?
+    /// Turns a key press into a shortcut under the person's bindings; nil
+    /// uses the built-in keys.
+    public var shortcutResolver: ((NSEvent) -> TerminalShortcut?)?
     /// Called after each chunk of output is drawn.
     public var onOutput: (() -> Void)?
     /// Cleans text before it is typed in as a paste. The default keeps
@@ -155,7 +158,8 @@ open class AgentTerminalView: LocalProcessTerminalView {
     }
 
     open override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        if window?.firstResponder === self, let shortcut = TerminalShortcut(event), onShortcut?(shortcut) == true {
+        if window?.firstResponder === self, let shortcut = shortcutResolver?(event) ?? TerminalShortcut(event),
+           onShortcut?(shortcut) == true {
             return true
         }
         return super.performKeyEquivalent(with: event)

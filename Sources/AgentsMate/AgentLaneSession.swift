@@ -74,6 +74,7 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
     @Published public var wantsFocus = false
 
     var onShortcut: ((TerminalShortcut) -> Bool)?
+    var shortcutResolver: ((NSEvent) -> TerminalShortcut?)?
     private var poll: Timer?
 
     /// Whether the row is on screen.
@@ -209,6 +210,7 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
         view.getTerminal().changeHistorySize(configuration.scrollback)
         view.registerForDraggedTypes(AgentTerminalView.droppedTypes)
         view.onShortcut = { [weak self] shortcut in self?.onShortcut?(shortcut) ?? false }
+        view.shortcutResolver = { [weak self] event in self?.shortcutResolver?(event) }
         view.onOutput = { [weak self] in
             MainActor.assumeIsolated {
                 guard let self else { return }
