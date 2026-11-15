@@ -78,6 +78,9 @@ public protocol LaneBackend: Sendable {
     func launch(for lane: AgentLane, shell: String) -> TerminalLaunch
     /// How to pick this lane's record out of the status feed.
     func statusMatch(for lane: AgentLane) -> LaneStatusMatch
+    /// The process that resumes the lane's last conversation, or nil when
+    /// the backend keeps sessions itself or cannot resume.
+    func resumeLaunch(for lane: AgentLane, shell: String) -> TerminalLaunch?
     /// Whether ``stop(_:)`` ends the lane's session.
     var canStop: Bool { get }
     /// End the lane's persistent session, as closing its workspace in a
@@ -87,6 +90,7 @@ public protocol LaneBackend: Sendable {
 }
 
 public extension LaneBackend {
+    func resumeLaunch(for lane: AgentLane, shell: String) -> TerminalLaunch? { nil }
     var canStop: Bool { false }
     func stop(_ lane: AgentLane) {}
 }
@@ -176,6 +180,15 @@ public struct CommandLaneBackend: LaneBackend {
     }
 
     public var canStop: Bool { stopCommand != nil }
+
+    /// `claude --continue` / `codex resume --last`, falling back to the fresh
+    /// command. Wrappers that keep their own sessions are not rewritten.
+    public func resumeLaunch(for lane: AgentLane, shell: String) -> TerminalLaunch? {
+        guard !passesDirectory, let resumed = LaneResume.command(for: command.trimmingCharacters(in: .whitespaces)) else { return nil }
+        var copy = self
+        copy.command = resumed + " || " + command
+        return copy.launch(for: lane, shell: shell)
+    }
 
     public func stop(_ lane: AgentLane) {
         guard let stopCommand else { return }

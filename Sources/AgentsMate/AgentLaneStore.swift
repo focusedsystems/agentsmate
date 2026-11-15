@@ -32,6 +32,8 @@ public final class AgentLaneStore: ObservableObject {
         public var sessionFileDirectory: URL?
         /// ⌃Tab and ⇧⌘[ ] skip lanes that have not been started yet.
         public var cycleSkipsUnstarted: Bool
+        /// The workspaces file. Nil turns workspaces and restore off.
+        public var workspaceFile: URL?
 
         public init(termProgram: String, environment: [String: String] = [:],
                     baseFontSize: CGFloat = NSFont.systemFontSize,
@@ -40,7 +42,8 @@ public final class AgentLaneStore: ObservableObject {
                     closeStopsLane: Bool = true,
                     sessionFileDirectory: URL? = FileManager.default.temporaryDirectory
                         .appendingPathComponent("agentsmate-sessions", isDirectory: true),
-                    cycleSkipsUnstarted: Bool = false) {
+                    cycleSkipsUnstarted: Bool = false, workspaceFile: URL? = nil) {
+            self.workspaceFile = workspaceFile
             self.sessionFileDirectory = sessionFileDirectory
             self.cycleSkipsUnstarted = cycleSkipsUnstarted
             self.highlightsOrphans = highlightsOrphans
@@ -168,6 +171,134 @@ public final class AgentLaneStore: ObservableObject {
         // A lane added without opening waits as a bookmark until first shown.
         if shouldOpen { open(lane.id, focus: focus) }
         return sessions[lane.id]
+    }
+
+    // MARK: Workspaces and restore
+
+    /// The workspaces file as last read; re-read with ``reloadWorkspaces()``.
+    @Published public private(set) var workspaces = LaneWorkspaceFile()
+    @Published public private(set) var workspaceError: String?
+
+    public func reloadWorkspaces() {
+        guard let url = configuration.workspaceFile else { return }
+        do {
+            workspaces = try LaneWorkspaceFile.load(url)
+            workspaceError = nil
+        } catch {
+            workspaceError = "The workspaces file could not be read: \(error.localizedDescription)"
+        }
+    }
+
+    private func writeWorkspaces(_ change: (inout LaneWorkspaceFile) -> Void) {
+        guard let url = configuration.workspaceFile else { return }
+        reloadWorkspaces()
+        guard workspaceError == nil else { return }
+        var file = workspaces
+        change(&file)
+        do {
+            try file.save(url)
+            workspaces = file
+        } catch {
+            workspaceError = "The workspaces file could not be saved: \(error.localizedDescription)"
+        }
+    }
+
+    /// The lanes the person opened, with the sections, as a workspace.
+    public func snapshot(named name: String, onlyAttached: Bool = false) -> LaneWorkspace {
+        let opened = displayOrder.filter { $0.isClosable && (!onlyAttached || sessions[$0.id]?.isAttached == true) }
+        let lanes = opened.map { lane in
+            LaneWorkspace.Lane(title: layout.names[lane.id],
+                               directory: sessions[lane.id]?.currentDirectory ?? lane.directory?.path,
+                               backendID: lane.backendID,
+                               section: layout.section(of: lane),
+                               pinned: layout.pinned.contains(lane.id) ? true : nil)
+        }
+        let used = Set(lanes.compactMap(\.section))
+        return LaneWorkspace(name: name, sections: layout.orderedSections(for: self.lanes).filter { used.contains($0) || layout.sections.contains($0) },
+                             lanes: lanes)
+    }
+
+    public func saveWorkspace(named name: String) {
+        let workspace = snapshot(named: name)
+        writeWorkspaces { file in
+            file.workspaces.removeAll { $0.name == name }
+            file.workspaces.append(workspace)
+        }
+    }
+
+    public func deleteWorkspace(named name: String) {
+        writeWorkspaces { file in
+            file.workspaces.removeAll { $0.name == name }
+            if file.openAtLaunch == name { file.openAtLaunch = nil }
+        }
+    }
+
+    public func setOpenAtLaunch(_ name: String?) {
+        writeWorkspaces { $0.openAtLaunch = name }
+    }
+
+    /// Add a workspace's lanes, skipping any already open in the same folder
+    /// on the same backend. They wait until shown, apart from the first.
+    public func open(workspace: LaneWorkspace, resume: Bool = false) {
+        for name in workspace.sections { layout.addSection(name) }
+        var first: AgentLane.ID?
+        for saved in workspace.lanes {
+            let path = saved.directory.map { ($0 as NSString).expandingTildeInPath }
+            let already = lanes.contains { lane in
+                lane.backendID == saved.backendID && path.map { LaneStatusMatch.normalizedPath($0) == LaneStatusMatch.normalizedPath(lane.path) } ?? false
+            }
+            if already { continue }
+            let lane = AgentLane(id: UUID().uuidString, title: (path as NSString?)?.lastPathComponent ?? "Lane",
+                                 directory: path.map { URL(fileURLWithPath: $0, isDirectory: true) },
+                                 backendID: saved.backendID, isClosable: true, section: saved.section)
+            add(lane, focus: false, open: false)
+            if resume { sessions[lane.id]?.resumeOnStart = true }
+            if let title = saved.title { rename(lane.id, to: title) }
+            if saved.pinned == true { layout.setPinned(lane.id, true) }
+            if first == nil { first = lane.id }
+        }
+        if let first, selected?.lane.isClosable != true { selectedID = first }
+    }
+
+    /// Record the lanes attached now, to reopen at the next launch. Call when
+    /// the app quits.
+    public func saveRestore() {
+        let workspace = snapshot(named: "Last Session", onlyAttached: true)
+        writeWorkspaces { $0.restore = workspace.lanes.isEmpty ? nil : workspace }
+    }
+
+    /// Bring back the lanes open at the last quit, each resuming its last
+    /// conversation when started; or, failing that, the workspace marked to
+    /// open at launch. Returns whether anything was added.
+    @discardableResult
+    public func restoreAtLaunch() -> Bool {
+        reloadWorkspaces()
+        if let restore = workspaces.restore, !restore.lanes.isEmpty {
+            open(workspace: restore, resume: true)
+            return true
+        }
+        if let launch = workspaces.launchWorkspace {
+            open(workspace: launch)
+            return true
+        }
+        return false
+    }
+
+    // MARK: Sending text
+
+    /// Type `text` into a lane's agent without switching to it. When no
+    /// program there takes a paste, the text goes on the clipboard instead
+    /// and the result says so.
+    public enum SendResult: Equatable, Sendable { case sent, copied }
+
+    @discardableResult
+    public func send(_ text: String, to id: AgentLane.ID? = nil, submit: Bool = false) -> SendResult {
+        if let session = (id ?? selectedID).flatMap({ sessions[$0] }), session.send(text, submit: submit) {
+            return .sent
+        }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        return .copied
     }
 
     // MARK: Naming, duplicating, switching agent
