@@ -42,7 +42,7 @@ public enum ClaudeAgentsList {
 
     /// Run `claude agents --json` and parse it. Empty when Claude is missing
     /// or the call fails or takes longer than `timeout`.
-    public static func fetch(binary: URL, timeout: TimeInterval = 10) -> [LaneStatus] {
+    public static func fetch(binary: URL, includeInteractive: Bool = false, timeout: TimeInterval = 10) -> [LaneStatus] {
         let process = Process()
         process.executableURL = binary
         process.arguments = ["agents", "--json"]
@@ -55,6 +55,6 @@ public enum ClaudeAgentsList {
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         guard process.terminationStatus == 0 else { return [] }
-        return parse(data)
+        return parse(data, includeInteractive: includeInteractive)
     }
 }

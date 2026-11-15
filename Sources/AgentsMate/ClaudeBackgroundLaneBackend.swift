@@ -53,14 +53,18 @@ public struct ClaudeBackgroundLaneBackend: LaneBackend {
 /// Polls `claude agents --json` and hands its sessions to a ``LaneStatusFeed``.
 public struct ClaudeAgentsStatusSource: LaneStatusSource {
     public let binary: URL
+    /// Also report interactive sessions, such as Claude running in a tmux
+    /// lane, so a lane shows its state before any hook has fired.
+    public let includeInteractive: Bool
 
-    public init?(binary: URL? = ClaudeBinary.locate()) {
+    public init?(binary: URL? = ClaudeBinary.locate(), includeInteractive: Bool = false) {
         guard let binary else { return nil }
         self.binary = binary
+        self.includeInteractive = includeInteractive
     }
 
     public func records() async -> [LaneStatus] {
-        let binary = binary
-        return await Task.detached { ClaudeAgentsList.fetch(binary: binary) }.value
+        let binary = binary, interactive = includeInteractive
+        return await Task.detached { ClaudeAgentsList.fetch(binary: binary, includeInteractive: interactive) }.value
     }
 }
