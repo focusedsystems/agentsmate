@@ -41,3 +41,25 @@ final class LaneNoteTests: XCTestCase {
         XCTAssertNil(dir.readNote(lane: "build"))
     }
 }
+
+final class TranscriptDigestTests: XCTestCase {
+    func testDigestSkipsToolResultsAndKeepsLastReply() {
+        let text = [
+            #"{"type":"user","message":{"role":"user","content":"Fix the login bug"}}"#,
+            #"{"type":"assistant","message":{"content":[{"type":"text","text":"Looking at auth.swift"},{"type":"tool_use","name":"Read"}]}}"#,
+            #"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"file text"}]}}"#,
+            #"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Also add a test"}]}}"#,
+            #"{"type":"assistant","message":{"content":[{"type":"text","text":"Done: fixed and tested."}]}}"#,
+            "not json",
+        ].joined(separator: "\n")
+        let digest = TranscriptDigest.parse(text)
+        XCTAssertEqual(digest?.prompts, ["Fix the login bug", "Also add a test"])
+        XCTAssertEqual(digest?.lastReply, "Done: fixed and tested.")
+        XCTAssertNil(TranscriptDigest.parse("nothing"))
+    }
+
+    func testClaudeRecordCarriesTranscript() {
+        let status = StatusEvents.claude(hookInput: Data(#"{"hook_event_name":"Stop","transcript_path":"/t.jsonl"}"#.utf8), lane: "x")
+        XCTAssertEqual(status?.transcriptPath, "/t.jsonl")
+    }
+}

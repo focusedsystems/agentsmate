@@ -40,6 +40,10 @@ public final class AgentLaneStore: ObservableObject {
         /// Post a macOS notification when a lane wants the person while
         /// they are looking elsewhere, and badge the Dock with the count.
         public var notifies: Bool
+        /// The model that writes one-line lane summaries when a turn ends,
+        /// such as "haiku". Nil turns summaries off; each one is a short
+        /// call on the person's own Claude Code account.
+        public var summaryModel: String?
 
         public init(termProgram: String, environment: [String: String] = [:],
                     baseFontSize: CGFloat = NSFont.systemFontSize,
@@ -49,7 +53,8 @@ public final class AgentLaneStore: ObservableObject {
                     sessionFileDirectory: URL? = FileManager.default.temporaryDirectory
                         .appendingPathComponent("agentsmate-sessions", isDirectory: true),
                     cycleSkipsUnstarted: Bool = false, workspaceFile: URL? = nil,
-                    showsRowMetadata: Bool = false, notifies: Bool = false) {
+                    showsRowMetadata: Bool = false, notifies: Bool = false, summaryModel: String? = nil) {
+            self.summaryModel = summaryModel
             self.notifies = notifies
             self.showsRowMetadata = showsRowMetadata
             self.workspaceFile = workspaceFile
@@ -161,6 +166,7 @@ public final class AgentLaneStore: ObservableObject {
         statusFeed?.start()
         if configuration.showsRowMetadata { startRowMetadata() }
         if configuration.notifies { notifier = LaneNotifier(store: self) }
+        if let model = configuration.summaryModel { summarizer = LaneSummarizer(model: model) }
     }
 
     // MARK: History
@@ -229,6 +235,7 @@ public final class AgentLaneStore: ObservableObject {
     // MARK: Attention
 
     private var notifier: LaneNotifier?
+    private var summarizer: LaneSummarizer?
 
     /// The lanes that want the person and that they have not looked at.
     public var unreadLanes: [AgentLane] {
@@ -867,6 +874,8 @@ public final class AgentLaneStore: ObservableObject {
         for session in sessions.values {
             let match = session.lane.statusMatch ?? session.backend.statusMatch(for: session.lane)
             session.update(record: match.find(in: records))
+            // A summary is written when a turn has ended, not while it runs.
+            if let summarizer, let state = session.record?.state, state.wantsAttention { summarizer.refresh(session) }
         }
         objectWillChange.send()
     }

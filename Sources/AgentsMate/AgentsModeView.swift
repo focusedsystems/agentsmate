@@ -580,6 +580,7 @@ struct LaneRow: View {
 
     private var statusSubtitle: String {
         if let text = session.note?.text { return text }
+        if let summary = session.summary, session.status != .running { return summary }
         if session.isOrphan, !session.isAttached { return "Running, nothing attached" }
         if session.lane.isClosable, session.status == .attached || session.status == .detached {
             return session.shortDirectory
@@ -598,6 +599,10 @@ struct LaneRow: View {
 
     private var helpText: String {
         var lines = ["\(session.title) — \(session.status.title)", session.shortDirectory]
+        if !session.recentPrompts.isEmpty {
+            lines.append("Recent requests:")
+            lines.append(contentsOf: session.recentPrompts.map { "• " + String($0.prefix(140)) })
+        }
         if let note = session.note {
             if let progress = note.progress { lines.append("\(Int(progress * 100))% done") }
             lines.append(contentsOf: note.log.suffix(5))
