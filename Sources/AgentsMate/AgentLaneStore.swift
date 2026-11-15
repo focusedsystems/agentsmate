@@ -86,6 +86,14 @@ public final class AgentLaneStore: ObservableObject {
     /// returns is the one started.
     public var willStartLane: ((AgentLane) -> AgentLane)?
 
+    /// What closing a lane does: take the row away, or end its terminal and
+    /// keep the row so it can start again (an app's standing rows).
+    public enum CloseDecision: Sendable { case remove, keepRow }
+    /// Asked when a lane is closed, with whether its terminal is attached.
+    public var willCloseLane: ((AgentLane, Bool) -> CloseDecision)?
+    /// Told after a lane is closed, with what happened to it.
+    public var didCloseLane: ((AgentLane, CloseDecision) -> Void)?
+
     /// The file the agent in a lane may write its row label to
     /// (`$AGENTSMATE_SESSION`), or nil when session files are off.
     public func sessionFile(for id: AgentLane.ID) -> URL? {
@@ -557,6 +565,18 @@ public final class AgentLaneStore: ObservableObject {
         if configuration.closeStopsLane, let session = sessions[id], session.backend.canStop {
             session.backend.stop(session.lane)
         }
+        let decision = willCloseLane?(lanes[index], sessions[id]?.isAttached == true) ?? .remove
+        if decision == .keepRow {
+            // The row stays, its terminal ended, ready to start again.
+            sessions[id]?.detach()
+            sessions.removeValue(forKey: id)
+            makeSession(for: lanes[index])
+            apply(statusFeed?.records ?? [])
+            didCloseLane?(lanes[index], .keepRow)
+            return
+        }
+        let closed = lanes[index]
+        defer { didCloseLane?(closed, .remove) }
         sessions[id]?.detach()
         sessions.removeValue(forKey: id)
         lanes.remove(at: index)
