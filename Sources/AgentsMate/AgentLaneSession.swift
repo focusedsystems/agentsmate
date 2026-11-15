@@ -52,6 +52,15 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
         [lastOutputAt, record?.updatedAt].compactMap { $0 }.max()
     }
 
+    /// Branch, pull request and ports, when the store reads them.
+    @Published public internal(set) var rowMetadata = LaneRowMetadata()
+
+    /// The shell's process id, while attached.
+    public var shellPID: pid_t? {
+        guard isAttached, let pid = view.process?.shellPid, pid > 0 else { return nil }
+        return pid
+    }
+
     /// The lane's session runs with no terminal attached anywhere.
     @Published public private(set) var isOrphan = false
     /// Bumped on every start, so SwiftUI re-hosts the new view.

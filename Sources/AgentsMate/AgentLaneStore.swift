@@ -34,6 +34,8 @@ public final class AgentLaneStore: ObservableObject {
         public var cycleSkipsUnstarted: Bool
         /// The workspaces file. Nil turns workspaces and restore off.
         public var workspaceFile: URL?
+        /// Show each lane's git branch, pull request and listening ports.
+        public var showsRowMetadata: Bool
 
         public init(termProgram: String, environment: [String: String] = [:],
                     baseFontSize: CGFloat = NSFont.systemFontSize,
@@ -42,7 +44,9 @@ public final class AgentLaneStore: ObservableObject {
                     closeStopsLane: Bool = true,
                     sessionFileDirectory: URL? = FileManager.default.temporaryDirectory
                         .appendingPathComponent("agentsmate-sessions", isDirectory: true),
-                    cycleSkipsUnstarted: Bool = false, workspaceFile: URL? = nil) {
+                    cycleSkipsUnstarted: Bool = false, workspaceFile: URL? = nil,
+                    showsRowMetadata: Bool = false) {
+            self.showsRowMetadata = showsRowMetadata
             self.workspaceFile = workspaceFile
             self.sessionFileDirectory = sessionFileDirectory
             self.cycleSkipsUnstarted = cycleSkipsUnstarted
@@ -146,6 +150,60 @@ public final class AgentLaneStore: ObservableObject {
             MainActor.assumeIsolated { self?.apply(presence: presence) }
         }
         statusFeed?.start()
+        if configuration.showsRowMetadata { startRowMetadata() }
+    }
+
+    // MARK: Row metadata
+
+    private var metadataTimer: Timer?
+    private var pullRequestCache: [String: (date: Date, value: LaneRowMetadata.PullRequest?)] = [:]
+    private var readingMetadata = false
+    private let gh = LaneRowMetadataReader.locateGH()
+
+    private func startRowMetadata() {
+        refreshRowMetadata()
+        metadataTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshRowMetadata() }
+        }
+    }
+
+    /// Read every lane's branch and ports, and the pull request for each
+    /// branch at most every five minutes, off the main thread.
+    public func refreshRowMetadata() {
+        guard !readingMetadata else { return }
+        readingMetadata = true
+        let jobs = lanes.compactMap { lane -> (String, String, pid_t?)? in
+            guard let session = sessions[lane.id] else { return nil }
+            return (lane.id, session.isStarted ? session.currentDirectory : lane.path, session.shellPID)
+        }
+        let cache = pullRequestCache, gh = gh
+        Task.detached(priority: .utility) {
+            var results: [String: LaneRowMetadata] = [:]
+            var fresh: [String: (date: Date, value: LaneRowMetadata.PullRequest?)] = [:]
+            for (id, directory, pid) in jobs {
+                var meta = LaneRowMetadata()
+                meta.branch = LaneRowMetadataReader.branch(in: directory)
+                if let pid { meta.ports = LaneRowMetadataReader.listeningPorts(pids: LaneRowMetadataReader.processTree(pid)) }
+                if let branch = meta.branch {
+                    let key = directory + "#" + branch
+                    if let hit = cache[key] ?? fresh[key], Date().timeIntervalSince(hit.date) < 300 {
+                        meta.pullRequest = hit.value
+                    } else {
+                        let value = LaneRowMetadataReader.pullRequest(branch: branch, in: directory, gh: gh)
+                        fresh[key] = (Date(), value)
+                        meta.pullRequest = value
+                    }
+                }
+                results[id] = meta
+            }
+            let found = results, cached = fresh
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                for (id, meta) in found where self.sessions[id]?.rowMetadata != meta { self.sessions[id]?.rowMetadata = meta }
+                self.pullRequestCache.merge(cached) { _, new in new }
+                self.readingMetadata = false
+            }
+        }
     }
 
     /// Add a backend, or replace one with the same id. Lanes already
