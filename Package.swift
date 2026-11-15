@@ -9,6 +9,8 @@ let package = Package(
         .library(name: "AgentsMate", targets: ["AgentsMate"]),
         // The lane status feed, without AppKit, for anything that reads or writes it.
         .library(name: "AgentsMateStatus", targets: ["AgentsMateStatus"]),
+        // Detects installed agent CLIs and updates them with the tool that installed them.
+        .library(name: "AgentsMateUpdates", targets: ["AgentsMateUpdates"]),
         // A headless `claude -p` stream-json conversation, for chat surfaces.
         .library(name: "AgentsMateChat", targets: ["AgentsMateChat"]),
         // The hook and notify writer that feeds lane status.
@@ -20,16 +22,19 @@ let package = Package(
     ],
     targets: [
         .target(name: "AgentsMateStatus"),
+        .target(name: "AgentsMateUpdates"),
         .target(
             name: "AgentsMate",
             dependencies: [
                 "AgentsMateStatus",
+                "AgentsMateUpdates",
                 .product(name: "SwiftTerm", package: "SwiftTerm"),
             ]
         ),
         .target(name: "AgentsMateChat", dependencies: ["AgentsMateStatus"]),
         .executableTarget(name: "agentsmate-status", dependencies: ["AgentsMateStatus"]),
         .testTarget(name: "AgentsMateStatusTests", dependencies: ["AgentsMateStatus"]),
+        .testTarget(name: "AgentsMateUpdatesTests", dependencies: ["AgentsMateUpdates"]),
         .testTarget(name: "AgentsMateTests", dependencies: ["AgentsMate"]),
         .testTarget(name: "AgentsMateChatTests", dependencies: ["AgentsMateChat"]),
     ],
