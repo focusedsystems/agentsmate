@@ -41,7 +41,8 @@ public enum StatusEvents {
                           directory: object["cwd"] as? String,
                           sessionID: object["session_id"] as? String,
                           message: event == "Notification" || event == "PermissionRequest" ? message : nil,
-                          event: event, updatedAt: now)
+                          event: event, updatedAt: now,
+                          transcriptPath: object["transcript_path"] as? String)
     }
 
     /// A record for one Codex `notify` call, or nil for an event it does not know.

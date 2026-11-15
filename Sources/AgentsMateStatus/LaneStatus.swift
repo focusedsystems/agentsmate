@@ -38,9 +38,13 @@ public struct LaneStatus: Codable, Equatable, Sendable {
     /// The hook or notify event that produced this record.
     public var event: String
     public var updatedAt: Date
+    /// The agent's conversation file, when its hooks name one.
+    public var transcriptPath: String?
 
     public init(agent: String, state: LaneState, lane: String? = nil, directory: String? = nil,
-                sessionID: String? = nil, message: String? = nil, event: String, updatedAt: Date = Date()) {
+                sessionID: String? = nil, message: String? = nil, event: String, updatedAt: Date = Date(),
+                transcriptPath: String? = nil) {
+        self.transcriptPath = transcriptPath
         self.agent = agent
         self.state = state
         self.lane = lane

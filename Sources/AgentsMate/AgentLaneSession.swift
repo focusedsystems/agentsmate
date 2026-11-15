@@ -52,6 +52,10 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
         [lastOutputAt, record?.updatedAt].compactMap { $0 }.max()
     }
 
+    /// One line on what the agent is working on, when summaries are on.
+    @Published public internal(set) var summary: String?
+    /// The person's last few prompts in this lane, when summaries are on.
+    @Published public internal(set) var recentPrompts: [String] = []
     /// What a script in the lane last said about its work.
     @Published public internal(set) var note: LaneNote?
     /// Branch, pull request and ports, when the store reads them.
