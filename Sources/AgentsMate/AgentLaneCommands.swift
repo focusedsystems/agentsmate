@@ -53,6 +53,13 @@ public struct AgentLaneCommands: Commands {
             .keyboardShortcut("[", modifiers: [.command, .shift])
             .disabled(store.lanes.isEmpty)
             Divider()
+            Button("Jump to Unread") {
+                reveal()
+                store.jumpToUnread()
+            }
+            .keyboardShortcut("u", modifiers: [.command, .shift])
+            .disabled(store.unreadLanes.isEmpty)
+            Divider()
             Button("Reattach") {
                 reveal()
                 if let id = store.selectedID { store.reattach(id) }

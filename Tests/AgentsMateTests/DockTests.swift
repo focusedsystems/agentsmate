@@ -40,3 +40,21 @@ final class CloseHookTests: XCTestCase {
         XCTAssertEqual(told, ["r:keepRow", "s:remove"])
     }
 }
+
+@MainActor
+final class AttentionTests: XCTestCase {
+    func testUnreadAndJump() {
+        let store = AgentLaneStore(configuration: .init(termProgram: "T", sessionFileDirectory: nil, notifies: true),
+                                   backends: [CommandLaneBackend.shell], statusFeed: nil,
+                                   defaults: UserDefaults(suiteName: "agentsmate-att-\(UUID().uuidString)")!)
+        store.sync(lanes: [AgentLane(id: "a", title: "A", backendID: "shell"), AgentLane(id: "b", title: "B", backendID: "shell")])
+        let b = store.sessions["b"]!
+        b.update(record: LaneStatus(agent: "claude", state: .running, lane: "b", event: "UserPromptSubmit"))
+        b.update(record: LaneStatus(agent: "claude", state: .permissionRequested, lane: "b", event: "Notification"))
+        XCTAssertEqual(store.unreadLanes.map(\.id), ["b"])
+        XCTAssertTrue(store.jumpToUnread())
+        XCTAssertEqual(store.selectedID, "b")
+        store.detachAll()
+    }
+}
+import AgentsMateStatus
