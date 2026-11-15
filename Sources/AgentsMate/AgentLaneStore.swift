@@ -1,4 +1,5 @@
 import AppKit
+import UserNotifications
 import Combine
 import AgentsMateStatus
 
@@ -36,6 +37,9 @@ public final class AgentLaneStore: ObservableObject {
         public var workspaceFile: URL?
         /// Show each lane's git branch, pull request and listening ports.
         public var showsRowMetadata: Bool
+        /// Post a macOS notification when a lane wants the person while
+        /// they are looking elsewhere, and badge the Dock with the count.
+        public var notifies: Bool
 
         public init(termProgram: String, environment: [String: String] = [:],
                     baseFontSize: CGFloat = NSFont.systemFontSize,
@@ -45,7 +49,8 @@ public final class AgentLaneStore: ObservableObject {
                     sessionFileDirectory: URL? = FileManager.default.temporaryDirectory
                         .appendingPathComponent("agentsmate-sessions", isDirectory: true),
                     cycleSkipsUnstarted: Bool = false, workspaceFile: URL? = nil,
-                    showsRowMetadata: Bool = false) {
+                    showsRowMetadata: Bool = false, notifies: Bool = false) {
+            self.notifies = notifies
             self.showsRowMetadata = showsRowMetadata
             self.workspaceFile = workspaceFile
             self.sessionFileDirectory = sessionFileDirectory
@@ -151,6 +156,53 @@ public final class AgentLaneStore: ObservableObject {
         }
         statusFeed?.start()
         if configuration.showsRowMetadata { startRowMetadata() }
+        if configuration.notifies { notifier = LaneNotifier(store: self) }
+    }
+
+    // MARK: Attention
+
+    private var notifier: LaneNotifier?
+
+    /// The lanes that want the person and that they have not looked at.
+    public var unreadLanes: [AgentLane] {
+        displayOrder.filter { sessions[$0.id]?.needsAttention == true }
+    }
+
+    /// Show the first lane waiting for the person, if any.
+    @discardableResult
+    public func jumpToUnread() -> Bool {
+        guard let lane = unreadLanes.first else { return false }
+        open(lane.id)
+        return true
+    }
+
+    /// Show a lane a notification named. For an app that keeps its own
+    /// notification delegate and forwards AgentsMate's responses.
+    public func handleNotification(_ response: UNNotificationResponse) {
+        if let id = response.notification.request.content.userInfo["agentsmate.lane"] as? String { showFromNotification(id) }
+    }
+
+    func showFromNotification(_ id: AgentLane.ID) {
+        NSApp.activate(ignoringOtherApps: true)
+        open(id)
+        onShowLane?(id)
+    }
+
+    /// Called when a notification or Jump to Unread brings a lane forward,
+    /// so the app can switch to its lanes (Agents mode, the dock).
+    public var onShowLane: ((AgentLane.ID) -> Void)?
+
+    private func laneWantsAttention(_ session: AgentLaneSession) {
+        guard configuration.notifies else { return }
+        let lookingAtIt = session.isShown && NSApp.isActive
+        if !lookingAtIt { notifier?.post(for: session) }
+        updateBadge()
+    }
+
+    private func updateBadge() {
+        guard configuration.notifies, LaneNotifier.isAvailable else { return }
+        let count = unreadLanes.count
+        NSApp.dockTile.badgeLabel = count > 0 ? String(count) : nil
     }
 
     // MARK: Row metadata
@@ -531,6 +583,7 @@ public final class AgentLaneStore: ObservableObject {
         guard let backend = backends[lane.backendID] ?? backends["shell"] ?? Optional(CommandLaneBackend.shell) else { return }
         let session = AgentLaneSession(lane: lane, backend: backend)
         let id = lane.id
+        session.onWantsAttention = { [weak self] session in self?.laneWantsAttention(session) }
         session.customTitle = layout.names[id]
         session.onShortcut = { [weak self] shortcut in self?.handle(shortcut, from: id) ?? false }
         session.onSectionFromAgent = { [weak self] section in
@@ -762,6 +815,7 @@ public final class AgentLaneStore: ObservableObject {
     private func updateShown() {
         for (id, session) in sessions {
             session.isShown = isShowing && (id == selectedID || id == splitID)
+            if session.isShown { notifier?.clear(id) }
         }
     }
 }

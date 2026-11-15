@@ -144,6 +144,8 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
     @Published public internal(set) var customTitle: String?
     /// What the agent wrote to its session file.
     @Published public private(set) var metadata: LaneSessionMetadata?
+    /// Called when the agent changes into a state that wants a person.
+    var onWantsAttention: ((AgentLaneSession) -> Void)?
     /// Called when the agent's session file names a section for the lane.
     var onSectionFromAgent: ((String) -> Void)?
     private var metadataURL: URL?
@@ -175,7 +177,10 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
         // repeating the same state is not news.
         let changed = record != nil && new?.state != record?.state
         record = new
-        if changed, !isShown, new?.state.wantsAttention == true { needsAttention = true }
+        if changed, new?.state.wantsAttention == true {
+            if !isShown { needsAttention = true }
+            onWantsAttention?(self)
+        }
         if new?.state.wantsAttention != true { needsAttention = false }
     }
 
