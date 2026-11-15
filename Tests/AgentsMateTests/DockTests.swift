@@ -58,3 +58,27 @@ final class AttentionTests: XCTestCase {
     }
 }
 import AgentsMateStatus
+
+@MainActor
+final class HistoryPaletteTests: XCTestCase {
+    func testBackForwardAndPalette() {
+        let store = AgentLaneStore(configuration: .init(termProgram: "T", sessionFileDirectory: nil),
+                                   backends: [CommandLaneBackend.shell], statusFeed: nil,
+                                   defaults: UserDefaults(suiteName: "agentsmate-hist-\(UUID().uuidString)")!)
+        store.sync(lanes: [AgentLane(id: "a", title: "Alpha", directory: URL(fileURLWithPath: "/w/alpha"), backendID: "shell"),
+                           AgentLane(id: "b", title: "Beta", directory: URL(fileURLWithPath: "/w/beta"), backendID: "shell"),
+                           AgentLane(id: "c", title: "Gamma", directory: URL(fileURLWithPath: "/w/gamma"), backendID: "shell")])
+        store.open("a", focus: false); store.open("b", focus: false); store.open("c", focus: false)
+        store.goBack()
+        XCTAssertEqual(store.selectedID, "b")
+        store.goBack()
+        XCTAssertEqual(store.selectedID, "a")
+        XCTAssertFalse(store.canGoBack)
+        store.goForward()
+        XCTAssertEqual(store.selectedID, "b")
+        XCTAssertEqual(store.paletteResults("gam").map(\.id), ["c"])
+        XCTAssertEqual(store.paletteResults("w beta").map(\.id), ["b"])
+        XCTAssertEqual(store.paletteResults("").count, 3)
+        store.detachAll()
+    }
+}

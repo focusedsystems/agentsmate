@@ -18,10 +18,13 @@ public struct AgentLaneCommands: Commands {
     let reveal: () -> Void
     /// The id of the app's inbox window scene, if it has one.
     let inboxWindowID: String?
+    /// Back and Forward through lanes visited, on ⌥⌘← and ⌥⌘→.
+    let historyCommands: Bool
 
     public init(store: AgentLaneStore, menuTitle: String = "Agent", labels: AgentsModeLabels = .init(),
                 numberShortcuts: Bool = true, emptyText: String = "No Lanes", fontCommands: Bool = true,
-                inboxWindowID: String? = nil, reveal: @escaping () -> Void = {}) {
+                inboxWindowID: String? = nil, historyCommands: Bool = true, reveal: @escaping () -> Void = {}) {
+        self.historyCommands = historyCommands
         self.inboxWindowID = inboxWindowID
         self.fontCommands = fontCommands
         self.store = store
@@ -65,6 +68,20 @@ public struct AgentLaneCommands: Commands {
             }
             .keyboardShortcut("u", modifiers: [.command, .shift])
             .disabled(store.unreadLanes.isEmpty)
+            Button("Go to \(noun)…") {
+                reveal()
+                store.paletteVisible = true
+            }
+            .keyboardShortcut("o", modifiers: [.command, .shift])
+            .disabled(store.lanes.isEmpty)
+            if historyCommands {
+                Button("Back") { reveal(); store.goBack() }
+                    .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
+                    .disabled(!store.canGoBack)
+                Button("Forward") { reveal(); store.goForward() }
+                    .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
+                    .disabled(!store.canGoForward)
+            }
             Divider()
             Button("Reattach") {
                 reveal()

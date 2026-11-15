@@ -163,6 +163,69 @@ public final class AgentLaneStore: ObservableObject {
         if configuration.notifies { notifier = LaneNotifier(store: self) }
     }
 
+    // MARK: History
+
+    @Published public private(set) var history: [AgentLane.ID] = []
+    @Published public private(set) var historyIndex = -1
+    private var navigatingHistory = false
+
+    private func recordVisit(_ id: AgentLane.ID) {
+        guard !navigatingHistory, history.indices.contains(historyIndex) ? history[historyIndex] != id : true else { return }
+        history = Array(history.prefix(historyIndex + 1)) + [id]
+        if history.count > 100 { history.removeFirst(history.count - 100) }
+        historyIndex = history.count - 1
+    }
+
+    public var canGoBack: Bool { previousInHistory(by: -1) != nil }
+    public var canGoForward: Bool { previousInHistory(by: 1) != nil }
+
+    private func previousInHistory(by step: Int) -> Int? {
+        var index = historyIndex + step
+        while history.indices.contains(index) {
+            if sessions[history[index]] != nil { return index }
+            index += step
+        }
+        return nil
+    }
+
+    /// Back to the lane shown before this one, skipping lanes since closed.
+    public func goBack() { go(by: -1) }
+    public func goForward() { go(by: 1) }
+
+    private func go(by step: Int) {
+        guard let index = previousInHistory(by: step) else { return }
+        historyIndex = index
+        navigatingHistory = true
+        open(history[index])
+        navigatingHistory = false
+    }
+
+    // MARK: Palette
+
+    /// Whether Go to Lane… is showing.
+    @Published public var paletteVisible = false
+
+    /// Lanes matching `query`, best first: every word must appear in the
+    /// name, folder, branch or section; a match at the start of the name
+    /// ranks first, then recently active lanes.
+    public func paletteResults(_ query: String) -> [AgentLane] {
+        let words = query.lowercased().split(separator: " ").map(String.init)
+        let ordered = displayOrder
+        guard !words.isEmpty else { return ordered }
+        func haystack(_ lane: AgentLane) -> String {
+            let session = sessions[lane.id]
+            return [session?.title ?? lane.title, lane.path, session?.rowMetadata.branch ?? "", layout.section(of: lane) ?? ""]
+                .joined(separator: " ").lowercased()
+        }
+        let hits = ordered.filter { lane in let text = haystack(lane); return words.allSatisfy(text.contains) }
+        return hits.sorted { a, b in
+            let ta = (sessions[a.id]?.title ?? a.title).lowercased().hasPrefix(words[0])
+            let tb = (sessions[b.id]?.title ?? b.title).lowercased().hasPrefix(words[0])
+            if ta != tb { return ta }
+            return (sessions[a.id]?.lastActivity ?? .distantPast) > (sessions[b.id]?.lastActivity ?? .distantPast)
+        }
+    }
+
     // MARK: Attention
 
     private var notifier: LaneNotifier?
@@ -601,6 +664,7 @@ public final class AgentLaneStore: ObservableObject {
     /// lane that is already attached only shows it.
     public func open(_ id: AgentLane.ID, focus: Bool = true) {
         guard let session = sessions[id] else { return }
+        recordVisit(id)
         if id == splitID { splitID = selectedID == id ? nil : selectedID }
         selectedID = id
         start(session)
