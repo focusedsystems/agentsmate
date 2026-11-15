@@ -50,13 +50,13 @@ public struct AgentLaneCommands: Commands {
                 reveal()
                 store.cycle(by: 1)
             }
-            .keyboardShortcut("]", modifiers: [.command, .shift])
+            .laneShortcut(store.shortcuts.binding(for: .next))
             .disabled(store.lanes.isEmpty)
             Button("Previous \(noun)") {
                 reveal()
                 store.cycle(by: -1)
             }
-            .keyboardShortcut("[", modifiers: [.command, .shift])
+            .laneShortcut(store.shortcuts.binding(for: .previous))
             .disabled(store.lanes.isEmpty)
             Divider()
             if let inboxWindowID {
@@ -66,20 +66,20 @@ public struct AgentLaneCommands: Commands {
                 reveal()
                 store.jumpToUnread()
             }
-            .keyboardShortcut("u", modifiers: [.command, .shift])
+            .laneShortcut(store.shortcuts.binding(for: .jumpToUnread))
             .disabled(store.unreadLanes.isEmpty)
             Button("Go to \(noun)…") {
                 reveal()
                 store.paletteVisible = true
             }
-            .keyboardShortcut("o", modifiers: [.command, .shift])
+            .laneShortcut(store.shortcuts.binding(for: .goToLane))
             .disabled(store.lanes.isEmpty)
             if historyCommands {
                 Button("Back") { reveal(); store.goBack() }
-                    .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
+                    .laneShortcut(store.shortcuts.binding(for: .back))
                     .disabled(!store.canGoBack)
                 Button("Forward") { reveal(); store.goForward() }
-                    .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
+                    .laneShortcut(store.shortcuts.binding(for: .forward))
                     .disabled(!store.canGoForward)
             }
             Divider()
@@ -87,7 +87,7 @@ public struct AgentLaneCommands: Commands {
                 reveal()
                 if let id = store.selectedID { store.reattach(id) }
             }
-            .keyboardShortcut("r", modifiers: [.command, .shift])
+            .laneShortcut(store.shortcuts.binding(for: .reattach))
             .disabled(store.selectedID == nil)
             Button("Detach") {
                 if let id = store.selectedID { store.detach(id) }
@@ -98,18 +98,18 @@ public struct AgentLaneCommands: Commands {
             }
             .disabled(store.selectedID.map { !store.canStop($0) } ?? true)
             Button("Clear Screen") { store.clearSelected() }
-                .keyboardShortcut("k", modifiers: .command)
+                .laneShortcut(store.shortcuts.binding(for: .clear))
                 .disabled(!store.selectedIsAttached)
             if fontCommands {
                 Divider()
                 Button("Bigger Text") { store.adjustFont(by: 1) }
-                    .keyboardShortcut("+", modifiers: .command)
+                    .laneShortcut(store.shortcuts.binding(for: .biggerFont))
                     .disabled(store.fontSize >= AgentLaneStore.fontSizeRange.upperBound)
                 Button("Smaller Text") { store.adjustFont(by: -1) }
-                    .keyboardShortcut("-", modifiers: .command)
+                    .laneShortcut(store.shortcuts.binding(for: .smallerFont))
                     .disabled(store.fontSize <= AgentLaneStore.fontSizeRange.lowerBound)
                 Button("Actual Size") { store.resetFont() }
-                    .keyboardShortcut("0", modifiers: .command)
+                    .laneShortcut(store.shortcuts.binding(for: .resetFont))
                     .disabled(store.fontOffset == 0)
             }
             Divider()

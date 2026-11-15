@@ -132,6 +132,14 @@ public final class AgentLaneStore: ObservableObject {
         session.start(configuration: configuration, font: font)
     }
 
+    /// The person's keyboard shortcuts for the lanes' commands.
+    @Published public var shortcuts = LaneShortcutBindings() {
+        didSet {
+            guard shortcuts != oldValue, let data = try? JSONEncoder().encode(shortcuts) else { return }
+            defaults.set(data, forKey: keys.shortcuts)
+        }
+    }
+
     /// Sections, pins, order and sort, as the person left them.
     @Published public var layout = LaneLayout() {
         didSet {
@@ -155,6 +163,10 @@ public final class AgentLaneStore: ObservableObject {
         for backend in backends { self.backends[backend.id] = backend }
         self.selectedID = defaults.string(forKey: keys.selectedLane)
         self.fontOffset = CGFloat(defaults.double(forKey: keys.fontOffset))
+        if let data = defaults.data(forKey: keys.shortcuts),
+           let saved = try? JSONDecoder().decode(LaneShortcutBindings.self, from: data) {
+            self.shortcuts = saved
+        }
         if let data = defaults.data(forKey: keys.layout),
            let saved = try? JSONDecoder().decode(LaneLayout.self, from: data) {
             self.layout = saved
@@ -668,6 +680,7 @@ public final class AgentLaneStore: ObservableObject {
         session.onWantsAttention = { [weak self] session in self?.laneWantsAttention(session) }
         session.customTitle = layout.names[id]
         session.onShortcut = { [weak self] shortcut in self?.handle(shortcut, from: id) ?? false }
+        session.shortcutResolver = { [weak self] event in self?.shortcuts.terminalShortcut(for: event) }
         session.onSectionFromAgent = { [weak self] section in
             guard let self, self.layout.assignments[id] == nil, self.layout.section(of: lane) != section else { return }
             self.layout.move(id, to: section)
@@ -928,6 +941,7 @@ public struct AgentsModeKeys: Sendable {
     public var filterWaiting: String { prefix + "filterWaiting" }
     public var fontOffset: String { prefix + "fontOffset" }
     public var layout: String { prefix + "layout" }
+    public var shortcuts: String { prefix + "shortcuts" }
     public var newLaneBackend: String { prefix + "newLaneBackend" }
     public var newLaneCommand: String { prefix + "newLaneCommand" }
     public var openAtLaunch: String { prefix + "openAtLaunch" }
