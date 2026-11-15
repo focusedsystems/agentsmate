@@ -73,3 +73,8 @@ agent whose folder is the lane's folder and which came from inside a tmux
 session. A conversation started by hand in the same folder never colours a lane.
 An app can set `AgentLane.statusMatch` to `.lane("<tmux session>")` to match by
 name instead.
+
+When a lane's command records which agent session it attached, set
+`sessionIDFile` on the backend to that file. Status is then matched by session
+id, which survives renames and tells apart lanes that share a folder; the
+folder match is used only while the file is missing.

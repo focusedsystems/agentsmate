@@ -119,3 +119,15 @@ final class ClaudeAgentsListTests: XCTestCase {
         XCTAssertTrue(ClaudeAgentsList.parse(Data("nope".utf8)).isEmpty)
     }
 }
+
+final class SessionMatchTests: XCTestCase {
+    func testMatchesBySessionIDOrItsStart() {
+        let records = [
+            LaneStatus(agent: "claude", state: .running, lane: "Renamed", directory: "/w", sessionID: "73f6db7c-1", event: "claude agents"),
+            LaneStatus(agent: "claude", state: .done, lane: "Other", directory: "/w", sessionID: "aaaa", event: "claude agents"),
+        ]
+        XCTAssertEqual(LaneStatusMatch.session("73f6db7c").find(in: records)?.state, .running)
+        XCTAssertNil(LaneStatusMatch.session("").find(in: records))
+        XCTAssertEqual(LaneStatusMatch.firstOf([.session("zz"), .lane("Other")]).find(in: records)?.state, .done)
+    }
+}
