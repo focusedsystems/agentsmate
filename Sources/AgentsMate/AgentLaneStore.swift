@@ -648,6 +648,17 @@ public final class AgentLaneStore: ObservableObject {
         lane.section = layout.section(of: source)
         lane.statusMatch = nil
         if source.directory == nil { lane.directory = URL(fileURLWithPath: session.currentDirectory) }
+        // A persistent lane in the same folder would attach the same session,
+        // so the copy asks for a lane of its own: the next free number.
+        lane.variant = nil
+        if let backend = backends[lane.backendID], backend.keepsRunningWhenDetached {
+            let path = LaneStatusMatch.normalizedPath(lane.path)
+            let used = Set(lanes.filter { $0.backendID == lane.backendID && LaneStatusMatch.normalizedPath($0.path) == path }
+                .map { $0.variant ?? "1" })
+            var n = 2
+            while used.contains(String(n)) { n += 1 }
+            lane.variant = String(n)
+        }
         let taken = Set(sessions.values.map(\.title))
         let name = session.title.nextCopyName(taken: taken)
         let added = add(lane, focus: focus, after: id)
