@@ -18,11 +18,16 @@ import AgentsMateStatus
 let args = Array(CommandLine.arguments.dropFirst())
 let directory = LaneStatusDirectory.default()
 
-/// The tmux session this agent runs in, if any: the lane's name.
+/// The lane this agent runs in: its tmux session's name, or, for an agent an
+/// app started directly in a terminal, the lane id the app put in
+/// `AGENTSMATE_LANE`. A tmux session takes its environment from the tmux
+/// server, so inside one that variable belongs to some other lane.
 func tmuxLane() -> String? {
     let env = ProcessInfo.processInfo.environment
     if let key = env["CODEX_LANE_KEY"], !key.isEmpty { return key }
-    guard let tmux = env["TMUX"], !tmux.isEmpty else { return nil }
+    guard let tmux = env["TMUX"], !tmux.isEmpty else {
+        return env["AGENTSMATE_LANE"].flatMap { $0.isEmpty ? nil : $0 }
+    }
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
     var arguments = ["tmux", "display-message", "-p"]

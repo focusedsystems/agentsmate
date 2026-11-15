@@ -5,6 +5,8 @@ import AppKit
 /// switched on; the rest reach the menu bar as usual.
 public enum TerminalShortcut: Hashable, Sendable {
     case newLane, closeLane, split, clear, next, previous, select(Int), maximize
+    /// ⌃` — show or hide the lanes, even while a terminal has the keyboard.
+    case togglePanel
 
     /// Which shortcuts a store takes from a focused terminal.
     public struct Set: OptionSet, Sendable {
@@ -20,14 +22,15 @@ public enum TerminalShortcut: Hashable, Sendable {
         /// ⌘1–⌘9.
         public static let numbers = Set(rawValue: 1 << 5)
         public static let maximize = Set(rawValue: 1 << 6)
+        public static let togglePanel = Set(rawValue: 1 << 7)
 
         /// A fixed list of lanes, as in a window that is all lanes.
         public static let fixedLanes: Set = [.clear, .cycle, .numbers]
         /// Lanes the person opens and closes, in a panel.
-        public static let all: Set = [.newLane, .closeLane, .split, .clear, .cycle, .numbers, .maximize]
+        public static let all: Set = [.newLane, .closeLane, .split, .clear, .cycle, .numbers, .maximize, .togglePanel]
     }
 
-    var member: Set {
+    public var member: Set {
         switch self {
         case .newLane: .newLane
         case .closeLane: .closeLane
@@ -36,6 +39,7 @@ public enum TerminalShortcut: Hashable, Sendable {
         case .next, .previous: .cycle
         case .select: .numbers
         case .maximize: .maximize
+        case .togglePanel: .togglePanel
         }
     }
 
@@ -44,6 +48,7 @@ public enum TerminalShortcut: Hashable, Sendable {
             .intersection([.command, .control, .option, .shift])
         let key = event.charactersIgnoringModifiers?.lowercased() ?? ""
         switch (flags, key) {
+        case (.control, "`"): self = .togglePanel
         case (.command, "t"): self = .newLane
         case (.command, "w"): self = .closeLane
         case (.command, "d"): self = .split
@@ -54,7 +59,9 @@ public enum TerminalShortcut: Hashable, Sendable {
         case (.command, _) where Int(key).map({ (1...9).contains($0) }) == true:
             self = .select(Int(key)! - 1)
         default:
-            if event.keyCode == 48, flags.contains(.control) { // Tab
+            if event.keyCode == 50, flags == .control { // ` on any layout's key
+                self = .togglePanel
+            } else if event.keyCode == 48, flags.contains(.control) { // Tab
                 self = flags.contains(.shift) ? .previous : .next
             } else {
                 return nil

@@ -221,7 +221,7 @@ public final class AgentLaneStore: ObservableObject {
         case .next: cycle(by: 1)
         case .previous: cycle(by: -1)
         case .select(let n): open(index: n)
-        case .maximize: return false
+        case .maximize, .togglePanel: return false
         }
         return true
     }
