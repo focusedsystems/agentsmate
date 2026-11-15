@@ -44,6 +44,9 @@ public final class AgentLaneStore: ObservableObject {
         /// such as "haiku". Nil turns summaries off; each one is a short
         /// call on the person's own Claude Code account.
         public var summaryModel: String?
+        /// Where to read the agents' usage limits; the lane sidebar shows a
+        /// meter at its foot when there are any.
+        public var usageSources: [any AgentUsageSource]
 
         public init(termProgram: String, environment: [String: String] = [:],
                     baseFontSize: CGFloat = NSFont.systemFontSize,
@@ -53,7 +56,9 @@ public final class AgentLaneStore: ObservableObject {
                     sessionFileDirectory: URL? = FileManager.default.temporaryDirectory
                         .appendingPathComponent("agentsmate-sessions", isDirectory: true),
                     cycleSkipsUnstarted: Bool = false, workspaceFile: URL? = nil,
-                    showsRowMetadata: Bool = false, notifies: Bool = false, summaryModel: String? = nil) {
+                    showsRowMetadata: Bool = false, notifies: Bool = false, summaryModel: String? = nil,
+                    usageSources: [any AgentUsageSource] = []) {
+            self.usageSources = usageSources
             self.summaryModel = summaryModel
             self.notifies = notifies
             self.showsRowMetadata = showsRowMetadata
@@ -167,6 +172,7 @@ public final class AgentLaneStore: ObservableObject {
         if configuration.showsRowMetadata { startRowMetadata() }
         if configuration.notifies { notifier = LaneNotifier(store: self) }
         if let model = configuration.summaryModel { summarizer = LaneSummarizer(model: model) }
+        if !configuration.usageSources.isEmpty { usage = AgentUsageModel(sources: configuration.usageSources) }
     }
 
     // MARK: History
@@ -235,6 +241,8 @@ public final class AgentLaneStore: ObservableObject {
     // MARK: Attention
 
     private var notifier: LaneNotifier?
+    /// The agents' usage limits, when the app gave usage sources.
+    public private(set) var usage: AgentUsageModel?
     private var summarizer: LaneSummarizer?
 
     /// The lanes that want the person and that they have not looked at.
