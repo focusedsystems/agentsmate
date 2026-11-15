@@ -37,3 +37,13 @@ final class ShortcutBindingTests: XCTestCase {
         XCTAssertEqual(LaneKeyBinding("return", command: true, shift: true).display, "⇧⌘↩")
     }
 }
+
+final class UsageResetTests: XCTestCase {
+    func testDeltaWording() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        XCTAssertEqual(AgentUsageMeter.delta(from: now, to: now.addingTimeInterval(2 * 86_400 + 5 * 3600 + 120)), "2 days, 5 hours")
+        XCTAssertEqual(AgentUsageMeter.delta(from: now, to: now.addingTimeInterval(3 * 3600 + 20 * 60)), "3 hours, 20 minutes")
+        XCTAssertEqual(AgentUsageMeter.delta(from: now, to: now.addingTimeInterval(30)), "under a minute")
+        XCTAssertTrue(AgentUsageMeter.resetLine(now.addingTimeInterval(86_400), now: now).hasSuffix("in 1 day"))
+    }
+}

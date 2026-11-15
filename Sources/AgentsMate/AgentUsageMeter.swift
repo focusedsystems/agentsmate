@@ -42,12 +42,22 @@ public struct AgentUsageMeter: View {
         VStack(alignment: .leading, spacing: 4) {
             ForEach(model.usages, id: \.agent) { usage in
                 if let window = usage.fullest {
+                    VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 6) {
                         Text(usage.agent).font(.caption).frame(width: 44, alignment: .leading)
                         ProgressView(value: min(window.percent, 100), total: 100)
                             .tint(window.percent >= 90 ? .red : window.percent >= 70 ? .orange : .accentColor)
                         Text("\(Int(window.percent.rounded()))%").font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary).frame(width: 34, alignment: .trailing)
+                    }
+                    // Spent: say when it comes back, and how long that is.
+                    if window.percent >= 100, let reset = window.resetsAt {
+                        TimelineView(.periodic(from: .now, by: 60)) { context in
+                            Text(Self.resetLine(reset, now: context.date))
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                        }
+                    }
                     }
                     .help(Self.describe(usage))
                     .accessibilityElement(children: .ignore)
@@ -61,9 +71,27 @@ public struct AgentUsageMeter: View {
         .onAppear { model.start() }
     }
 
+    /// "Resets Tue 14:00 · in 2 days, 5 hours".
+    static func resetLine(_ reset: Date, now: Date = Date()) -> String {
+        let when = reset.formatted(.dateTime.weekday(.abbreviated).hour().minute())
+        return "Resets \(when) · in \(delta(from: now, to: reset))"
+    }
+
+    /// "2 days, 5 hours", "3 hours, 20 minutes", "under a minute".
+    static func delta(from now: Date, to reset: Date) -> String {
+        let seconds = reset.timeIntervalSince(now)
+        guard seconds >= 60 else { return "under a minute" }
+        let formatter = DateComponentsFormatter()
+        formatter.unitsStyle = .full
+        formatter.maximumUnitCount = 2
+        formatter.allowedUnits = [.day, .hour, .minute]
+        return formatter.string(from: seconds) ?? ""
+    }
+
     static func describe(_ usage: AgentUsage) -> String {
         var lines = usage.windows.map { w -> String in
-            let reset = w.resetsAt.map { " · resets " + $0.formatted(date: .abbreviated, time: .shortened) } ?? ""
+            let reset = w.resetsAt.map { " · resets " + $0.formatted(date: .abbreviated, time: .shortened)
+                + " (in " + delta(from: Date(), to: $0) + ")" } ?? ""
             return "\(w.label): \(Int(w.percent.rounded()))%\(reset)"
         }
         if let note = usage.note { lines.append(note) }
