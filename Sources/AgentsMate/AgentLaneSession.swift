@@ -226,6 +226,7 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
         }
         for (key, value) in configuration.environment { env[key] = value }
         for (key, value) in launch.environment { env[key] = value }
+        for (key, value) in lane.environment { env[key] = value }
         view.startProcess(executable: launch.executable, args: launch.arguments,
                           environment: env.map { "\($0.key)=\($0.value)" },
                           execName: nil, currentDirectory: launch.directory)

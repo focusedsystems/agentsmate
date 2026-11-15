@@ -24,6 +24,11 @@ public struct AgentLane: Identifiable, Hashable, Sendable {
     /// The section the lane starts in, such as a repository's host. The
     /// person can move it; their choice is kept in ``LaneLayout``.
     public var section: String?
+    /// Added to this lane's environment, after the app's and the backend's.
+    public var environment: [String: String] = [:]
+    /// Instructions for this lane's agent, in place of the backend's own
+    /// ``CommandLaneBackend/promptFile``.
+    public var promptFile: URL?
 
     public init(id: String, title: String, symbol: String = "terminal", tintHex: String? = nil,
                 directory: URL? = nil, backendID: String, isClosable: Bool = false,
@@ -181,7 +186,8 @@ public struct CommandLaneBackend: LaneBackend {
         guard !trimmed.isEmpty else {
             return TerminalLaunch(executable: shell, arguments: ["-l"], directory: directory)
         }
-        var line = passesDirectory ? trimmed : LaunchLine.inject(trimmed, promptFile: promptFile, directories: extraDirectories)
+        var line = passesDirectory ? trimmed
+            : LaunchLine.inject(trimmed, promptFile: lane.promptFile ?? promptFile, directories: extraDirectories)
         if passesDirectory { line += " " + ShellQuote.quote(directory) }
         if returnsToShell { line += "; exec " + ShellQuote.quote(shell) + " -l" }
         return TerminalLaunch(executable: shell, arguments: ["-l", "-i", "-c", line], directory: directory)
@@ -193,8 +199,9 @@ public struct CommandLaneBackend: LaneBackend {
     /// command. Wrappers that keep their own sessions are not rewritten.
     public func resumeLaunch(for lane: AgentLane, shell: String) -> TerminalLaunch? {
         guard !passesDirectory, let resumed = LaneResume.command(for: command.trimmingCharacters(in: .whitespaces)) else { return nil }
-        let fresh = LaunchLine.inject(command, promptFile: promptFile, directories: extraDirectories)
-        let again = LaunchLine.inject(resumed, promptFile: promptFile, directories: extraDirectories)
+        let prompt = lane.promptFile ?? promptFile
+        let fresh = LaunchLine.inject(command, promptFile: prompt, directories: extraDirectories)
+        let again = LaunchLine.inject(resumed, promptFile: prompt, directories: extraDirectories)
         var copy = self
         copy.promptFile = nil
         copy.extraDirectories = []
