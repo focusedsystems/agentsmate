@@ -21,3 +21,22 @@ final class DockTests: XCTestCase {
         store.detachAll()
     }
 }
+
+@MainActor
+final class CloseHookTests: XCTestCase {
+    func testKeepRowEndsTerminalButKeepsLane() {
+        let store = AgentLaneStore(configuration: .init(termProgram: "T", sessionFileDirectory: nil),
+                                   backends: [CommandLaneBackend.shell], statusFeed: nil,
+                                   defaults: UserDefaults(suiteName: "agentsmate-close-\(UUID().uuidString)")!)
+        store.add(AgentLane(id: "r", title: "Repo", backendID: "shell", isClosable: true), open: false)
+        store.add(AgentLane(id: "s", title: "Scratch", backendID: "shell", isClosable: true), open: false)
+        var told: [String] = []
+        store.willCloseLane = { lane, _ in lane.id == "r" ? .keepRow : .remove }
+        store.didCloseLane = { lane, decision in told.append("\(lane.id):\(decision)") }
+        store.close("r")
+        store.close("s")
+        XCTAssertEqual(store.lanes.map(\.id), ["r"])
+        XCTAssertNotNil(store.sessions["r"])
+        XCTAssertEqual(told, ["r:keepRow", "s:remove"])
+    }
+}
