@@ -6,6 +6,9 @@ final class RowMetadataTests: XCTestCase {
         XCTAssertEqual(LaneRowMetadataReader.parseHead("ref: refs/heads/feature/x\n"), "feature/x")
         XCTAssertEqual(LaneRowMetadataReader.parseHead("0123456789abcdef"), "0123456")
         XCTAssertNil(LaneRowMetadataReader.parseHead(""))
+        XCTAssertNil(LaneRowMetadataReader.parseHead("ref: refs/heads/--upload-pack=x"))
+        XCTAssertNil(LaneRowMetadataReader.parseHead("ref: refs/heads/a b"))
+        XCTAssertNil(LaneRowMetadataReader.parseHead("not-a-commit"))
     }
 
     func testBranchFromRepositoryAndWorktreeFile() throws {
@@ -34,6 +37,7 @@ final class RowMetadataTests: XCTestCase {
         XCTAssertEqual(pr?.state, .draft)
         XCTAssertEqual(LaneRowMetadataReader.parsePullRequest(#"{"number":3,"state":"MERGED","isDraft":false}"#)?.state, .merged)
         XCTAssertNil(LaneRowMetadataReader.parsePullRequest("no pull requests found"))
+        XCTAssertNil(LaneRowMetadataReader.parsePullRequest(#"{"number":4,"state":"OPEN","url":"file:///etc/passwd"}"#)?.url)
     }
 
     func testProcessTreeIncludesSelf() {

@@ -54,9 +54,22 @@ public enum LaneRowMetadataReader {
 
     static func parseHead(_ text: String?) -> String? {
         guard let text = text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
-        if text.hasPrefix("ref: refs/heads/") { return String(text.dropFirst("ref: refs/heads/".count)) }
-        if text.hasPrefix("ref: ") { return String(text.dropFirst("ref: ".count)) }
-        return String(text.prefix(7))
+        if text.hasPrefix("ref: ") {
+            let ref = text.hasPrefix("ref: refs/heads/") ? String(text.dropFirst("ref: refs/heads/".count))
+                                                          : String(text.dropFirst("ref: ".count))
+            return isSafeRefName(ref) ? ref : nil
+        }
+        let commit = String(text.prefix(7))
+        return commit.allSatisfy(\.isHexDigit) ? commit : nil
+    }
+
+    /// A branch name that can be passed as an argument: git's ref-name rules
+    /// in short, and never one that would read as an option.
+    static func isSafeRefName(_ name: String) -> Bool {
+        guard !name.isEmpty, !name.hasPrefix("-"), !name.hasPrefix("/"), !name.hasSuffix("/"),
+              !name.hasSuffix(".lock"), !name.contains(".."), !name.contains("@{"), !name.contains("//") else { return false }
+        let banned = CharacterSet(charactersIn: " ~^:?*[\\").union(.controlCharacters)
+        return name.unicodeScalars.allSatisfy { !banned.contains($0) }
     }
 
     /// `pid` and every process below it.
@@ -94,8 +107,8 @@ public enum LaneRowMetadataReader {
     /// The pull request for `branch` in the repository at `directory`, from
     /// `gh pr view`. Nil when `gh` is missing, not signed in, or there is none.
     public static func pullRequest(branch: String, in directory: String, gh: String?) -> LaneRowMetadata.PullRequest? {
-        guard let gh else { return nil }
-        let output = run(gh, ["pr", "view", branch, "--json", "number,state,isDraft,url"], directory: directory)
+        guard let gh, isSafeRefName(branch) else { return nil }
+        let output = run(gh, ["pr", "view", "--json", "number,state,isDraft,url", "--", branch], directory: directory)
         return parsePullRequest(output)
     }
 
@@ -109,7 +122,9 @@ public enum LaneRowMetadataReader {
         case "CLOSED": kind = .closed
         default: kind = (object["isDraft"] as? Bool) == true ? .draft : .open
         }
-        return .init(number: number, state: kind, url: (object["url"] as? String).flatMap(URL.init(string:)))
+        // Only a web link is kept, so opening it can never launch something else.
+        let url = (object["url"] as? String).flatMap(URL.init(string:)).flatMap { $0.scheme == "https" ? $0 : nil }
+        return .init(number: number, state: kind, url: url)
     }
 
     /// Where `gh` is installed, if it is.
