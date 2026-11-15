@@ -101,3 +101,16 @@ final class ClaudeBackgroundLaneBackendTests: XCTestCase {
         XCTAssertEqual(backend.statusMatch(for: lane), .lane("my-repo-app"))
     }
 }
+
+final class SessionIDFileTests: XCTestCase {
+    func testSessionIDFileWinsOverTheFolder() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("agentsmate-id-\(UUID().uuidString)")
+        let lane = AgentLane(id: "a", title: "A", directory: URL(fileURLWithPath: "/w"), backendID: "x")
+        let backend = CommandLaneBackend.tmuxLane(id: "x", displayName: "X", command: "w", statusAgent: "claude",
+                                                  sessionIDFile: { _ in file })
+        XCTAssertEqual(backend.statusMatch(for: lane), .directory("/w", agent: "claude"))
+        try "73f6db7c\n".write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: file) }
+        XCTAssertEqual(backend.statusMatch(for: lane), .session("73f6db7c"))
+    }
+}

@@ -94,9 +94,15 @@ public struct CommandLaneBackend: LaneBackend {
     /// `codex`), or nil for a lane with no status.
     public var statusAgent: String?
     public var keepsRunningWhenDetached: Bool
+    /// A file the command writes holding the id of the agent session behind
+    /// a lane. When it exists, status is matched by that id; folders are
+    /// only the fallback, because several lanes can share one folder.
+    public var sessionIDFile: (@Sendable (AgentLane) -> URL?)?
 
     public init(id: String, displayName: String, command: String, passesDirectory: Bool = false,
-                returnsToShell: Bool = false, statusAgent: String? = nil, keepsRunningWhenDetached: Bool = false) {
+                returnsToShell: Bool = false, statusAgent: String? = nil, keepsRunningWhenDetached: Bool = false,
+                sessionIDFile: (@Sendable (AgentLane) -> URL?)? = nil) {
+        self.sessionIDFile = sessionIDFile
         self.id = id
         self.displayName = displayName
         self.command = command
@@ -109,9 +115,11 @@ public struct CommandLaneBackend: LaneBackend {
     /// A wrapper that attaches a persistent tmux lane for the folder it is
     /// given, so opening the row again — here, in another terminal, or from
     /// another device — attaches the same conversation.
-    public static func tmuxLane(id: String, displayName: String, command: String, statusAgent: String?) -> CommandLaneBackend {
+    public static func tmuxLane(id: String, displayName: String, command: String, statusAgent: String?,
+                                sessionIDFile: (@Sendable (AgentLane) -> URL?)? = nil) -> CommandLaneBackend {
         CommandLaneBackend(id: id, displayName: displayName, command: command, passesDirectory: true,
-                           returnsToShell: false, statusAgent: statusAgent, keepsRunningWhenDetached: true)
+                           returnsToShell: false, statusAgent: statusAgent, keepsRunningWhenDetached: true,
+                           sessionIDFile: sessionIDFile)
     }
 
     /// The person's login shell.
@@ -131,6 +139,10 @@ public struct CommandLaneBackend: LaneBackend {
 
     public func statusMatch(for lane: AgentLane) -> LaneStatusMatch {
         guard let statusAgent else { return .none }
-        return .directory(lane.path, agent: statusAgent)
+        let byFolder = LaneStatusMatch.directory(lane.path, agent: statusAgent)
+        guard let file = sessionIDFile?(lane),
+              let raw = try? String(contentsOf: file, encoding: .utf8) else { return byFolder }
+        let id = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return id.isEmpty ? byFolder : .session(id)
     }
 }
