@@ -424,6 +424,7 @@ public struct AgentLaneDetail<Empty: View>: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .textBackgroundColor))
+        .agentLanePalette(store)
         .onAppear {
             store.isShowing = true
             store.openSelected(focus: true)
