@@ -290,6 +290,20 @@ public struct AgentLaneSidebar<Accessory: View>: View {
             Button("Close") { store.close(lane.id) }
         }
         Divider()
+        if let pr = session.rowMetadata.pullRequest, let url = pr.url {
+            Button("Open Pull Request #\(pr.number)") { NSWorkspace.shared.open(url) }
+        }
+        ForEach(session.rowMetadata.ports, id: \.self) { port in
+            Button("Open localhost:\(port)") {
+                if let url = URL(string: "http://localhost:\(port)") { NSWorkspace.shared.open(url) }
+            }
+        }
+        if session.rowMetadata.branch != nil {
+            Button("Copy Branch Name") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(session.rowMetadata.branch ?? "", forType: .string)
+            }
+        }
         Button("Copy Path") {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(session.currentDirectory, forType: .string)
@@ -512,6 +526,22 @@ struct LaneRow: View {
                     .truncationMode(.head)
             }
             Spacer(minLength: 2)
+            if let pr = session.rowMetadata.pullRequest {
+                Text("#\(pr.number)")
+                    .font(.caption.monospacedDigit())
+                    .padding(.horizontal, 5)
+                    .background(Capsule().fill(Self.color(for: pr.state).opacity(0.18)))
+                    .foregroundStyle(Self.color(for: pr.state))
+                    .help("Pull request #\(pr.number), \(pr.state.rawValue)")
+                    .accessibilityLabel("Pull request \(pr.number), \(pr.state.rawValue)")
+            }
+            if !session.rowMetadata.ports.isEmpty {
+                Image(systemName: "network")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .help("Listening on " + session.rowMetadata.ports.map(String.init).joined(separator: ", "))
+                    .accessibilityLabel("Listening on ports " + session.rowMetadata.ports.map(String.init).joined(separator: ", "))
+            }
             if session.needsAttention {
                 Image(systemName: "circle.fill").font(.system(size: 6)).foregroundStyle(.tint)
                     .accessibilityHidden(true)
@@ -536,11 +566,26 @@ struct LaneRow: View {
     }
 
     private var subtitle: String {
+        let base = statusSubtitle
+        guard let branch = session.rowMetadata.branch else { return base }
+        return base + " · " + branch
+    }
+
+    private var statusSubtitle: String {
         if session.isOrphan, !session.isAttached { return "Running, nothing attached" }
         if session.lane.isClosable, session.status == .attached || session.status == .detached {
             return session.shortDirectory
         }
         return isSplit ? "\(session.status.title) · split" : session.status.title
+    }
+
+    static func color(for state: LaneRowMetadata.PullRequest.State) -> Color {
+        switch state {
+        case .open: .green
+        case .draft: .secondary
+        case .merged: .purple
+        case .closed: .red
+        }
     }
 
     private var helpText: String {
