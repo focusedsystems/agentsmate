@@ -284,6 +284,41 @@ public final class AgentLaneStore: ObservableObject {
         return false
     }
 
+    // MARK: Dock
+
+    /// Whether the bottom dock (``AgentLaneDock``) is open.
+    @Published public private(set) var dockVisible = false
+    /// The dock fills the window, the app's content hidden behind it.
+    @Published public var dockMaximized = false {
+        didSet { defaults.set(dockMaximized, forKey: keys.dockMaximized) }
+    }
+    private weak var focusBeforeDock: NSResponder?
+
+    /// Open the dock in the mode it was last in, starting a lane if there
+    /// is none, and give the selected terminal the keyboard.
+    public func showDock(newLaneDirectory: URL? = nil) {
+        if !dockVisible {
+            focusBeforeDock = NSApp.keyWindow?.firstResponder
+            dockMaximized = defaults.bool(forKey: keys.dockMaximized)
+        }
+        dockVisible = true
+        if lanes.isEmpty { openNewLane(in: newLaneDirectory) } else { openSelected(focus: true) }
+    }
+
+    /// Close the dock and hand the keyboard back to whatever had it before.
+    public func hideDock() {
+        guard dockVisible else { return }
+        dockVisible = false
+        if let focus = focusBeforeDock, let window = NSApp.keyWindow {
+            window.makeFirstResponder(focus)
+        }
+        focusBeforeDock = nil
+    }
+
+    public func toggleDock(newLaneDirectory: URL? = nil) {
+        if dockVisible { hideDock() } else { showDock(newLaneDirectory: newLaneDirectory) }
+    }
+
     // MARK: Sending text
 
     /// Type `text` into a lane's agent without switching to it. When no
@@ -592,7 +627,12 @@ public final class AgentLaneStore: ObservableObject {
         case .next: cycle(by: 1)
         case .previous: cycle(by: -1)
         case .select(let n): open(index: n)
-        case .maximize, .togglePanel: return false
+        case .maximize:
+            guard dockVisible else { return false }
+            dockMaximized.toggle()
+        case .togglePanel:
+            guard dockVisible else { return false }
+            hideDock()
         case .biggerFont: adjustFont(by: 1)
         case .smallerFont: adjustFont(by: -1)
         case .resetFont: resetFont()
@@ -638,4 +678,7 @@ public struct AgentsModeKeys: Sendable {
     public var newLaneCommand: String { prefix + "newLaneCommand" }
     public var openAtLaunch: String { prefix + "openAtLaunch" }
     public var reopenLast: String { prefix + "reopenLast" }
+    public var dockHeight: String { prefix + "dockHeight" }
+    public var dockMaximized: String { prefix + "dockMaximized" }
+    public var dockListWidth: String { prefix + "dockListWidth" }
 }
