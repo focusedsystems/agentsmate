@@ -77,6 +77,30 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
 
     public var isAttached: Bool { isStarted && !hasExited }
 
+    /// Start by resuming the agent's last conversation, once. Set for lanes
+    /// brought back at launch.
+    public var resumeOnStart = false
+
+    /// Whether a program other than the shell has the terminal: the
+    /// foreground process group of the pseudo-terminal is not the shell's.
+    public var programIsForeground: Bool {
+        guard isAttached, let process = view.process, process.childfd >= 0 else { return false }
+        let group = tcgetpgrp(process.childfd)
+        return group > 0 && group != process.shellPid
+    }
+
+    /// Type `text` into the lane's program as a paste. With `submit`, Return
+    /// follows. Returns false, typing nothing, when no program is in the
+    /// foreground or it does not take bracketed paste, so text never lands
+    /// at a bare shell prompt.
+    @discardableResult
+    public func send(_ text: String, submit: Bool = false) -> Bool {
+        guard programIsForeground, view.acceptsBracketedPaste else { return false }
+        view.pasteText(text)
+        if submit { view.send(txt: "\r") }
+        return true
+    }
+
     public var status: LaneDisplayStatus {
         if let record, record.state != .ended {
             switch record.state {
@@ -185,7 +209,9 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
 
     private func startProcess(configuration: AgentLaneStore.Configuration) {
         let shell = ProcessInfo.processInfo.environment["SHELL"].flatMap { $0.isEmpty ? nil : $0 } ?? "/bin/zsh"
-        let launch = backend.launch(for: lane, shell: shell)
+        let launch = (resumeOnStart ? backend.resumeLaunch(for: lane, shell: shell) : nil)
+            ?? backend.launch(for: lane, shell: shell)
+        resumeOnStart = false
         var env = Self.scrubbed(ProcessInfo.processInfo.environment)
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"

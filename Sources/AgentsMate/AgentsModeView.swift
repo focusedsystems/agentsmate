@@ -51,6 +51,10 @@ public struct AgentLaneSidebar<Accessory: View>: View {
     @State private var renamingLane: AgentLane.ID?
     @State private var laneName = ""
     @State private var pendingSwitch: (id: AgentLane.ID, backendID: String, title: String)?
+    @State private var savingWorkspace = false
+    @State private var workspaceName = ""
+    @State private var messaging: AgentLane.ID?
+    @State private var message = ""
 
     public init(store: AgentLaneStore, labels: AgentsModeLabels = .init(), rowActions: [LaneAction] = [],
                 @ViewBuilder accessory: () -> Accessory) {
@@ -100,6 +104,21 @@ public struct AgentLaneSidebar<Accessory: View>: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("\(pendingSwitch?.title ?? "This lane") is working. Switching restarts its terminal.")
+        }
+        .alert("Save Lanes as Workspace", isPresented: $savingWorkspace) {
+            TextField("Name", text: $workspaceName)
+            Button("Save") { store.saveWorkspace(named: workspaceName.trimmingCharacters(in: .whitespaces)) }
+                .disabled(workspaceName.trimmingCharacters(in: .whitespaces).isEmpty)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Saves the \(labels.laneNoun)s you opened, with their sections. A workspace with the same name is replaced.")
+        }
+        .alert("Message", isPresented: Binding(get: { messaging != nil }, set: { if !$0 { messaging = nil } })) {
+            TextField("Message", text: $message)
+            Button("Send") { if let id = messaging { store.send(message, to: id, submit: true) } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Typed into the agent and sent. If no agent is running there, it goes on the clipboard instead.")
         }
         .alert("Rename Section", isPresented: renamingBinding) {
             TextField("Name", text: $sectionName)
@@ -220,6 +239,8 @@ public struct AgentLaneSidebar<Accessory: View>: View {
             .disabled(!session.isStarted)
         Button("Detach") { store.detach(lane.id) }
             .disabled(!session.isAttached)
+        Button("Message…") { message = ""; messaging = lane.id }
+            .disabled(!session.isAttached)
         Button("Rename…") { laneName = session.customTitle ?? session.title; renamingLane = lane.id }
         if session.customTitle != nil {
             Button("Use Automatic Name") { store.rename(lane.id, to: nil) }
@@ -333,6 +354,12 @@ public struct AgentLaneSidebar<Accessory: View>: View {
                 Button("New Section…") { sectionName = ""; showingNewSection = true }
                 Button("Collapse All") { store.setAllCollapsed(true) }
                 Button("Expand All") { store.setAllCollapsed(false) }
+                if store.configuration.workspaceFile != nil {
+                    Divider()
+                    Menu("Workspaces") {
+                        AgentWorkspaceMenu(store: store) { workspaceName = ""; savingWorkspace = true }
+                    }
+                }
             } label: {
                 Label("Sort and Sections", systemImage: "arrow.up.arrow.down")
                     .labelStyle(.iconOnly)
