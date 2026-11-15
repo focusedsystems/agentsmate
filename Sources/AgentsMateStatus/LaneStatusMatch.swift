@@ -39,6 +39,8 @@ public enum LaneStatusMatch: Hashable, Sendable {
         }
     }
 
+    public static func normalizedPath(_ path: String) -> String { normalize(path) }
+
     static func normalize(_ path: String) -> String {
         let expanded = (path as NSString).expandingTildeInPath
         var out = URL(fileURLWithPath: expanded).resolvingSymlinksInPath().standardizedFileURL.path

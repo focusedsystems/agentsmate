@@ -51,6 +51,20 @@ What keeps tmux the default for now:
 Switching an app is one change: register `ClaudeBackgroundLaneBackend` and set
 its Claude lanes' `backendID` to it.
 
+## Stopping lanes and orphans
+
+A backend that can end its session sets `canStop` and implements `stop`:
+`ClaudeBackgroundLaneBackend` runs `claude stop`, and a `CommandLaneBackend`
+runs its `stopCommand` (killing the tmux session, say). The lane's menu gains
+Stop Lane, and closing a lane the person opened stops it when
+`closeStopsLane` is on. The conversation is kept, so opening the lane resumes it.
+
+Add a `LanePresenceSource` (`TmuxPresenceSource` lists tmux sessions with
+their attached-client counts) to the status feed, and turn on
+`highlightsOrphans`. Then a lane whose session runs with nothing attached
+anywhere is drawn as an orphan, so a stray can be reattached or stopped.
+Leave it off where lanes are kept running on purpose.
+
 ## Room for more
 
 A backend that serves models from elsewhere (local models on other machines,

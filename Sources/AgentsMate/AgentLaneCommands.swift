@@ -63,6 +63,10 @@ public struct AgentLaneCommands: Commands {
                 if let id = store.selectedID { store.detach(id) }
             }
             .disabled(!store.selectedIsAttached)
+            Button("Stop Lane") {
+                if let id = store.selectedID { store.stop(id) }
+            }
+            .disabled(store.selectedID.map { !store.canStop($0) } ?? true)
             Button("Clear Screen") { store.clearSelected() }
                 .keyboardShortcut("k", modifiers: .command)
                 .disabled(!store.selectedIsAttached)

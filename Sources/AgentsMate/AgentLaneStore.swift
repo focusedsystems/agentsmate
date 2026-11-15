@@ -19,13 +19,22 @@ public final class AgentLaneStore: ObservableObject {
         public var scrollback: Int
         /// The shortcuts a focused terminal answers itself.
         public var shortcuts: TerminalShortcut.Set
-        /// Prefix for the saved list width, collapse, filters and selection.
+        /// Prefix for the saved filters, selection and text size.
         public var defaultsPrefix: String
+        /// Mark lanes whose session runs with no terminal attached anywhere.
+        /// Off for an app whose lanes are kept running on purpose.
+        public var highlightsOrphans: Bool
+        /// Closing a lane the person opened also stops its session, as
+        /// closing a workspace in a terminal multiplexer does.
+        public var closeStopsLane: Bool
 
         public init(termProgram: String, environment: [String: String] = [:],
                     baseFontSize: CGFloat = NSFont.systemFontSize,
                     scrollback: Int = 20_000, shortcuts: TerminalShortcut.Set = .fixedLanes,
-                    defaultsPrefix: String = "agentsmate.") {
+                    defaultsPrefix: String = "agentsmate.", highlightsOrphans: Bool = false,
+                    closeStopsLane: Bool = true) {
+            self.highlightsOrphans = highlightsOrphans
+            self.closeStopsLane = closeStopsLane
             self.termProgram = termProgram
             self.environment = environment
             self.baseFontSize = baseFontSize
@@ -62,6 +71,7 @@ public final class AgentLaneStore: ObservableObject {
     private var backends: [String: any LaneBackend] = [:]
     private let defaults: UserDefaults
     private var feedSubscription: AnyCancellable?
+    private var presenceSubscription: AnyCancellable?
 
     public init(configuration: Configuration, backends: [any LaneBackend],
                 statusFeed: LaneStatusFeed? = LaneStatusFeed(), defaults: UserDefaults = .standard) {
@@ -74,6 +84,9 @@ public final class AgentLaneStore: ObservableObject {
         self.fontOffset = CGFloat(defaults.double(forKey: keys.fontOffset))
         feedSubscription = statusFeed?.$records.sink { [weak self] records in
             MainActor.assumeIsolated { self?.apply(records) }
+        }
+        presenceSubscription = statusFeed?.$presence.sink { [weak self] presence in
+            MainActor.assumeIsolated { self?.apply(presence: presence) }
         }
         statusFeed?.start()
     }
@@ -166,9 +179,25 @@ public final class AgentLaneStore: ObservableObject {
         open(id)
     }
 
-    /// End and remove a lane the person opened.
+    /// End the lane's session, not just the terminal here. Its conversation
+    /// is kept, so opening the lane again resumes it.
+    public func stop(_ id: AgentLane.ID) {
+        guard let session = sessions[id], session.backend.canStop else { return }
+        session.detach()
+        session.backend.stop(session.lane)
+        statusFeed?.reload()
+    }
+
+    /// Whether the lane's session can be stopped from here.
+    public func canStop(_ id: AgentLane.ID) -> Bool { sessions[id]?.backend.canStop == true }
+
+    /// End and remove a lane the person opened, stopping its session too
+    /// when ``Configuration/closeStopsLane`` is on.
     public func close(_ id: AgentLane.ID) {
         guard let index = lanes.firstIndex(where: { $0.id == id }), lanes[index].isClosable else { return }
+        if configuration.closeStopsLane, let session = sessions[id], session.backend.canStop {
+            session.backend.stop(session.lane)
+        }
         sessions[id]?.detach()
         sessions.removeValue(forKey: id)
         lanes.remove(at: index)
@@ -270,6 +299,15 @@ public final class AgentLaneStore: ObservableObject {
         for session in sessions.values {
             let match = session.lane.statusMatch ?? session.backend.statusMatch(for: session.lane)
             session.update(record: match.find(in: records))
+        }
+        objectWillChange.send()
+    }
+
+    private func apply(presence: [LanePresence]) {
+        for session in sessions.values {
+            let match = session.lane.statusMatch ?? session.backend.statusMatch(for: session.lane)
+            let found = presence.find(for: session.lane, match: match)
+            session.update(orphan: configuration.highlightsOrphans && found?.attachedClients == 0 && !session.isAttached)
         }
         objectWillChange.send()
     }

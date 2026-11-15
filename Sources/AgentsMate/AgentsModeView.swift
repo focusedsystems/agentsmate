@@ -124,6 +124,10 @@ public struct AgentLaneSidebar<Accessory: View>: View {
             .disabled(!session.isStarted)
         Button("Detach") { store.detach(lane.id) }
             .disabled(!session.isAttached)
+        if session.backend.canStop {
+            Button("Stop Lane") { store.stop(lane.id) }
+                .help("End the session; its conversation resumes when the lane is opened again")
+        }
         if lane.isClosable {
             Button("Close") { store.close(lane.id) }
         }
@@ -338,7 +342,8 @@ struct LaneRow: View {
         .help(helpText)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(session.title)
-        .accessibilityValue(session.needsAttention ? "\(session.status.title), new" : session.status.title)
+        .accessibilityValue(session.isOrphan ? "Running, nothing attached"
+                            : session.needsAttention ? "\(session.status.title), new" : session.status.title)
     }
 
     private var isActive: Bool {
@@ -349,6 +354,7 @@ struct LaneRow: View {
     }
 
     private var subtitle: String {
+        if session.isOrphan, !session.isAttached { return "Running, nothing attached" }
         if session.lane.isClosable, session.status == .attached || session.status == .detached {
             return session.shortDirectory
         }
@@ -366,6 +372,16 @@ struct LaneRow: View {
     /// outline when not attached here.
     @ViewBuilder
     private var statusDot: some View {
+        if session.isOrphan {
+            Circle().strokeBorder(Color.orange, lineWidth: 1.5).frame(width: 8, height: 8)
+                .background(Circle().fill(Color(nsColor: .windowBackgroundColor)))
+        } else {
+            statusDotForStatus
+        }
+    }
+
+    @ViewBuilder
+    private var statusDotForStatus: some View {
         switch session.status {
         case .notOpened, .detached:
             Circle().strokeBorder(Color.secondary, lineWidth: 1).frame(width: 7, height: 7)
