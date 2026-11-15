@@ -311,6 +311,54 @@ public final class AgentLaneStore: ObservableObject {
         if let value { layout.names[id] = value } else { layout.names.removeValue(forKey: id) }
     }
 
+    /// Backends whose command is installed on this Mac (others always count).
+    public var installedBackends: [any LaneBackend] {
+        availableBackends.filter { $0.id != Self.customBackendID && (($0 as? CommandLaneBackend)?.isInstalled ?? true) }
+    }
+
+    /// The id of the backend built from the person's own command in Settings.
+    public static let customBackendID = "agentsmate.custom"
+
+    /// What a new lane runs: the person's choice in Settings, else the first
+    /// installed backend.
+    public var newLaneBackendID: String {
+        let saved = defaults.string(forKey: keys.newLaneBackend) ?? ""
+        if saved == Self.customBackendID {
+            let command = defaults.string(forKey: keys.newLaneCommand)?.trimmingCharacters(in: .whitespaces) ?? ""
+            if !command.isEmpty {
+                register(CommandLaneBackend(id: Self.customBackendID, displayName: command.split(separator: " ").first.map(String.init) ?? command,
+                                            command: command, returnsToShell: true))
+                return Self.customBackendID
+            }
+        }
+        if backends[saved] != nil { return saved }
+        return installedBackends.first?.id ?? CommandLaneBackend.shell.id
+    }
+
+    /// Open a lane the person can close, in `directory`, running what
+    /// Settings says a new lane runs.
+    @discardableResult
+    public func openNewLane(in directory: URL? = nil, backendID: String? = nil, focus: Bool = true,
+                            open shouldOpen: Bool = true, section: String? = nil) -> AgentLaneSession? {
+        let id = backendID ?? newLaneBackendID
+        if backends[id] == nil, id == CommandLaneBackend.shell.id { register(CommandLaneBackend.shell) }
+        let name = backends[id]?.displayName ?? "Lane"
+        let lane = AgentLane(id: UUID().uuidString, title: directory.map { "\(name) · \($0.lastPathComponent)" } ?? name,
+                             directory: directory, backendID: id, isClosable: true, section: section)
+        return add(lane, focus: focus, open: shouldOpen)
+    }
+
+    /// What happens at launch, as Settings says: reopen the lanes open at
+    /// quit (or the launch workspace), else open one new lane in the
+    /// background, else nothing.
+    public func performLaunchBehavior(newLaneDirectory: URL? = nil) {
+        let reopen = defaults.object(forKey: keys.reopenLast) as? Bool ?? true
+        if reopen, configuration.workspaceFile != nil, restoreAtLaunch() { return }
+        if defaults.bool(forKey: keys.openAtLaunch), !lanes.contains(where: \.isClosable) {
+            openNewLane(in: newLaneDirectory, focus: false, open: false)
+        }
+    }
+
     /// Every backend a lane can run on, by name.
     public var availableBackends: [any LaneBackend] {
         backends.values.sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
@@ -586,4 +634,8 @@ public struct AgentsModeKeys: Sendable {
     public var filterWaiting: String { prefix + "filterWaiting" }
     public var fontOffset: String { prefix + "fontOffset" }
     public var layout: String { prefix + "layout" }
+    public var newLaneBackend: String { prefix + "newLaneBackend" }
+    public var newLaneCommand: String { prefix + "newLaneCommand" }
+    public var openAtLaunch: String { prefix + "openAtLaunch" }
+    public var reopenLast: String { prefix + "reopenLast" }
 }

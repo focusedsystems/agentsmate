@@ -137,6 +137,14 @@ public struct CommandLaneBackend: LaneBackend {
     /// The command that ends a lane's session (`argv`, found on PATH), such
     /// as killing its tmux session. Nil means the lane cannot be stopped here.
     public var stopCommand: (@Sendable (AgentLane) -> [String])?
+    /// Instructions the app hands the agent on its command line (see
+    /// ``LaunchLine``), and extra folders it may read.
+    public var promptFile: URL?
+    public var extraDirectories: [String] = []
+
+    /// Whether the command's program is installed, so a picker can leave
+    /// out presets this Mac cannot run.
+    public var isInstalled: Bool { LaunchLine.isInstalled(command) }
 
     public init(id: String, displayName: String, command: String, passesDirectory: Bool = false,
                 returnsToShell: Bool = false, statusAgent: String? = nil, keepsRunningWhenDetached: Bool = false,
@@ -173,7 +181,7 @@ public struct CommandLaneBackend: LaneBackend {
         guard !trimmed.isEmpty else {
             return TerminalLaunch(executable: shell, arguments: ["-l"], directory: directory)
         }
-        var line = trimmed
+        var line = passesDirectory ? trimmed : LaunchLine.inject(trimmed, promptFile: promptFile, directories: extraDirectories)
         if passesDirectory { line += " " + ShellQuote.quote(directory) }
         if returnsToShell { line += "; exec " + ShellQuote.quote(shell) + " -l" }
         return TerminalLaunch(executable: shell, arguments: ["-l", "-i", "-c", line], directory: directory)
@@ -185,8 +193,12 @@ public struct CommandLaneBackend: LaneBackend {
     /// command. Wrappers that keep their own sessions are not rewritten.
     public func resumeLaunch(for lane: AgentLane, shell: String) -> TerminalLaunch? {
         guard !passesDirectory, let resumed = LaneResume.command(for: command.trimmingCharacters(in: .whitespaces)) else { return nil }
+        let fresh = LaunchLine.inject(command, promptFile: promptFile, directories: extraDirectories)
+        let again = LaunchLine.inject(resumed, promptFile: promptFile, directories: extraDirectories)
         var copy = self
-        copy.command = resumed + " || " + command
+        copy.promptFile = nil
+        copy.extraDirectories = []
+        copy.command = again + " || " + fresh
         return copy.launch(for: lane, shell: shell)
     }
 
