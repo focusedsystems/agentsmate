@@ -20,3 +20,24 @@ final class UsageTests: XCTestCase {
         XCTAssertNil(KeyValueUsageFileSource.parse("nothing", agent: "Claude"))
     }
 }
+
+final class LaneNoteTests: XCTestCase {
+    func testNotesUpdateAndClear() throws {
+        let dir = LaneStatusDirectory(url: FileManager.default.temporaryDirectory
+            .appendingPathComponent("notes-\(UUID().uuidString)/lanes", isDirectory: true))
+        defer { try? FileManager.default.removeItem(at: dir.url.deletingLastPathComponent()) }
+        try dir.updateNote(lane: "build", text: "Compiling \u{1b}[1m", progress: 0.4)
+        try dir.updateNote(lane: "build", log: "step 1")
+        for i in 0..<30 { try dir.updateNote(lane: "build", log: "line \(i)") }
+        let note = try XCTUnwrap(dir.readNote(lane: "build"))
+        XCTAssertEqual(note.text, "Compiling [1m")
+        XCTAssertEqual(note.progress, 0.4)
+        XCTAssertEqual(note.log.count, LaneNote.maxLog)
+        XCTAssertEqual(note.log.last, "line 29")
+        try dir.updateNote(lane: "build", progress: -1)
+        XCTAssertNil(dir.readNote(lane: "build")?.progress)
+        XCTAssertEqual(dir.readNotes().count, 1)
+        try dir.updateNote(lane: "build", clear: true)
+        XCTAssertNil(dir.readNote(lane: "build"))
+    }
+}

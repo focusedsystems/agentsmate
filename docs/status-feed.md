@@ -78,3 +78,24 @@ When a lane's command records which agent session it attached, set
 `sessionIDFile` on the backend to that file. Status is then matched by session
 id, which survives renames and tells apart lanes that share a folder; the
 folder match is used only while the file is missing.
+
+## Notes from scripts
+
+A script running in a lane can describe its own work on the lane's row: a
+line of text, how far along it is, and log lines shown in the row's tooltip.
+
+```sh
+agentsmate-status note --text "Running migrations" --progress 0.4
+```
+
+```sh
+agentsmate-status note --log "Applied 0007_add_index"
+```
+
+```sh
+agentsmate-status note --clear
+```
+
+The lane is found the way the hooks find it; `--lane <name>` names it
+outside one. Notes sit beside the records in a `notes` folder and are dropped
+after a day without an update.
