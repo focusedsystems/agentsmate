@@ -47,3 +47,21 @@ final class UsageResetTests: XCTestCase {
         XCTAssertTrue(AgentUsageMeter.resetLine(now.addingTimeInterval(86_400), now: now).hasSuffix("in 1 day"))
     }
 }
+
+@MainActor
+final class DuplicateVariantTests: XCTestCase {
+    func testDuplicateOfPersistentLaneGetsItsOwnSession() {
+        let wrapper = CommandLaneBackend.tmuxLane(id: "w", displayName: "W", command: "lane-wrapper", statusAgent: "claude",
+                                                   variantFlag: "-n", variantStatusName: { lane in lane.variant.map { "area-\($0)" } })
+        let store = AgentLaneStore(configuration: .init(termProgram: "T", sessionFileDirectory: nil),
+                                   backends: [wrapper], statusFeed: nil,
+                                   defaults: UserDefaults(suiteName: "agentsmate-var-\(UUID().uuidString)")!)
+        store.sync(lanes: [AgentLane(id: "a", title: "Area", directory: URL(fileURLWithPath: "/w/area"), backendID: "w")])
+        let copy = store.duplicate("a", focus: false)!
+        XCTAssertEqual(copy.lane.variant, "2")
+        XCTAssertEqual(wrapper.launch(for: copy.lane, shell: "/bin/zsh").arguments.last, "lane-wrapper -n '2' '/w/area'")
+        XCTAssertEqual(wrapper.statusMatch(for: copy.lane), .lane("area-2"))
+        XCTAssertEqual(store.duplicate("a", focus: false)?.lane.variant, "3")
+        store.detachAll()
+    }
+}

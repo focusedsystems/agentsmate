@@ -29,6 +29,10 @@ public struct AgentLane: Identifiable, Hashable, Sendable {
     /// Instructions for this lane's agent, in place of the backend's own
     /// ``CommandLaneBackend/promptFile``.
     public var promptFile: URL?
+    /// Tells a persistent-lane backend this is a second (third, …) lane in
+    /// the same folder, such as a duplicate, so it attaches a session of its
+    /// own rather than the folder's main one.
+    public var variant: String?
 
     public init(id: String, title: String, symbol: String = "terminal", tintHex: String? = nil,
                 directory: URL? = nil, backendID: String, isClosable: Bool = false,
@@ -147,6 +151,14 @@ public struct CommandLaneBackend: LaneBackend {
     public var promptFile: URL?
     public var extraDirectories: [String] = []
 
+    /// The wrapper's flag for a second lane in the same folder (`-n`), given
+    /// the lane's ``AgentLane/variant`` before the folder. Nil means the
+    /// command cannot run two lanes in one folder apart.
+    public var variantFlag: String?
+    /// The name a variant lane's session reports status under, when the
+    /// app knows how the wrapper names it.
+    public var variantStatusName: (@Sendable (AgentLane) -> String?)?
+
     /// Whether the command's program is installed, so a picker can leave
     /// out presets this Mac cannot run.
     public var isInstalled: Bool { LaunchLine.isInstalled(command) }
@@ -171,10 +183,15 @@ public struct CommandLaneBackend: LaneBackend {
     /// another device — attaches the same conversation.
     public static func tmuxLane(id: String, displayName: String, command: String, statusAgent: String?,
                                 sessionIDFile: (@Sendable (AgentLane) -> URL?)? = nil,
-                                stopCommand: (@Sendable (AgentLane) -> [String])? = nil) -> CommandLaneBackend {
-        CommandLaneBackend(id: id, displayName: displayName, command: command, passesDirectory: true,
-                           returnsToShell: false, statusAgent: statusAgent, keepsRunningWhenDetached: true,
-                           sessionIDFile: sessionIDFile, stopCommand: stopCommand)
+                                stopCommand: (@Sendable (AgentLane) -> [String])? = nil,
+                                variantFlag: String? = nil,
+                                variantStatusName: (@Sendable (AgentLane) -> String?)? = nil) -> CommandLaneBackend {
+        var backend = CommandLaneBackend(id: id, displayName: displayName, command: command, passesDirectory: true,
+                                         returnsToShell: false, statusAgent: statusAgent, keepsRunningWhenDetached: true,
+                                         sessionIDFile: sessionIDFile, stopCommand: stopCommand)
+        backend.variantFlag = variantFlag
+        backend.variantStatusName = variantStatusName
+        return backend
     }
 
     /// The person's login shell.
@@ -188,7 +205,10 @@ public struct CommandLaneBackend: LaneBackend {
         }
         var line = passesDirectory ? trimmed
             : LaunchLine.inject(trimmed, promptFile: lane.promptFile ?? promptFile, directories: extraDirectories)
-        if passesDirectory { line += " " + ShellQuote.quote(directory) }
+        if passesDirectory {
+            if let variant = lane.variant, let variantFlag { line += " " + variantFlag + " " + ShellQuote.quote(variant) }
+            line += " " + ShellQuote.quote(directory)
+        }
         if returnsToShell { line += "; exec " + ShellQuote.quote(shell) + " -l" }
         return TerminalLaunch(executable: shell, arguments: ["-l", "-i", "-c", line], directory: directory)
     }
@@ -216,6 +236,15 @@ public struct CommandLaneBackend: LaneBackend {
 
     public func statusMatch(for lane: AgentLane) -> LaneStatusMatch {
         guard let statusAgent else { return .none }
+        // A variant shares the folder with the main lane, so only its own
+        // session name tells them apart.
+        if lane.variant != nil, let name = variantStatusName?(lane) {
+            if let file = sessionIDFile?(lane), let raw = try? String(contentsOf: file, encoding: .utf8),
+               case let id = raw.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty {
+                return .firstOf([.session(id), .lane(name)])
+            }
+            return .lane(name)
+        }
         let byFolder = LaneStatusMatch.directory(lane.path, agent: statusAgent)
         guard let file = sessionIDFile?(lane),
               let raw = try? String(contentsOf: file, encoding: .utf8) else { return byFolder }
