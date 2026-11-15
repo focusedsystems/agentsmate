@@ -83,6 +83,19 @@ public struct AgentLaneCommands: Commands {
                     .disabled(store.fontOffset == 0)
             }
             Divider()
+            Picker("Sort", selection: Binding(get: { store.layout.sort }, set: { store.setSort($0) })) {
+                ForEach(LaneLayout.Sort.allCases, id: \.self) { Text($0.title).tag($0) }
+            }
+            Button("Collapse All Sections") { store.setAllCollapsed(true) }
+                .disabled(store.sectionNames.isEmpty && store.layout.pinned.isEmpty)
+            Button("Expand All Sections") { store.setAllCollapsed(false) }
+                .disabled(store.layout.collapsed.isEmpty)
+            if let id = store.selectedID {
+                Button(store.layout.pinned.contains(id) ? "Unpin \(noun)" : "Pin \(noun)") {
+                    store.setPinned(id, !store.layout.pinned.contains(id))
+                }
+            }
+            Divider()
             Button("Show \(noun) in Finder") {
                 if let path = store.selected?.currentDirectory {
                     NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
