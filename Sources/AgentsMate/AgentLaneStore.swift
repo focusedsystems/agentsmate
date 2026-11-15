@@ -68,6 +68,14 @@ public final class AgentLaneStore: ObservableObject {
     /// What ⌘T opens, when the app allows it.
     public var onNewLane: (() -> Void)?
 
+    /// Sections, pins, order and sort, as the person left them.
+    @Published public var layout = LaneLayout() {
+        didSet {
+            guard layout != oldValue, let data = try? JSONEncoder().encode(layout) else { return }
+            defaults.set(data, forKey: keys.layout)
+        }
+    }
+
     private var backends: [String: any LaneBackend] = [:]
     private let defaults: UserDefaults
     private var feedSubscription: AnyCancellable?
@@ -82,6 +90,10 @@ public final class AgentLaneStore: ObservableObject {
         for backend in backends { self.backends[backend.id] = backend }
         self.selectedID = defaults.string(forKey: keys.selectedLane)
         self.fontOffset = CGFloat(defaults.double(forKey: keys.fontOffset))
+        if let data = defaults.data(forKey: keys.layout),
+           let saved = try? JSONDecoder().decode(LaneLayout.self, from: data) {
+            self.layout = saved
+        }
         feedSubscription = statusFeed?.$records.sink { [weak self] records in
             MainActor.assumeIsolated { self?.apply(records) }
         }
@@ -166,10 +178,45 @@ public final class AgentLaneStore: ObservableObject {
         open(id, focus: focus)
     }
 
-    public func open(index: Int) {
-        guard lanes.indices.contains(index) else { return }
-        open(lanes[index].id)
+    /// The lanes as the list shows them, grouped.
+    public var groups: [LaneGroup] {
+        layout.groups(for: lanes) { [sessions] lane in sessions[lane.id]?.lastActivity }
     }
+
+    /// The lanes in the order the list shows them; ⌘1–⌘9 and cycling follow it.
+    public var displayOrder: [AgentLane] {
+        groups.flatMap(\.lanes)
+    }
+
+    public func open(index: Int) {
+        let ordered = displayOrder
+        guard ordered.indices.contains(index) else { return }
+        open(ordered[index].id)
+    }
+
+    // MARK: Layout
+
+    public func addSection(_ name: String) { layout.addSection(name) }
+    public func renameSection(_ old: String, to new: String) { layout.renameSection(old, to: new, lanes: lanes) }
+    public func removeSection(_ name: String) { layout.removeSection(name, lanes: lanes) }
+    public func moveSection(_ name: String, by offset: Int) { layout.moveSection(name, by: offset, lanes: lanes) }
+    public func move(_ id: AgentLane.ID, to section: String?) { layout.move(id, to: section) }
+    public func setPinned(_ id: AgentLane.ID, _ pinned: Bool) { layout.setPinned(id, pinned) }
+    public func moveLane(_ id: AgentLane.ID, before target: AgentLane.ID?) {
+        layout.moveLane(id, before: target, lanes: lanes)
+    }
+    public func setSort(_ sort: LaneLayout.Sort) { layout.sort = sort }
+
+    public func toggleCollapsed(_ section: String) {
+        if layout.collapsed.contains(section) { layout.collapsed.remove(section) } else { layout.collapsed.insert(section) }
+    }
+
+    public func setAllCollapsed(_ collapsed: Bool) {
+        layout.collapsed = collapsed ? Set(layout.orderedSections(for: lanes) + [LaneLayout.pinnedSection]) : []
+    }
+
+    /// Every section a lane can be moved to.
+    public var sectionNames: [String] { layout.orderedSections(for: lanes) }
 
     public func detach(_ id: AgentLane.ID) { sessions[id]?.detach() }
 
@@ -210,9 +257,10 @@ public final class AgentLaneStore: ObservableObject {
     }
 
     public func cycle(by offset: Int) {
-        guard !lanes.isEmpty else { return }
-        let index = lanes.firstIndex { $0.id == selectedID } ?? 0
-        open(index: (index + offset + lanes.count) % lanes.count)
+        let ordered = displayOrder
+        guard !ordered.isEmpty else { return }
+        let index = ordered.firstIndex { $0.id == selectedID } ?? 0
+        open(index: (index + offset + ordered.count) % ordered.count)
     }
 
     /// Show a second lane beside the selected one, or stop showing it. The
@@ -328,4 +376,5 @@ public struct AgentsModeKeys: Sendable {
     public var filterRunning: String { prefix + "filterRunning" }
     public var filterWaiting: String { prefix + "filterWaiting" }
     public var fontOffset: String { prefix + "fontOffset" }
+    public var layout: String { prefix + "layout" }
 }

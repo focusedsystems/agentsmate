@@ -43,6 +43,15 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
     @Published public private(set) var record: LaneStatus?
     /// Set when a record that wants a person arrives while the lane is out of sight.
     @Published public private(set) var needsAttention = false
+    /// When the terminal last printed, for the recency sorts. Not a status:
+    /// the status comes from the agent's own reports.
+    @Published public private(set) var lastOutputAt: Date?
+
+    /// The latest of the last output here and the last status report.
+    public var lastActivity: Date? {
+        [lastOutputAt, record?.updatedAt].compactMap { $0 }.max()
+    }
+
     /// The lane's session runs with no terminal attached anywhere.
     @Published public private(set) var isOrphan = false
     /// Bumped on every start, so SwiftUI re-hosts the new view.
@@ -138,6 +147,14 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
         view.getTerminal().changeHistorySize(configuration.scrollback)
         view.registerForDraggedTypes(AgentTerminalView.droppedTypes)
         view.onShortcut = { [weak self] shortcut in self?.onShortcut?(shortcut) ?? false }
+        view.onOutput = { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                // At most every few seconds: a busy agent prints many times a second.
+                let now = Date()
+                if self.lastOutputAt.map({ now.timeIntervalSince($0) > 3 }) ?? true { self.lastOutputAt = now }
+            }
+        }
         startProcess(configuration: configuration)
         poll?.invalidate()
         poll = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in

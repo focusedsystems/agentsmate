@@ -45,6 +45,9 @@ public struct AgentLaneSidebar<Accessory: View>: View {
     @AppStorage private var filterRunning: Bool
     @AppStorage private var filterNeedsYou: Bool
     @State private var searchText = ""
+    @State private var showingNewSection = false
+    @State private var renaming: String?
+    @State private var sectionName = ""
 
     public init(store: AgentLaneStore, labels: AgentsModeLabels = .init(), rowActions: [LaneAction] = [],
                 @ViewBuilder accessory: () -> Accessory) {
@@ -60,24 +63,33 @@ public struct AgentLaneSidebar<Accessory: View>: View {
 
     public var body: some View {
         List(selection: selectionBinding) {
-            Section {
-                ForEach(visibleLanes) { lane in
-                    if let session = store.session(for: lane) {
-                        LaneRow(session: session,
-                                index: store.lanes.firstIndex(of: lane) ?? 0,
-                                isSplit: lane.id == store.splitID)
-                            .tag(lane.id)
+            ForEach(visibleGroups) { group in
+                Section(isExpanded: expandedBinding(group)) {
+                    ForEach(group.lanes) { lane in
+                        if let session = store.session(for: lane) {
+                            LaneRow(session: session,
+                                    index: displayIndex[lane.id] ?? 99,
+                                    isSplit: lane.id == store.splitID)
+                                .tag(lane.id)
+                        }
                     }
-                }
-            } header: {
-                HStack {
-                    Text(labels.listTitle)
-                    Spacer()
-                    accessory
+                    .onMove { from, to in move(in: group, from: from, to: to) }
+                } header: {
+                    sectionHeader(group)
                 }
             }
         }
         .listStyle(.sidebar)
+        .alert("New Section", isPresented: $showingNewSection) {
+            TextField("Name", text: $sectionName)
+            Button("Add") { store.addSection(sectionName) }
+            Button("Cancel", role: .cancel) {}
+        }
+        .alert("Rename Section", isPresented: renamingBinding) {
+            TextField("Name", text: $sectionName)
+            Button("Rename") { if let old = renaming { store.renameSection(old, to: sectionName) } }
+            Button("Cancel", role: .cancel) {}
+        }
         .searchable(text: $searchText, placement: .sidebar, prompt: "Search \(labels.laneNoun)s")
         .safeAreaInset(edge: .top, spacing: 0) {
             filterBar
@@ -106,6 +118,74 @@ public struct AgentLaneSidebar<Accessory: View>: View {
 
     private var sessions: [AgentLaneSession] { store.lanes.compactMap { store.sessions[$0.id] } }
 
+    /// The groups with only the lanes the search and filters let through.
+    /// While searching every group is shown open, so a match is never hidden.
+    private var visibleGroups: [LaneGroup] {
+        let visible = Set(visibleLanes.map(\.id))
+        let filtering = isFiltering
+        return store.groups.compactMap { group in
+            var group = group
+            group.lanes = group.lanes.filter { visible.contains($0.id) }
+            if filtering, group.lanes.isEmpty { return nil }
+            return group
+        }
+    }
+
+    private var isFiltering: Bool {
+        !searchText.trimmingCharacters(in: .whitespaces).isEmpty || filterAttached || filterRunning || filterNeedsYou
+    }
+
+    private var displayIndex: [AgentLane.ID: Int] {
+        Dictionary(uniqueKeysWithValues: store.displayOrder.enumerated().map { ($1.id, $0) })
+    }
+
+    private func expandedBinding(_ group: LaneGroup) -> Binding<Bool> {
+        let key = group.isPinned ? LaneLayout.pinnedSection : group.section
+        return Binding(
+            get: { isFiltering || key.map { !store.layout.collapsed.contains($0) } ?? true },
+            set: { open in
+                guard let key, !isFiltering else { return }
+                if open == store.layout.collapsed.contains(key) { store.toggleCollapsed(key) }
+            })
+    }
+
+    private var renamingBinding: Binding<Bool> {
+        Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })
+    }
+
+    /// Dragging within a group sets the manual order (and switches the sort
+    /// to manual, since a recency sort would undo the move at once).
+    private func move(in group: LaneGroup, from source: IndexSet, to destination: Int) {
+        var ids = group.lanes.map(\.id)
+        ids.move(fromOffsets: source, toOffset: destination)
+        let moved = source.map { group.lanes[$0].id }
+        let after = destination < group.lanes.count ? group.lanes[destination].id : nil
+        for id in moved { store.moveLane(id, before: after.flatMap { moved.contains($0) ? nil : $0 }) }
+        if store.layout.sort != .manual { store.setSort(.manual) }
+    }
+
+    @ViewBuilder
+    private func sectionHeader(_ group: LaneGroup) -> some View {
+        HStack {
+            Text(group.isPinned ? LaneLayout.pinnedSection : group.section ?? labels.listTitle)
+            Spacer()
+            if group.id == store.groups.first?.id { accessory }
+        }
+        .contextMenu {
+            if let name = group.section, !group.isPinned {
+                Button("Rename Section…") { sectionName = name; renaming = name }
+                Button("Move Section Up") { store.moveSection(name, by: -1) }
+                Button("Move Section Down") { store.moveSection(name, by: 1) }
+                Button("Remove Section") { store.removeSection(name) }
+                Divider()
+            }
+            Button("New Section…") { sectionName = ""; showingNewSection = true }
+            Divider()
+            Button("Collapse All") { store.setAllCollapsed(true) }
+            Button("Expand All") { store.setAllCollapsed(false) }
+        }
+    }
+
     private var selectionBinding: Binding<AgentLane.ID?> {
         Binding(get: { store.selectedID },
                 set: { id in
@@ -124,6 +204,21 @@ public struct AgentLaneSidebar<Accessory: View>: View {
             .disabled(!session.isStarted)
         Button("Detach") { store.detach(lane.id) }
             .disabled(!session.isAttached)
+        Button(store.layout.pinned.contains(lane.id) ? "Unpin" : "Pin") {
+            store.setPinned(lane.id, !store.layout.pinned.contains(lane.id))
+        }
+        Menu("Move to Section") {
+            Button("None") { store.move(lane.id, to: nil) }
+                .disabled(store.layout.section(of: lane) == nil)
+            if !store.sectionNames.isEmpty { Divider() }
+            ForEach(store.sectionNames, id: \.self) { name in
+                Button(name) { store.move(lane.id, to: name) }
+                    .disabled(store.layout.section(of: lane) == name)
+            }
+            Divider()
+            Button("New Section…") { sectionName = ""; showingNewSection = true }
+        }
+        Divider()
         if session.backend.canStop {
             Button("Stop Lane") { store.stop(lane.id) }
                 .help("End the session; its conversation resumes when the lane is opened again")
@@ -186,6 +281,24 @@ public struct AgentLaneSidebar<Accessory: View>: View {
                              help: "Show only \(labels.laneNoun)s waiting for input or permission",
                              count: all.filter { Self.wantsYou($0.status) }.count, isOn: $filterNeedsYou)
             Spacer(minLength: 0)
+            Menu {
+                Picker("Sort", selection: Binding(get: { store.layout.sort }, set: { store.setSort($0) })) {
+                    ForEach(LaneLayout.Sort.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.inline)
+                .labelsHidden()
+                Divider()
+                Button("New Section…") { sectionName = ""; showingNewSection = true }
+                Button("Collapse All") { store.setAllCollapsed(true) }
+                Button("Expand All") { store.setAllCollapsed(false) }
+            } label: {
+                Label("Sort and Sections", systemImage: "arrow.up.arrow.down")
+                    .labelStyle(.iconOnly)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Sort the list, or add and fold sections")
         }
     }
 }

@@ -21,10 +21,14 @@ public struct AgentLane: Identifiable, Hashable, Sendable {
     public var isClosable: Bool
     /// Overrides how the backend finds this lane's status record.
     public var statusMatch: LaneStatusMatch?
+    /// The section the lane starts in, such as a repository's host. The
+    /// person can move it; their choice is kept in ``LaneLayout``.
+    public var section: String?
 
     public init(id: String, title: String, symbol: String = "terminal", tintHex: String? = nil,
                 directory: URL? = nil, backendID: String, isClosable: Bool = false,
-                statusMatch: LaneStatusMatch? = nil) {
+                statusMatch: LaneStatusMatch? = nil, section: String? = nil) {
+        self.section = section
         self.id = id
         self.title = title
         self.symbol = symbol
