@@ -257,6 +257,14 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         Button("Open \(session.title)") { store.open(lane.id) }
         Button("Reattach") { store.reattach(lane.id) }
             .disabled(!session.isStarted)
+        if !store.configuration.reopenChoices.isEmpty {
+            Menu("Reopen As") {
+                ForEach(store.configuration.reopenChoices, id: \.self) { choice in
+                    Button(choice.title) { store.reopen(lane.id, as: choice.backendID) }
+                        .disabled(choice.backendID == lane.backendID && session.isAttached)
+                }
+            }
+        }
         Button("Detach") { store.detach(lane.id) }
             .disabled(!session.isAttached)
         Button("Message…") { message = ""; messaging = lane.id }

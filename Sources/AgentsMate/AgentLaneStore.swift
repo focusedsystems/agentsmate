@@ -47,6 +47,9 @@ public final class AgentLaneStore: ObservableObject {
         /// Where to read the agents' usage limits; the lane sidebar shows a
         /// meter at its foot when there are any.
         public var usageSources: [any AgentUsageSource]
+        /// What Reopen As offers, in order; the first four get ⌃⌥1–⌃⌥4.
+        /// Each names a registered backend.
+        public var reopenChoices: [LaneReopenChoice]
 
         public init(termProgram: String, environment: [String: String] = [:],
                     baseFontSize: CGFloat = NSFont.systemFontSize,
@@ -57,7 +60,8 @@ public final class AgentLaneStore: ObservableObject {
                         .appendingPathComponent("agentsmate-sessions", isDirectory: true),
                     cycleSkipsUnstarted: Bool = false, workspaceFile: URL? = nil,
                     showsRowMetadata: Bool = false, notifies: Bool = false, summaryModel: String? = nil,
-                    usageSources: [any AgentUsageSource] = []) {
+                    usageSources: [any AgentUsageSource] = [], reopenChoices: [LaneReopenChoice] = []) {
+            self.reopenChoices = reopenChoices
             self.usageSources = usageSources
             self.summaryModel = summaryModel
             self.notifies = notifies
@@ -371,7 +375,15 @@ public final class AgentLaneStore: ObservableObject {
 
     /// Replace the app's fixed lanes. Lanes the person opened stay after
     /// them; a fixed lane that disappears is detached; terminals are kept.
-    public func sync(lanes fixed: [AgentLane]) {
+    /// A fixed lane the person reopened as another agent keeps that agent.
+    public func sync(lanes appLanes: [AgentLane]) {
+        let overrides = backendOverrides
+        let fixed = appLanes.map { lane -> AgentLane in
+            guard let backendID = overrides[lane.id], backends[backendID] != nil else { return lane }
+            var lane = lane
+            lane.backendID = backendID
+            return lane
+        }
         let opened = lanes.filter { $0.isClosable && !fixed.map(\.id).contains($0.id) }
         let newLanes = fixed + opened
         guard newLanes != lanes else { return }
@@ -687,6 +699,35 @@ public final class AgentLaneStore: ObservableObject {
 
     /// Run a lane the person opened on another backend, keeping its name,
     /// section and place. Its terminal restarts.
+    /// Fixed lanes the person reopened as another agent, by lane id.
+    private var backendOverrides: [AgentLane.ID: String] {
+        get { (defaults.dictionary(forKey: keys.backendOverrides) as? [String: String]) ?? [:] }
+        set { defaults.set(newValue, forKey: keys.backendOverrides) }
+    }
+
+    /// Reopen a lane running another agent: the row keeps its place, name and
+    /// folder, and attaches with `backendID` from now on. The session it was
+    /// attached to keeps running, so its conversation can be reopened later.
+    public func reopen(_ id: AgentLane.ID, as backendID: String) {
+        guard let index = lanes.firstIndex(where: { $0.id == id }), let backend = backends[backendID],
+              let session = sessions[id] else { return }
+        if lanes[index].backendID != backendID {
+            if !lanes[index].isClosable { backendOverrides[id] = backendID }
+            session.detach()
+            lanes[index].backendID = backendID
+            session.update(lane: lanes[index])
+            session.update(backend: backend)
+            apply(statusFeed?.records ?? [])
+        }
+        open(id)
+    }
+
+    /// Reopen the selected lane as the `index`th choice (zero-based).
+    public func reopenSelected(choice index: Int) {
+        guard let id = selectedID, configuration.reopenChoices.indices.contains(index) else { return }
+        reopen(id, as: configuration.reopenChoices[index].backendID)
+    }
+
     public func switchBackend(_ id: AgentLane.ID, to backendID: String) {
         guard let index = lanes.firstIndex(where: { $0.id == id }), lanes[index].isClosable,
               lanes[index].backendID != backendID, let backend = backends[backendID],
@@ -981,4 +1022,5 @@ public struct AgentsModeKeys: Sendable {
     public var dockHeight: String { prefix + "dockHeight" }
     public var dockMaximized: String { prefix + "dockMaximized" }
     public var dockListWidth: String { prefix + "dockListWidth" }
+    public var backendOverrides: String { prefix + "backendOverrides" }
 }

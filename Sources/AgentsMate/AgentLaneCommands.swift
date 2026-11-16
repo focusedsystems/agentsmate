@@ -89,6 +89,18 @@ public struct AgentLaneCommands: Commands {
             }
             .laneShortcut(store.shortcuts.binding(for: .reattach))
             .disabled(store.selectedID == nil)
+            if !store.configuration.reopenChoices.isEmpty {
+                Menu("Reopen As") {
+                    ForEach(Array(store.configuration.reopenChoices.enumerated()), id: \.offset) { index, choice in
+                        Button(choice.title) {
+                            reveal()
+                            store.reopenSelected(choice: index)
+                        }
+                        .laneShortcut(LaneShortcutAction.reopenAs(choice: index).flatMap { store.shortcuts.binding(for: $0) })
+                    }
+                }
+                .disabled(store.selectedID == nil)
+            }
             Button("Detach") {
                 if let id = store.selectedID { store.detach(id) }
             }

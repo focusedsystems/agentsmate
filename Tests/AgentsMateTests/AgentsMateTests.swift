@@ -127,3 +127,28 @@ final class TmuxPresenceTests: XCTestCase {
         XCTAssertEqual(list.find(for: lane, match: .lane("b"))?.attachedClients, 2)
     }
 }
+
+@MainActor
+final class ReopenAsTests: XCTestCase {
+    func testReopenSwitchesAFixedLaneAndRemembersIt() {
+        let defaults = UserDefaults(suiteName: "agentsmate-reopen-\(UUID().uuidString)")!
+        let claude = CommandLaneBackend(id: "claude", displayName: "Claude", command: "true")
+        let codex = CommandLaneBackend(id: "codex", displayName: "Codex", command: "true")
+        func makeStore() -> AgentLaneStore {
+            AgentLaneStore(configuration: .init(termProgram: "Test", reopenChoices: [
+                LaneReopenChoice("Claude", backendID: "claude"), LaneReopenChoice("Codex", backendID: "codex"),
+            ]), backends: [claude, codex], statusFeed: nil, defaults: defaults)
+        }
+        let store = makeStore()
+        store.sync(lanes: [AgentLane(id: "a", title: "A", backendID: "claude")])
+        store.reopen("a", as: "codex")
+        XCTAssertEqual(store.lanes.first?.backendID, "codex")
+        XCTAssertEqual(store.sessions["a"]?.backend.id, "codex")
+        store.detachAll()
+
+        let again = makeStore()
+        again.sync(lanes: [AgentLane(id: "a", title: "A", backendID: "claude")])
+        XCTAssertEqual(again.lanes.first?.backendID, "codex")
+        XCTAssertEqual(LaneShortcutBindings().binding(for: .reopenAs2)?.display, "⌃⌥2")
+    }
+}
