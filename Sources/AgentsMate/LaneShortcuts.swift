@@ -5,6 +5,22 @@ import AppKit
 public enum LaneShortcutAction: String, CaseIterable, Codable, Sendable, Identifiable {
     case next, previous, clear, newLane, closeLane, split, maximize, togglePanel
     case biggerFont, smallerFont, resetFont, jumpToUnread, goToLane, back, forward, reattach
+    case reopenAs1, reopenAs2, reopenAs3, reopenAs4
+
+    /// The Reopen As choice this action picks, zero-based.
+    public var reopenChoice: Int? {
+        switch self {
+        case .reopenAs1: 0
+        case .reopenAs2: 1
+        case .reopenAs3: 2
+        case .reopenAs4: 3
+        default: nil
+        }
+    }
+
+    public static func reopenAs(choice index: Int) -> LaneShortcutAction? {
+        allCases.first { $0.reopenChoice == index }
+    }
 
     public var id: String { rawValue }
 
@@ -26,6 +42,10 @@ public enum LaneShortcutAction: String, CaseIterable, Codable, Sendable, Identif
         case .back: "Back"
         case .forward: "Forward"
         case .reattach: "Reattach"
+        case .reopenAs1: "Reopen As, First Choice"
+        case .reopenAs2: "Reopen As, Second Choice"
+        case .reopenAs3: "Reopen As, Third Choice"
+        case .reopenAs4: "Reopen As, Fourth Choice"
         }
     }
 
@@ -159,6 +179,10 @@ public struct LaneShortcutBindings: Codable, Equatable, Sendable {
         .back: .init("[", command: true),
         .forward: .init("]", command: true),
         .reattach: .init("r", command: true, shift: true),
+        .reopenAs1: .init("1", option: true, control: true),
+        .reopenAs2: .init("2", option: true, control: true),
+        .reopenAs3: .init("3", option: true, control: true),
+        .reopenAs4: .init("4", option: true, control: true),
     ]
 
     public func binding(for action: LaneShortcutAction) -> LaneKeyBinding? {
