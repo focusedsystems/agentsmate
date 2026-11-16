@@ -25,9 +25,52 @@ open class AgentTerminalView: LocalProcessTerminalView {
 
     open override func dataReceived(slice: ArraySlice<UInt8>) {
         let requests = colorRequests.scan(slice)
+        // The caret stays out of sight while output streams and comes back
+        // once it settles: an agent redraws many times a second, hiding and
+        // moving the cursor each time, which made the caret flicker.
+        if caretShown {
+            super.hideCursor(source: getTerminal())
+            caretShown = false
+        }
         super.dataReceived(slice: slice)
         for request in requests { handleColorRequest(request) }
+        scheduleCaretReveal()
         onOutput?()
+    }
+
+    /// Whether the program wants the cursor shown (DECTCEM).
+    private var programWantsCursor = true
+    private var caretShown = true
+    private var caretReveal: DispatchWorkItem?
+    static let caretSettleDelay: TimeInterval = 0.15
+
+    private func scheduleCaretReveal() {
+        caretReveal?.cancel()
+        let reveal = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated { self?.revealCaret() }
+        }
+        caretReveal = reveal
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.caretSettleDelay, execute: reveal)
+    }
+
+    private func revealCaret() {
+        guard programWantsCursor, !caretShown else { return }
+        caretShown = true
+        super.showCursor(source: getTerminal())
+    }
+
+    open override func showCursor(source: Terminal) {
+        programWantsCursor = true
+        scheduleCaretReveal()
+    }
+
+    open override func hideCursor(source: Terminal) {
+        programWantsCursor = false
+        caretReveal?.cancel()
+        if caretShown {
+            caretShown = false
+            super.hideCursor(source: source)
+        }
     }
 
     /// The cursor is a steady block, whatever the program asks for. Agent
@@ -77,9 +120,10 @@ open class AgentTerminalView: LocalProcessTerminalView {
         }
         nativeBackgroundColor = background
         nativeForegroundColor = foreground
-        // A cursor in the text colour, with the character under it in the
-        // background colour, as Terminal draws it, not the accent blue.
-        caretColor = foreground.withAlphaComponent(0.85)
+        // A dark grey block (light grey in dark mode), with the character
+        // under it in the background colour, as Ghostty-based terminals draw
+        // it, not the accent blue and not full black.
+        caretColor = scheme == .dark ? NSColor(white: 0.72, alpha: 1) : NSColor(white: 0.38, alpha: 1)
         caretTextColor = background
         layer?.backgroundColor = background.cgColor
         installColors(scheme.ansiPalette.map {
