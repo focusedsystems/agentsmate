@@ -32,6 +32,10 @@ public struct LaneLayout: Codable, Equatable, Sendable {
     public var sort: Sort = .manual
     /// Names the person gave rows, by lane id.
     public var names: [String: String] = [:]
+    /// Icons the person chose, by lane id, in ``LaneIcon/stringValue`` form.
+    public var icons: [String: String] = [:]
+    /// Colours the person chose, by lane id, as `#RRGGBB`.
+    public var tints: [String: String] = [:]
 
     public init() {}
 
@@ -44,6 +48,15 @@ public struct LaneLayout: Codable, Equatable, Sendable {
         order = try c.decodeIfPresent([String].self, forKey: .order) ?? []
         sort = try c.decodeIfPresent(Sort.self, forKey: .sort) ?? .manual
         names = try c.decodeIfPresent([String: String].self, forKey: .names) ?? [:]
+        icons = try c.decodeIfPresent([String: String].self, forKey: .icons) ?? [:]
+        tints = try c.decodeIfPresent([String: String].self, forKey: .tints) ?? [:]
+    }
+
+    /// Record the person's icon and colour for a lane; nil removes each.
+    /// The colour is kept as `#RRGGBB`, and a value that is not one is dropped.
+    public mutating func setIcon(_ icon: LaneIcon?, tint: String?, for laneID: String) {
+        if let icon { icons[laneID] = icon.stringValue } else { icons.removeValue(forKey: laneID) }
+        if let tint = LaneIconColors.normalised(tint) { tints[laneID] = tint } else { tints.removeValue(forKey: laneID) }
     }
 
     /// The name of the group pinned lanes are shown in.

@@ -61,6 +61,15 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
     /// Branch, pull request and ports, when the store reads them.
     @Published public internal(set) var rowMetadata = LaneRowMetadata()
 
+    /// The icon and colour the person chose, which win over the lane's own.
+    @Published public internal(set) var customIcon: LaneIcon?
+    @Published public internal(set) var customTintHex: String?
+
+    /// The icon to draw: the person's choice, else the app's.
+    public var icon: LaneIcon { customIcon ?? lane.resolvedIcon }
+    /// The colour to draw as `#RRGGBB`; nil is the accent colour.
+    public var tintHex: String? { customTintHex ?? lane.tintHex }
+
     /// The shell's process id, while attached.
     public var shellPID: pid_t? {
         guard isAttached, let pid = view.process?.shellPid, pid > 0 else { return nil }

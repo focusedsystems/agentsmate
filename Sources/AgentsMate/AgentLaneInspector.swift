@@ -53,7 +53,10 @@ public struct AgentLaneInspector<Empty: View>: View {
                 }
             } label: {
                 if let session = store.selected {
-                    Label(session.title, systemImage: session.lane.symbol)
+                    HStack(spacing: 6) {
+                        LaneIconView(icon: session.icon, tintHex: session.tintHex, size: 14)
+                        Text(session.title)
+                    }
                 } else {
                     Text("Choose \(labels.laneNoun.capitalized)")
                 }
