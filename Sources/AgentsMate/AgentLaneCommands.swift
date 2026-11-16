@@ -18,7 +18,7 @@ public struct AgentLaneCommands: Commands {
     let reveal: () -> Void
     /// The id of the app's inbox window scene, if it has one.
     let inboxWindowID: String?
-    /// Back and Forward through lanes visited, on ⌥⌘← and ⌥⌘→.
+    /// Back and Forward through lanes visited, on ⌘[ and ⌘].
     let historyCommands: Bool
 
     public init(store: AgentLaneStore, menuTitle: String = "Agent", labels: AgentsModeLabels = .init(),

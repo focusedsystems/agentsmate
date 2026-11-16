@@ -155,8 +155,9 @@ public struct LaneShortcutBindings: Codable, Equatable, Sendable {
         .resetFont: .init("0", command: true),
         .jumpToUnread: .init("u", command: true, shift: true),
         .goToLane: .init("o", command: true, shift: true),
-        .back: .init("left", command: true, option: true),
-        .forward: .init("right", command: true, option: true),
+        // ⌘[ and ⌘], as in Finder, Safari and Xcode.
+        .back: .init("[", command: true),
+        .forward: .init("]", command: true),
         .reattach: .init("r", command: true, shift: true),
     ]
 
