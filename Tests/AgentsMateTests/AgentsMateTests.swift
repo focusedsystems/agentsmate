@@ -152,3 +152,19 @@ final class ReopenAsTests: XCTestCase {
         XCTAssertEqual(LaneShortcutBindings().binding(for: .reopenAs2)?.display, "⌃⌥2")
     }
 }
+
+final class ClipboardRequestTests: XCTestCase {
+    func testFindsTmuxStyleWritesAcrossReads() {
+        var scanner = ClipboardRequests()
+        let payload = Data("copied text".utf8).base64EncodedString()
+        let sequence = Array("before\u{1b}]52;;\(payload)\u{07}after".utf8)
+        XCTAssertEqual(scanner.scan(sequence[0..<12]), [])
+        XCTAssertEqual(scanner.scan(sequence[12...]), ["copied text"])
+        // ST terminator, and "p" selection
+        XCTAssertEqual(scanner.scan(Array("\u{1b}]52;p;\(payload)\u{1b}\\".utf8)), ["copied text"])
+        // "c" is SwiftTerm's own, and "?" is a query
+        XCTAssertEqual(scanner.scan(Array("\u{1b}]52;c;\(payload)\u{07}".utf8)), [])
+        XCTAssertEqual(scanner.scan(Array("\u{1b}]52;;?\u{07}".utf8)), [])
+        XCTAssertEqual(scanner.scan(Array("\u{1b}]11;?\u{07}plain".utf8)), [])
+    }
+}

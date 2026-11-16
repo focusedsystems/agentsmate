@@ -18,6 +18,8 @@ open class AgentTerminalView: LocalProcessTerminalView {
     public var pasteSanitizer: (String) -> String = ShellQuote.pasteSafe
 
     private var colorRequests = TerminalColorSchemeRequests()
+    private var clipboardRequests = ClipboardRequests()
+    private var flagsMonitor: Any?
     private var reportsColorScheme = false
     public private(set) var colorScheme: TerminalColorScheme?
     private var appAppearanceObservation: NSKeyValueObservation?
@@ -25,6 +27,10 @@ open class AgentTerminalView: LocalProcessTerminalView {
 
     open override func dataReceived(slice: ArraySlice<UInt8>) {
         let requests = colorRequests.scan(slice)
+        for text in clipboardRequests.scan(slice) {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+        }
         // The caret stays out of sight while output streams and comes back
         // once it settles: an agent redraws many times a second, hiding and
         // moving the cursor each time, which made the caret flicker.
@@ -150,6 +156,7 @@ open class AgentTerminalView: LocalProcessTerminalView {
     /// and the wheel still reach it, and ⌘ keeps link previews.
     public func installInputHandling() {
         removeInputHandling()
+        installSelectionOverride()
         // Local monitors run on the main thread, inside the app's event loop.
         inputMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .scrollWheel, .mouseMoved]) { [weak self] event in
             guard let self else { return event }
@@ -169,7 +176,24 @@ open class AgentTerminalView: LocalProcessTerminalView {
         }
     }
 
+    /// While Shift is held, a drag selects text in the terminal itself even
+    /// when the program (tmux, an agent's TUI) has taken the mouse, as in
+    /// other Mac terminals; ⌘C then copies it.
+    func installSelectionOverride() {
+        if let flagsMonitor { NSEvent.removeMonitor(flagsMonitor) }
+        flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            let shift = event.modifierFlags.contains(.shift)
+            MainActor.assumeIsolated {
+                guard let self, event.window === self.window else { return }
+                self.allowMouseReporting = !shift
+            }
+            return event
+        }
+    }
+
     public func removeInputHandling() {
+        if let flagsMonitor { NSEvent.removeMonitor(flagsMonitor) }
+        flagsMonitor = nil
         if let inputMonitor { NSEvent.removeMonitor(inputMonitor) }
         inputMonitor = nil
     }
