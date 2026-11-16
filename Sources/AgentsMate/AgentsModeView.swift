@@ -54,6 +54,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
     @State private var savingWorkspace = false
     @State private var workspaceName = ""
     @State private var messaging: AgentLane.ID?
+    @State private var choosingIcon: AgentLane.ID?
     @State private var message = ""
 
     public init(store: AgentLaneStore, labels: AgentsModeLabels = .init(), rowActions: [LaneAction] = [],
@@ -92,6 +93,15 @@ public struct AgentLaneSidebar<Accessory: View>: View {
                 VStack(spacing: 0) {
                     Divider()
                     AgentUsageMeter(model: usage).padding(.horizontal, 12).padding(.vertical, 8)
+                }
+            }
+        }
+        .sheet(item: Binding(get: { choosingIcon.map(IconRequest.init) }, set: { choosingIcon = $0?.id })) { request in
+            if let session = store.sessions[request.id] {
+                LaneIconPicker(icon: session.icon, tintHex: session.tintHex, laneTitle: session.title,
+                               canReset: store.layout.icons[request.id] != nil || store.layout.tints[request.id] != nil,
+                               onReset: { store.setIcon(nil, tint: nil, for: request.id) }) { icon, tint in
+                    store.setIcon(icon, tint: tint, for: request.id)
                 }
             }
         }
@@ -249,6 +259,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
             .disabled(!session.isAttached)
         Button("Message…") { message = ""; messaging = lane.id }
             .disabled(!session.isAttached)
+        Button("Change Icon…") { choosingIcon = lane.id }
         Button("Rename…") { laneName = session.customTitle ?? session.title; renamingLane = lane.id }
         if session.customTitle != nil {
             Button("Use Automatic Name") { store.rename(lane.id, to: nil) }
@@ -514,6 +525,8 @@ struct LaneTerminalPane: View {
     }
 }
 
+private struct IconRequest: Identifiable { let id: AgentLane.ID }
+
 struct LaneRow: View {
     @ObservedObject var session: AgentLaneSession
     let index: Int
@@ -521,9 +534,7 @@ struct LaneRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: session.lane.symbol)
-                .symbolRenderingMode(.hierarchical)
-                .foregroundStyle(session.lane.tintHex.flatMap(Color.init(laneHex:)) ?? Color.accentColor)
+            LaneIconView(icon: session.icon, tintHex: session.tintHex, size: 16)
                 .frame(width: 20)
                 .overlay(alignment: .bottomTrailing) { statusDot.offset(x: 3, y: 3) }
             VStack(alignment: .leading, spacing: 1) {

@@ -582,6 +582,25 @@ public final class AgentLaneStore: ObservableObject {
         if let value { layout.names[id] = value } else { layout.names.removeValue(forKey: id) }
     }
 
+    /// Told when the person picks an icon or colour for a lane, with the new
+    /// choice (nil for each means back to the app's own), so an app can keep
+    /// it in its own model too.
+    public var onIconChange: ((AgentLane, LaneIcon?, String?) -> Void)?
+
+    /// Give a lane an icon and colour of the person's choosing; nil for both
+    /// returns it to the app's own. Kept in ``layout``, so it survives
+    /// relaunch and an app that syncs its lanes again.
+    public func setIcon(_ icon: LaneIcon?, tint: String?, for id: AgentLane.ID) {
+        layout.setIcon(icon, tint: tint, for: id)
+        if let session = sessions[id] { applyIconOverride(to: session) }
+        if let lane = lanes.first(where: { $0.id == id }) { onIconChange?(lane, icon, layout.tints[id]) }
+    }
+
+    private func applyIconOverride(to session: AgentLaneSession) {
+        session.customIcon = layout.icons[session.id].flatMap(LaneIcon.init)
+        session.customTintHex = layout.tints[session.id]
+    }
+
     /// Backends whose command is installed on this Mac (others always count).
     public var installedBackends: [any LaneBackend] {
         availableBackends.filter { $0.id != Self.customBackendID && (($0 as? CommandLaneBackend)?.isInstalled ?? true) }
@@ -683,6 +702,7 @@ public final class AgentLaneStore: ObservableObject {
     private func makeSession(for lane: AgentLane) {
         if let existing = sessions[lane.id] {
             existing.update(lane: lane)
+            applyIconOverride(to: existing)
             return
         }
         guard let backend = backends[lane.backendID] ?? backends["shell"] ?? Optional(CommandLaneBackend.shell) else { return }
@@ -696,6 +716,7 @@ public final class AgentLaneStore: ObservableObject {
             guard let self, self.layout.assignments[id] == nil, self.layout.section(of: lane) != section else { return }
             self.layout.move(id, to: section)
         }
+        applyIconOverride(to: session)
         sessions[lane.id] = session
     }
 

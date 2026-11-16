@@ -28,7 +28,7 @@ struct AgentLanePalette: View {
                 ForEach(results) { lane in
                     if let session = store.sessions[lane.id] {
                         HStack {
-                            Image(systemName: lane.symbol)
+                            LaneIconView(icon: session.icon, tintHex: session.tintHex, size: 16)
                             VStack(alignment: .leading) {
                                 Text(session.title)
                                 Text(session.shortDirectory).font(.caption).foregroundStyle(.secondary)

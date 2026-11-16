@@ -29,7 +29,8 @@ let package = Package(
                 "AgentsMateStatus",
                 "AgentsMateUpdates",
                 .product(name: "SwiftTerm", package: "SwiftTerm"),
-            ]
+            ],
+            resources: [.copy("Resources/LaneIcons")]
         ),
         .target(name: "AgentsMateChat", dependencies: ["AgentsMateStatus"]),
         .executableTarget(name: "agentsmate-status", dependencies: ["AgentsMateStatus"]),

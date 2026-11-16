@@ -11,6 +11,8 @@ public struct AgentLane: Identifiable, Hashable, Sendable {
     public var title: String
     /// An SF Symbol name.
     public var symbol: String
+    /// The lane's icon, SF Symbol or bundled. When set it wins over ``symbol``.
+    public var icon: LaneIcon?
     /// `#RRGGBB`, or nil for the accent colour.
     public var tintHex: String?
     /// The folder the lane opens in. Nil is the home folder.
@@ -36,7 +38,8 @@ public struct AgentLane: Identifiable, Hashable, Sendable {
 
     public init(id: String, title: String, symbol: String = "terminal", tintHex: String? = nil,
                 directory: URL? = nil, backendID: String, isClosable: Bool = false,
-                statusMatch: LaneStatusMatch? = nil, section: String? = nil) {
+                statusMatch: LaneStatusMatch? = nil, section: String? = nil, icon: LaneIcon? = nil) {
+        self.icon = icon
         self.section = section
         self.id = id
         self.title = title

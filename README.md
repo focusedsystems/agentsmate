@@ -68,6 +68,23 @@ The first check runs 20 seconds after `start()`, then every six hours. While
 `keepCurrent` is on, give each agent process `launchEnvironment(for:)` and
 `launchArguments(for:)` so it does not also update itself.
 
+## Lane icons
+
+A lane's icon is an SF Symbol or one of 258 bundled SVG icons. Set
+`AgentLane.icon` (`.symbol("hammer")` or `.bundled("rocket")`); `AgentLane.symbol`
+still works and is used when `icon` is nil. People change it from a lane's
+contextual menu, "Change Icon…", which opens `LaneIconPicker`: search, a switch
+between SF Symbols and the bundled set, a keyboard-navigable grid, and a colour
+row with a custom colour. The choice is kept in `LaneLayout` and wins over the
+app's. To keep it in the app's own model too, set
+`store.onIconChange = { lane, icon, tintHex in … }`; `icon.stringValue` is
+`sf:hammer` or `svg:rocket`, and `LaneIcon(_:)` reads it back. Draw an icon
+anywhere with `LaneIconView(icon:tintHex:size:)`.
+
 ## Licence
 
 MIT.
+
+The bundled icons are from [Lucide](https://lucide.dev) (`lucide-static`),
+licensed ISC, copyright Lucide Icons and Contributors. The licence text is in
+`Sources/AgentsMate/Resources/LaneIcons/LICENSE-lucide.txt`.

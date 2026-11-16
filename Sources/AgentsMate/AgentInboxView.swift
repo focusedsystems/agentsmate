@@ -56,8 +56,7 @@ private struct InboxRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Image(systemName: session.lane.symbol)
-                    .foregroundStyle(session.lane.tintHex.flatMap(Color.init(laneHex:)) ?? Color.accentColor)
+                LaneIconView(icon: session.icon, tintHex: session.tintHex, size: 16)
                 Text(session.title).font(.headline)
                 Text(session.status.title).font(.caption).foregroundStyle(.secondary)
                 Spacer()
