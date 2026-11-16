@@ -30,8 +30,23 @@ open class AgentTerminalView: LocalProcessTerminalView {
         onOutput?()
     }
 
+    /// The cursor is a steady block, whatever the program asks for. Agent
+    /// TUIs request a blinking cursor and repaint often, which made the
+    /// caret flicker; Terminal and other terminals draw it solid.
+    open override func cursorStyleChanged(source: Terminal, newStyle: CursorStyle) {
+        let steady: CursorStyle
+        switch newStyle {
+        case .blinkBlock: steady = .steadyBlock
+        case .blinkBar: steady = .steadyBar
+        case .blinkUnderline: steady = .steadyUnderline
+        default: steady = newStyle
+        }
+        super.cursorStyleChanged(source: source, newStyle: steady)
+    }
+
     /// Draw in the app's appearance and follow it from now on.
     public func followAppearance() {
+        cursorStyleChanged(source: getTerminal(), newStyle: .steadyBlock)
         getTerminal().ansi256PaletteStrategy = .xterm
         applyColorScheme()
         appAppearanceObservation = NSApp.observe(\.effectiveAppearance) { [weak self] _, _ in
@@ -62,6 +77,10 @@ open class AgentTerminalView: LocalProcessTerminalView {
         }
         nativeBackgroundColor = background
         nativeForegroundColor = foreground
+        // A cursor in the text colour, with the character under it in the
+        // background colour, as Terminal draws it, not the accent blue.
+        caretColor = foreground.withAlphaComponent(0.85)
+        caretTextColor = background
         layer?.backgroundColor = background.cgColor
         installColors(scheme.ansiPalette.map {
             SwiftTerm.Color(red: UInt16($0.red) * 257, green: UInt16($0.green) * 257, blue: UInt16($0.blue) * 257)
