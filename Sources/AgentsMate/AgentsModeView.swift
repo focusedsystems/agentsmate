@@ -242,10 +242,12 @@ public struct AgentLaneSidebar<Accessory: View>: View {
     private var selectionBinding: Binding<AgentLane.ID?> {
         Binding(get: { store.selectedID },
                 set: { id in
-                    // Moving through the list attaches each lane but leaves
-                    // the keyboard in the list; Return or a double-click
-                    // hands it to the terminal.
-                    if let id { store.open(id, focus: false) }
+                    // A click hands the keyboard to the lane's terminal so
+                    // typing goes straight to the agent. Moving through the
+                    // list with the arrow keys attaches each lane but leaves
+                    // the keyboard in the list; Return then hands it over.
+                    let fromKeyboard = NSApp.currentEvent?.type == .keyDown
+                    if let id { store.open(id, focus: !fromKeyboard) }
                 })
     }
 
