@@ -39,7 +39,7 @@ public struct AgentLaneDock<Accessory: View, Empty: View>: View {
             VStack(spacing: 0) {
                 if !store.dockMaximized { divider }
                 HStack(spacing: 0) {
-                    AgentLaneSidebar(store: store, labels: labels) { accessory }
+                    AgentLaneSidebar(store: store, labels: labels, inDock: true) { accessory }
                         .frame(width: CGFloat(listWidth))
                     listDivider
                     AgentLaneDetail(store: store) { empty }
