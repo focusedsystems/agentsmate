@@ -38,17 +38,43 @@ public protocol AgentUsageSource: Sendable {
     func read() -> AgentUsage?
 }
 
+/// Whether someone is signed in to an agent on this Mac, from the files the
+/// agent keeps, so a meter can leave out an agent nobody set up.
+public enum AgentSignIn {
+    /// Codex keeps its sign-in in `auth.json` under `CODEX_HOME`.
+    public static func codex(environment: [String: String] = ProcessInfo.processInfo.environment) -> Bool {
+        let home = environment["CODEX_HOME"].map { URL(fileURLWithPath: $0) }
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex")
+        return FileManager.default.fileExists(atPath: home.appendingPathComponent("auth.json").path)
+    }
+
+    /// Claude Code records the signed-in account in `.claude.json`
+    /// (`oauthAccount`); an API key in the environment counts too.
+    public static func claude(environment: [String: String] = ProcessInfo.processInfo.environment) -> Bool {
+        if environment["ANTHROPIC_API_KEY"]?.isEmpty == false { return true }
+        let config = environment["CLAUDE_CONFIG_DIR"].map { URL(fileURLWithPath: $0).appendingPathComponent(".claude.json") }
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude.json")
+        guard let data = try? Data(contentsOf: config),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+        return object["oauthAccount"] != nil
+    }
+}
+
 /// Codex's limits, from the `rate_limits` it records in its newest session
 /// file under `~/.codex/sessions`.
 public struct CodexSessionUsageSource: AgentUsageSource {
     public let root: URL
+    let signedIn: @Sendable () -> Bool
 
-    public init(root: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex/sessions")) {
+    /// Reads nothing while Codex is signed out, so the meter leaves it out.
+    public init(root: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex/sessions"),
+                signedIn: @escaping @Sendable () -> Bool = { AgentSignIn.codex() }) {
         self.root = root
+        self.signedIn = signedIn
     }
 
     public func read() -> AgentUsage? {
-        guard let file = newestSession(), let text = tail(of: file) else { return nil }
+        guard signedIn(), let file = newestSession(), let text = tail(of: file) else { return nil }
         for line in text.split(separator: "\n").reversed() where line.contains("\"rate_limits\"") {
             if let usage = Self.parse(line: String(line)) { return usage }
         }
@@ -116,14 +142,18 @@ public struct CodexSessionUsageSource: AgentUsageSource {
 public struct KeyValueUsageFileSource: AgentUsageSource {
     public let url: URL
     public let agent: String
+    let signedIn: @Sendable () -> Bool
 
-    public init(url: URL, agent: String) {
+    /// `signedIn` says whether the agent is set up; while it is false the
+    /// source reads nothing, so a stale file does not show a signed-out agent.
+    public init(url: URL, agent: String, signedIn: @escaping @Sendable () -> Bool = { true }) {
         self.url = url
         self.agent = agent
+        self.signedIn = signedIn
     }
 
     public func read() -> AgentUsage? {
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        guard signedIn(), let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
         return Self.parse(text, agent: agent)
     }
 

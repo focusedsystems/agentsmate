@@ -40,6 +40,10 @@ public struct AgentLaneSidebar<Accessory: View>: View {
     let labels: AgentsModeLabels
     let rowActions: [LaneAction]
     let accessory: Accessory
+    /// Set by ``AgentLaneDock``: outside a split view's sidebar the bars
+    /// above and below the list need their own background, and the panel
+    /// needs a way to fill the window and come back.
+    var inDock = false
 
     @AppStorage private var filterAttached: Bool
     @AppStorage private var filterRunning: Bool
@@ -69,21 +73,29 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         _filterNeedsYou = AppStorage(wrappedValue: false, keys.filterWaiting)
     }
 
+    init(store: AgentLaneStore, labels: AgentsModeLabels, inDock: Bool, @ViewBuilder accessory: () -> Accessory) {
+        self.init(store: store, labels: labels, accessory: accessory)
+        self.inDock = inDock
+    }
+
     public var body: some View {
         List(selection: selectionBinding) {
             ForEach(visibleGroups) { group in
-                Section(isExpanded: expandedBinding(group)) {
-                    ForEach(group.lanes) { lane in
-                        if let session = store.session(for: lane) {
-                            LaneRow(session: session,
-                                    index: displayIndex[lane.id] ?? 99,
-                                    isSplit: lane.id == store.splitID)
-                                .tag(lane.id)
-                        }
+                // The section carrying the header buttons does not fold:
+                // its disclosure chevron would flicker in beside them on
+                // hover. Sort and Sections › Collapse All still folds it.
+                if group.id == store.groups.first?.id {
+                    Section {
+                        rows(group)
+                    } header: {
+                        sectionHeader(group)
                     }
-                    .onMove { from, to in move(in: group, from: from, to: to) }
-                } header: {
-                    sectionHeader(group)
+                } else {
+                    Section(isExpanded: expandedBinding(group)) {
+                        rows(group)
+                    } header: {
+                        sectionHeader(group)
+                    }
                 }
             }
         }
@@ -94,6 +106,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
                     Divider()
                     AgentUsageMeter(model: usage).padding(.horizontal, 12).padding(.vertical, 8)
                 }
+                .background(inDock ? AnyShapeStyle(.bar) : AnyShapeStyle(.clear))
             }
         }
         .sheet(item: Binding(get: { choosingIcon.map(IconRequest.init) }, set: { choosingIcon = $0?.id })) { request in
@@ -148,6 +161,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
             filterBar
                 .padding(.horizontal, 10)
                 .padding(.vertical, 4)
+                .background(inDock ? AnyShapeStyle(.bar) : AnyShapeStyle(.clear))
         }
         .contextMenu(forSelectionType: AgentLane.ID.self) { ids in
             if let id = ids.first, let session = store.sessions[id] {
@@ -170,6 +184,19 @@ public struct AgentLaneSidebar<Accessory: View>: View {
     }
 
     private var sessions: [AgentLaneSession] { store.lanes.compactMap { store.sessions[$0.id] } }
+
+    @ViewBuilder
+    private func rows(_ group: LaneGroup) -> some View {
+        ForEach(group.lanes) { lane in
+            if let session = store.session(for: lane) {
+                LaneRow(session: session,
+                        index: displayIndex[lane.id] ?? 99,
+                        isSplit: lane.id == store.splitID)
+                    .tag(lane.id)
+            }
+        }
+        .onMove { from, to in move(in: group, from: from, to: to) }
+    }
 
     /// The groups with only the lanes the search and filters let through.
     /// While searching every group is shown open, so a match is never hidden.
@@ -411,6 +438,18 @@ public struct AgentLaneSidebar<Accessory: View>: View {
             .menuIndicator(.hidden)
             .fixedSize()
             .help("Sort the list, or add and fold sections")
+            if inDock {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { store.dockMaximized.toggle() }
+                } label: {
+                    Label(store.dockMaximized ? "Restore Panel" : "Fill Window",
+                          systemImage: store.dockMaximized ? "arrow.down.right.and.arrow.up.left"
+                                                           : "arrow.up.left.and.arrow.down.right")
+                        .labelStyle(.iconOnly)
+                }
+                .buttonStyle(.borderless)
+                .help(store.dockMaximized ? "Back to the split under the content (⇧⌘↩)" : "Fill the window (⇧⌘↩)")
+            }
         }
     }
 }
