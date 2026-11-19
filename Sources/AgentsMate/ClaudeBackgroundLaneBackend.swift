@@ -64,14 +64,22 @@ public struct ClaudeAgentsStatusSource: LaneStatusSource {
     /// lane, so a lane shows its state before any hook has fired.
     public let includeInteractive: Bool
 
-    public init?(binary: URL? = ClaudeBinary.locate(), includeInteractive: Bool = false) {
+    /// The list shared by every app on the Mac; see ``ClaudeAgentsList/shared(cache:maxAge:includeInteractive:now:fetch:)``.
+    public let cache: URL
+
+    public init?(binary: URL? = ClaudeBinary.locate(), includeInteractive: Bool = false,
+                 cache: URL = LaneStatusDirectory.default().url
+                    .deletingLastPathComponent().appendingPathComponent("claude-agents.json")) {
         guard let binary else { return nil }
         self.binary = binary
         self.includeInteractive = includeInteractive
+        self.cache = cache
     }
 
     public func records() async -> [LaneStatus] {
-        let binary = binary, interactive = includeInteractive
-        return await Task.detached { ClaudeAgentsList.fetch(binary: binary, includeInteractive: interactive) }.value
+        let binary = binary, interactive = includeInteractive, cache = cache
+        return await Task.detached {
+            ClaudeAgentsList.shared(binary: binary, cache: cache, includeInteractive: interactive)
+        }.value
     }
 }

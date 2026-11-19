@@ -43,18 +43,69 @@ public enum ClaudeAgentsList {
     /// Run `claude agents --json` and parse it. Empty when Claude is missing
     /// or the call fails or takes longer than `timeout`.
     public static func fetch(binary: URL, includeInteractive: Bool = false, timeout: TimeInterval = 10) -> [LaneStatus] {
+        guard let data = fetchData(binary: binary, timeout: timeout) else { return [] }
+        return parse(data, includeInteractive: includeInteractive)
+    }
+
+    /// The raw output of `claude agents --json`, or nil when the call fails.
+    public static func fetchData(binary: URL, timeout: TimeInterval = 10) -> Data? {
         let process = Process()
         process.executableURL = binary
         process.arguments = ["agents", "--json"]
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
-        guard (try? process.run()) != nil else { return [] }
+        guard (try? process.run()) != nil else { return nil }
         let deadline = DispatchTime.now() + timeout
         DispatchQueue.global().asyncAfter(deadline: deadline) { if process.isRunning { process.terminate() } }
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
-        guard process.terminationStatus == 0 else { return [] }
-        return parse(data, includeInteractive: includeInteractive)
+        guard process.terminationStatus == 0 else { return nil }
+        return data
+    }
+
+    /// Records from a list shared by every app on the Mac.
+    ///
+    /// Each `claude agents --json` run starts a few dozen processes, so apps
+    /// that each polled it would multiply that cost. The output is kept in
+    /// one file, `claude-agents.json` beside the lane status folder. A reader
+    /// uses that file while it is younger than `maxAge`; otherwise one app,
+    /// holding `claude-agents.lock`, fetches and replaces it while the others
+    /// keep reading the old copy. Records are stamped with the file's time,
+    /// so a newer hook record still wins.
+    public static func shared(cache: URL, maxAge: TimeInterval = 25, includeInteractive: Bool = false,
+                              now: Date = Date(), fetch: () -> Data?) -> [LaneStatus] {
+        let fm = FileManager.default
+        func cached() -> (Data, Date)? {
+            guard let date = (try? fm.attributesOfItem(atPath: cache.path))?[.modificationDate] as? Date,
+                  let data = try? Data(contentsOf: cache) else { return nil }
+            return (data, date)
+        }
+        func records(_ hit: (Data, Date)) -> [LaneStatus] {
+            parse(hit.0, includeInteractive: includeInteractive, now: hit.1)
+        }
+        if let hit = cached(), now.timeIntervalSince(hit.1) < maxAge { return records(hit) }
+
+        try? fm.createDirectory(at: cache.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let lockPath = cache.deletingPathExtension().appendingPathExtension("lock").path
+        let fd = open(lockPath, O_CREAT | O_RDWR, 0o644)
+        guard fd >= 0 else { return cached().map(records) ?? [] }
+        defer { close(fd) }
+        // Another app is fetching right now: read what is there.
+        guard flock(fd, LOCK_EX | LOCK_NB) == 0 else { return cached().map(records) ?? [] }
+        defer { flock(fd, LOCK_UN) }
+        // It may have finished between the first look and the lock.
+        if let hit = cached(), Date().timeIntervalSince(hit.1) < maxAge { return records(hit) }
+        guard let data = fetch() else { return cached().map(records) ?? [] }
+        try? data.write(to: cache, options: .atomic)
+        return records((data, cached()?.1 ?? Date()))
+    }
+
+    /// `shared(...)` running `claude agents --json` from `binary`.
+    public static func shared(binary: URL, cache: URL, maxAge: TimeInterval = 25,
+                              includeInteractive: Bool = false) -> [LaneStatus] {
+        shared(cache: cache, maxAge: maxAge, includeInteractive: includeInteractive) {
+            fetchData(binary: binary)
+        }
     }
 }
