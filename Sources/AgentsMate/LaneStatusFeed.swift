@@ -25,19 +25,26 @@ public final class LaneStatusFeed: ObservableObject {
     public let directory: LaneStatusDirectory
     public let sources: [any LaneStatusSource]
     public let pollInterval: TimeInterval
+    /// How often the extra sources are asked. A source such as a daemon's
+    /// session list starts a process each time, so it runs on its own,
+    /// slower clock rather than on every reload of the hook folder.
+    public let sourceInterval: TimeInterval
 
     private var hookRecords: [LaneStatus] = []
     private var sourceRecords: [LaneStatus] = []
     private var source: DispatchSourceFileSystemObject?
     private var timer: Timer?
     private var polling = false
+    private var lastPoll: Date?
 
     public init(directory: LaneStatusDirectory = .default(), sources: [any LaneStatusSource] = [],
-                presenceSources: [any LanePresenceSource] = [], pollInterval: TimeInterval = 5) {
+                presenceSources: [any LanePresenceSource] = [], pollInterval: TimeInterval = 5,
+                sourceInterval: TimeInterval = 30) {
         self.directory = directory
         self.sources = sources
         self.presenceSources = presenceSources
         self.pollInterval = pollInterval
+        self.sourceInterval = max(sourceInterval, pollInterval)
     }
 
     public func start() {
@@ -80,6 +87,10 @@ public final class LaneStatusFeed: ObservableObject {
 
     private func poll() {
         guard !sources.isEmpty || !presenceSources.isEmpty, !polling else { return }
+        // The timer fires every pollInterval; allow a little slack so a tick
+        // that lands just short of sourceInterval does not wait a whole extra one.
+        if let lastPoll, Date().timeIntervalSince(lastPoll) < sourceInterval - pollInterval / 2 { return }
+        lastPoll = Date()
         polling = true
         let sources = sources, presenceSources = presenceSources
         Task { [weak self] in
