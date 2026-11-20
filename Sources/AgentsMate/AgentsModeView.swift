@@ -367,8 +367,8 @@ public struct AgentLaneSidebar<Accessory: View>: View {
             Button("Close") { store.close(lane.id) }
         }
         Divider()
-        if let pr = session.rowMetadata.pullRequest, let url = pr.url {
-            Button("Open Pull Request #\(pr.number)") { NSWorkspace.shared.open(url) }
+        if !session.displayedPullRequests.isEmpty {
+            PullRequestsMenu(pullRequests: session.displayedPullRequests, store: store)
         }
         ForEach(session.rowMetadata.ports, id: \.self) { port in
             Button("Open localhost:\(port)") {
@@ -651,7 +651,15 @@ struct LaneRow: View {
                 }
             }
             Spacer(minLength: 2)
-            if let pr = session.rowMetadata.pullRequest {
+            let pullRequests = session.displayedPullRequests
+            if !pullRequests.isEmpty {
+                ForEach(pullRequests.suffix(Self.rowChipLimit)) { PullRequestBadge(pullRequest: $0) }
+                if pullRequests.count > Self.rowChipLimit {
+                    Text("+\(pullRequests.count - Self.rowChipLimit)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            } else if let pr = session.rowMetadata.pullRequest {
                 Text("#\(pr.number)")
                     .font(.caption.monospacedDigit())
                     .padding(.horizontal, 5)
@@ -694,11 +702,16 @@ struct LaneRow: View {
         return summary
     }
 
+    /// Pull request chips a row shows; the rest are counted.
+    static let rowChipLimit = 2
+
     private var accessibilityValue: String {
         let status = session.isOrphan ? "Running, nothing attached"
             : session.needsAttention ? "\(session.status.title), new" : session.status.title
-        guard let summary = session.summary, !summary.isEmpty else { return status }
-        return status + ", " + summary
+        var parts = [status]
+        if let summary = session.summary, !summary.isEmpty { parts.append(summary) }
+        parts += session.displayedPullRequests.map(\.accessibilityDescription)
+        return parts.joined(separator: ", ")
     }
 
     private var isActive: Bool {
@@ -747,6 +760,11 @@ struct LaneRow: View {
             lines.append(contentsOf: note.log.suffix(5))
         }
         if let message = session.record?.message, !message.isEmpty { lines.append(message) }
+        let pullRequests = session.displayedPullRequests
+        if !pullRequests.isEmpty {
+            lines.append("Pull requests:")
+            lines.append(contentsOf: pullRequests.map { "• " + $0.menuTitle })
+        }
         if let reply = Self.hoverReply(session.lastReply) {
             lines.append("Last reply:")
             lines.append(reply)

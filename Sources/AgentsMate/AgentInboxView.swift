@@ -157,11 +157,9 @@ private struct InboxRowMenu: View {
         if store.configuration.messageWindowID != nil {
             Button("Message…") { store.showMessageAgent(to: session.id, openWindow: openWindow) }
         }
-        if !session.pullRequestLinks.isEmpty {
+        if !session.displayedPullRequests.isEmpty {
             Divider()
-            ForEach(session.pullRequestLinks, id: \.self) { url in
-                Button("Open Pull Request \(PullRequestLinkLabel.title(of: url))") { store.openPullRequest(url) }
-            }
+            PullRequestsMenu(pullRequests: session.displayedPullRequests, store: store)
         }
         Divider()
         if let message = session.record?.message {
@@ -217,10 +215,10 @@ private struct InboxRow: View {
                     .lineLimit(4)
                     .textSelection(.enabled)
             }
-            if !session.pullRequestLinks.isEmpty {
+            if !session.displayedPullRequests.isEmpty {
                 HStack(spacing: 4) {
-                    ForEach(session.pullRequestLinks.suffix(6), id: \.self) { url in
-                        PullRequestChip(url: url) { store.openPullRequest(url) }
+                    ForEach(session.displayedPullRequests.suffix(6)) { pr in
+                        PullRequestChip(pullRequest: pr) { store.open(pr) }
                     }
                 }
             }
@@ -252,25 +250,63 @@ private struct InboxRow: View {
     }
 }
 
-/// One pull request link the agent posted, as a button that opens it.
+/// One pull request as a button that opens it: its number, and its state
+/// as a colour and a symbol once a resolver has looked it up.
 struct PullRequestChip: View {
-    let url: URL
+    let pullRequest: LanePullRequest
     let open: () -> Void
 
     var body: some View {
-        let title = PullRequestLinkLabel.title(of: url)
         Button(action: open) {
-            Label(title, systemImage: "arrow.triangle.pull")
-                .font(.caption.monospacedDigit())
-                .padding(.horizontal, 6)
-                .padding(.vertical, 1)
-                .background(Capsule().fill(Color.accentColor.opacity(0.15)))
+            PullRequestBadge(pullRequest: pullRequest)
         }
         .buttonStyle(.plain)
-        .foregroundStyle(.tint)
-        .help(url.absoluteString)
-        .accessibilityLabel("Pull request \(title.hasPrefix("#") ? String(title.dropFirst()) : title)")
+        .help(pullRequest.menuTitle + "\n" + pullRequest.url.absoluteString)
+        .accessibilityLabel(pullRequest.accessibilityDescription)
         .accessibilityHint("Opens it in the browser")
+    }
+}
+
+/// A pull request's number in a capsule tinted by its state, with the
+/// state's symbol. Not interactive; ``PullRequestChip`` makes it a button.
+struct PullRequestBadge: View {
+    let pullRequest: LanePullRequest
+
+    var body: some View {
+        let color = PullRequestBadge.color(for: pullRequest.state)
+        Label(pullRequest.label, systemImage: pullRequest.symbolName)
+            .font(.caption.monospacedDigit())
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1)
+            .background(Capsule().fill(color.opacity(0.18)))
+            .foregroundStyle(color)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(pullRequest.accessibilityDescription)
+    }
+
+    /// Green open, grey draft, purple merged, red closed; the accent colour
+    /// until the state is known.
+    static func color(for state: PullRequestState?) -> Color {
+        guard let state else { return .accentColor }
+        return LaneRow.color(for: state)
+    }
+}
+
+/// A Pull Requests submenu: each of a lane's pull requests with its state,
+/// opening it through the store.
+struct PullRequestsMenu: View {
+    let pullRequests: [LanePullRequest]
+    let store: AgentLaneStore
+
+    var body: some View {
+        Menu("Pull Requests") {
+            ForEach(pullRequests) { pr in
+                Button { store.open(pr) } label: {
+                    Label(pr.menuTitle, systemImage: pr.symbolName)
+                }
+                .accessibilityLabel(pr.accessibilityDescription)
+            }
+        }
     }
 }
 

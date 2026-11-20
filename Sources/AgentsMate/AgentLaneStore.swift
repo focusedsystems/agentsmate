@@ -74,6 +74,22 @@ public final class AgentLaneStore: ObservableObject {
         /// The id of the app's ``AgentMessageWindow`` scene. Set, Message
         /// Agent opens that window; nil keeps the sidebar's alert.
         public var messageWindowID: String?
+        /// Resolvers for pull request links the agents post, asked before
+        /// the built-in ``GitHubPullRequestResolver``. Add one for Azure
+        /// DevOps or a GitHub Enterprise host here.
+        public var pullRequestResolvers: [any PullRequestResolver]
+        /// Where each lane's pull request links and their last known state
+        /// are kept between launches; nil keeps them in memory only.
+        public var pullRequestLedgerFile: URL?
+        /// Claude Code's pull request status cache, read once at launch as a
+        /// warm start for GitHub links. Nil skips it; a missing file is fine.
+        public var pullRequestSeedFile: URL?
+
+        /// `~/Library/Caches/<bundle id>/agent-pull-requests.json`.
+        public static var defaultPullRequestLedgerFile: URL { PullRequestLedgerCache.defaultURL() }
+        /// `gh-pr-status-cache.json` in Claude Code's config folder
+        /// (`$CLAUDE_CONFIG_DIR`, else `~/.claude`).
+        public static var defaultPullRequestSeedFile: URL { ClaudePullRequestSeed.defaultURL() }
 
         public init(termProgram: String, environment: [String: String] = [:],
                     baseFontSize: CGFloat = NSFont.systemFontSize,
@@ -87,7 +103,13 @@ public final class AgentLaneStore: ObservableObject {
                     usageSources: [any AgentUsageSource] = [], reopenChoices: [LaneReopenChoice] = [],
                     codexSummaryModel: String? = nil, summarizers: [any LaneSummarizing] = [],
                     summaryCacheFile: URL? = Configuration.defaultSummaryCacheFile, rowStyle: LaneRowStyle = .standard,
-                    inboxWindowID: String? = nil, messageWindowID: String? = nil) {
+                    inboxWindowID: String? = nil, messageWindowID: String? = nil,
+                    pullRequestResolvers: [any PullRequestResolver] = [],
+                    pullRequestLedgerFile: URL? = Configuration.defaultPullRequestLedgerFile,
+                    pullRequestSeedFile: URL? = Configuration.defaultPullRequestSeedFile) {
+            self.pullRequestResolvers = pullRequestResolvers
+            self.pullRequestLedgerFile = pullRequestLedgerFile
+            self.pullRequestSeedFile = pullRequestSeedFile
             self.inboxWindowID = inboxWindowID
             self.messageWindowID = messageWindowID
             self.codexSummaryModel = codexSummaryModel
@@ -233,6 +255,7 @@ public final class AgentLaneStore: ObservableObject {
         if configuration.showsRowMetadata { startRowMetadata() }
         if configuration.notifies { notifier = LaneNotifier(store: self) }
         startSummaries()
+        startPullRequestLedger()
         if !configuration.usageSources.isEmpty { usage = AgentUsageModel(sources: configuration.usageSources) }
     }
 
@@ -893,6 +916,7 @@ public final class AgentLaneStore: ObservableObject {
         session.onDirectoryChange = { [weak self] session in self?.laneDirectoryChanged(session) }
         applyIconOverride(to: session)
         if summariesEnabled { session.summary = summaries?.summary(for: id) }
+        session.pullRequests = pullRequestLedger?.pullRequests(for: id) ?? []
         sessions[lane.id] = session
         session.isSelected = id == selectedID || id == splitID
         session.isShown = isShowing && session.isSelected
@@ -1167,6 +1191,7 @@ public final class AgentLaneStore: ObservableObject {
                 for (id, source) in wanted {
                     guard let path = cache.path(for: source), let transcript = changed[path] else { continue }
                     self.sessions[id]?.update(transcript: transcript)
+                    self.pullRequestLedger?.record(transcript.pullRequestLinks, lane: id)
                     self.summarize(id, transcript: transcript, path: path)
                     if id == self.selectedID { selectedChanged = true }
                 }
@@ -1219,6 +1244,45 @@ public final class AgentLaneStore: ObservableObject {
               let digest = TranscriptDigest(transcript) else { return }
         summaries.retain(Set(sessions.keys))
         summaries.consider(id, agent: agent, source: path, digest: digest)
+    }
+
+    // MARK: Pull requests
+
+    private var pullRequestLedger: PullRequestLedger?
+
+    private func startPullRequestLedger() {
+        let resolvers = configuration.pullRequestResolvers + [GitHubPullRequestResolver()]
+        let ledger = PullRequestLedger(resolvers: resolvers,
+                                       cache: configuration.pullRequestLedgerFile.map(PullRequestLedgerCache.init(url:)),
+                                       seedFile: configuration.pullRequestSeedFile)
+        ledger.onChange = { [weak self] ids in
+            guard let self else { return }
+            for id in ids {
+                guard let session = self.sessions[id] else { continue }
+                let found = ledger.pullRequests(for: id)
+                if session.pullRequests != found { session.pullRequests = found }
+            }
+        }
+        pullRequestLedger = ledger
+        ledger.tick()
+    }
+
+    /// Add pull request links to a lane's ledger as if its agent had posted
+    /// them, for an app that learns of them another way. Untrusted links
+    /// are dropped.
+    public func recordPullRequests(_ urls: [URL], for id: AgentLane.ID) {
+        pullRequestLedger?.record(urls, lane: id)
+    }
+
+    /// Open one of a lane's pull requests. The agent's links go through
+    /// ``openPullRequest(_:)``; the branch's, which `gh` reported, open in
+    /// the browser when they are not on a trusted host.
+    @discardableResult
+    public func open(_ pullRequest: LanePullRequest) -> Bool {
+        if openPullRequest(pullRequest.url) { return true }
+        guard pullRequest.source == .branch, pullRequest.url.scheme == "https" else { return false }
+        NSWorkspace.shared.open(pullRequest.url)
+        return true
     }
 
     /// Put the lane's summary on the pasteboard. False when it has none.
