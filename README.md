@@ -121,6 +121,46 @@ selection or the keyboard, and the text waits until its agent takes a paste.
 If nothing takes it within 20 seconds it goes on the clipboard instead.
 `store.message(_:to:)` is the same send for an app's own surfaces.
 
+## Pull request ledger
+
+Every pull request link an agent posts is kept in its lane's ledger, for
+GitHub and Azure DevOps links that `PullRequestLink.isTrusted(_:)` accepts. The
+ledger outlives the conversation and the app: it is saved to
+`~/Library/Caches/<bundle id>/agent-pull-requests.json`
+(`Configuration.pullRequestLedgerFile`, nil keeps it in memory), holds the
+newest twenty links per lane, and drops a lane that gained no link for thirty
+days. `session.pullRequests` lists them, oldest first, as `LanePullRequest`
+values with a number, title, state and repository once looked up.
+
+A `PullRequestResolver` looks a link up. The package ships
+`GitHubPullRequestResolver`, which runs
+`gh pr view --json title,state,number,isDraft -- <url>` with the person's own
+`gh` sign-in, at background priority with a fifteen-second timeout. Apps add
+others, such as one for Azure DevOps or a GitHub Enterprise host, with
+`Configuration.pullRequestResolvers`; the first whose `canResolve(_:)` accepts
+a link answers it, and the built-in one is asked last. A link no resolver takes
+is kept and shown by number only.
+
+A new link is looked up as soon as it is read. Open and draft pull requests are
+asked about again every five minutes, on a timer that runs only while one is
+open and backs off with the rest of the package. Merged and closed ones are
+final and never asked about again. At most two lookups run at once, and a
+resolver that fails is left alone for ten minutes, keeping what it said last.
+
+Claude Code keeps its own pull request status cache, `gh-pr-status-cache.json`
+in its config folder. When it is there it is read once at launch as a warm
+start for GitHub links (`Configuration.pullRequestSeedFile`, nil skips it).
+
+The inbox's chips and the sidebar row's chips show each pull request's state as
+a colour and a symbol: green open, grey draft, purple merged, red closed. The
+row shows the newest two and counts the rest, its hover lists them all, and the
+row's and the inbox's menus have a Pull Requests submenu that opens each one
+through `store.open(_:)`, which uses `store.onOpenPullRequest` like the chips
+do. The pull request `gh` finds for the folder's branch (`showsRowMetadata`)
+still shows for a lane whose agent has not posted it, and is left out when the
+ledger already has it. `store.recordPullRequests(_:for:)` adds links an app
+learns of another way.
+
 ## Keeping the agent CLIs current
 
 The `AgentsMateUpdates` product finds the Claude Code and Codex command-line

@@ -62,12 +62,27 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
     @Published public internal(set) var lastReply: String?
     /// Pull request links the agent posted in its replies, oldest first.
     @Published public internal(set) var pullRequestLinks: [URL] = []
+    /// Every pull request the agent has posted in this lane, oldest first,
+    /// with its state once a resolver has looked it up. Kept across
+    /// conversations and relaunches.
+    @Published public internal(set) var pullRequests: [LanePullRequest] = []
     /// Background shells the agent started that have not finished.
     @Published public internal(set) var openBackgroundTasks: [LaneTranscript.BackgroundTask] = []
     /// What a script in the lane last said about its work.
     @Published public internal(set) var note: LaneNote?
     /// Branch, pull request and ports, when the store reads them.
     @Published public internal(set) var rowMetadata = LaneRowMetadata()
+
+    /// The pull requests the row, its hover and its menu show: the agent's,
+    /// then the one for the folder's branch when the agent has not posted it.
+    public var displayedPullRequests: [LanePullRequest] {
+        let branch = rowMetadata.pullRequest.flatMap { pr in
+            pr.url.map { LanePullRequest(url: $0, details: .init(number: pr.number, state: pr.state,
+                                                                 repository: PullRequestKey.repository(of: $0)),
+                                         source: .branch) }
+        }
+        return PullRequestKey.merge(agent: pullRequests, branch: branch)
+    }
 
     /// The icon and colour the person chose, which win over the lane's own.
     @Published public internal(set) var customIcon: LaneIcon?

@@ -104,8 +104,8 @@ switch.
 
 ## Phase 3: inbox and messaging
 
-Landed. The README's Inbox and messaging section describes the behaviour. The
-pull request chips show each link's number; Phase 4 adds its state.
+Landed. The README's Inbox and messaging section describes the behaviour. Phase 4
+added each pull request's state to its chips.
 
 - Inbox: Mark Read, double-click to show, summary and pull request chips, and
   unread notifications counted under Asking You. Polled idle lanes count as
@@ -118,6 +118,8 @@ pull request chips show each link's number; Phase 4 adds its state.
   messaged from anywhere.
 
 ## Phase 4: pull request ledger
+
+Landed. The README's Pull request ledger section describes the behaviour.
 
 - `LaneTranscript` collects pull request URLs from the agent's replies, for
   GitHub and Azure DevOps.

@@ -6,7 +6,7 @@ import Darwin
 /// listen on.
 public struct LaneRowMetadata: Equatable, Sendable {
     public struct PullRequest: Equatable, Sendable {
-        public enum State: String, Sendable { case open, draft, merged, closed }
+        public enum State: String, Codable, Sendable { case open, draft, merged, closed }
         public var number: Int
         public var state: State
         public var url: URL?
