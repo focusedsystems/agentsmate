@@ -30,21 +30,39 @@ public struct DiscoveredSession: Hashable, Sendable {
 
     /// The same for one session whichever backend reports it.
     public var key: String { [kind, host ?? "", name].joined(separator: "\u{1}") }
+
+    /// Whether the session's folder is one of `folders` or inside one, so an
+    /// app can keep the sessions that work in its own folders. A session with
+    /// no known folder is in none of them.
+    public func isInside<Folders: Sequence>(anyOf folders: Folders) -> Bool where Folders.Element == String {
+        guard let directory, !directory.isEmpty else { return false }
+        let path = LaneStatusMatch.normalizedPath(directory)
+        return folders.contains { folder in
+            guard !folder.isEmpty else { return false }
+            let root = LaneStatusMatch.normalizedPath(folder)
+            return path == root || path.hasPrefix(root == "/" ? root : root + "/")
+        }
+    }
 }
 
 /// How a tmux lane wrapper names its sessions, so the backend can find the
 /// lane sessions running with no row, attach one by name, and reach lanes
 /// on another machine. Give it to ``CommandLaneBackend/tmuxSessions``.
 ///
-/// A session counts as a lane session only when ``matches`` says so or its
-/// name starts with one of ``prefixes``. With neither, nothing is listed:
-/// a tmux server holds sessions of every kind, and only the app knows which
-/// are its lanes.
+/// A session counts as a lane session only when ``isRelevant`` accepts it,
+/// else when ``matches`` says so, else when its name starts with one of
+/// ``prefixes``. With none of them, nothing is listed: a tmux server holds
+/// sessions of every kind, and only the app knows which are its lanes.
 public struct TmuxLaneSessions: Sendable {
     /// Lane session names start with one of these, such as `lane-`.
     public var prefixes: [String]
     /// Decides whether a session name is a lane's, in place of ``prefixes``.
     public var matches: (@Sendable (String) -> Bool)?
+    /// Decides whether a session is a lane's from its name and its folder
+    /// together, in place of ``matches`` and ``prefixes``. For lanes whose
+    /// names carry no mark of their own, so only the folder they work in
+    /// says whose they are; ``DiscoveredSession/isInside(anyOf:)`` helps.
+    public var isRelevant: (@Sendable (DiscoveredSession) -> Bool)?
     /// The tmux session a lane's wrapper attaches, when the app knows how
     /// it names them. Set, a row and a running session are matched by name
     /// rather than by folder, and a lane on ``host`` attaches it directly.
@@ -64,11 +82,13 @@ public struct TmuxLaneSessions: Sendable {
     public var connectTimeout: Int
 
     public init(prefixes: [String] = [], matches: (@Sendable (String) -> Bool)? = nil,
+                isRelevant: (@Sendable (DiscoveredSession) -> Bool)? = nil,
                 sessionName: (@Sendable (AgentLane) -> String?)? = nil, host: String? = nil,
                 tmux: String = "tmux", remoteTmux: String = "tmux", ssh: String = "/usr/bin/ssh",
                 connectTimeout: Int = 5) {
         self.prefixes = prefixes
         self.matches = matches
+        self.isRelevant = isRelevant
         self.sessionName = sessionName
         self.host = host
         self.tmux = TmuxLaneSessions.locate(tmux)
@@ -85,14 +105,23 @@ public struct TmuxLaneSessions: Sendable {
     static let localTimeout: TimeInterval = 5
     var listTimeout: TimeInterval { host == nil ? Self.localTimeout : TimeInterval(connectTimeout) + 10 }
 
-    /// Whether a session is one of the app's lanes.
+    /// Whether a session name is one of the app's lanes, by ``matches`` or
+    /// ``prefixes``. ``isRelevant``, when set, decides instead, with the
+    /// whole session.
     public func isLaneSession(_ name: String) -> Bool {
         if let matches { return matches(name) }
         return prefixes.contains { !$0.isEmpty && name.hasPrefix($0) }
     }
 
+    /// Whether a session is one of the app's lanes: ``isRelevant`` when set,
+    /// else the name rule.
+    public func isLaneSession(_ session: DiscoveredSession) -> Bool {
+        if let isRelevant { return isRelevant(session) }
+        return isLaneSession(session.name)
+    }
+
     /// Whether anything can count as a lane session, so listing is worth a process.
-    public var discovers: Bool { matches != nil || prefixes.contains { !$0.isEmpty } }
+    public var discovers: Bool { isRelevant != nil || matches != nil || prefixes.contains { !$0.isEmpty } }
 
     /// The host, when it is one ssh can be handed safely: no leading dash
     /// (which ssh would read as an option), no spaces or control characters,
@@ -173,9 +202,9 @@ public struct TmuxLaneSessions: Sendable {
     public func sessions(fromListing output: String) -> [DiscoveredSession] {
         let host = validHost
         return TmuxPresenceSource.parse(output).compactMap { found in
-            guard isLaneSession(found.name) else { return nil }
-            return DiscoveredSession(kind: Self.kind, name: found.name, directory: found.directory,
-                                     attachedClients: found.attachedClients, host: host)
+            let session = DiscoveredSession(kind: Self.kind, name: found.name, directory: found.directory,
+                                            attachedClients: found.attachedClients, host: host)
+            return isLaneSession(session) ? session : nil
         }
     }
 
@@ -231,14 +260,28 @@ enum DetachedSessions {
     /// backend knows it by, else the name its status is matched by, else
     /// (when the backend cannot name the lane) by folder.
     static func claims(_ lane: AgentLane, backend: any LaneBackend, _ session: DiscoveredSession) -> Bool {
-        if let name = backend.sessionName(for: lane) { return name == session.name }
-        if let name = (lane.statusMatch ?? backend.statusMatch(for: lane)).laneName { return name == session.name }
+        if let name = laneName(lane, backend: backend) { return name == session.name }
         guard let directory = session.directory else { return false }
         return LaneStatusMatch.normalizedPath(directory) == LaneStatusMatch.normalizedPath(lane.path)
     }
 
+    /// The session name a row attaches, when its backend or status match
+    /// gives one.
+    static func laneName(_ lane: AgentLane, backend: any LaneBackend) -> String? {
+        backend.sessionName(for: lane) ?? (lane.statusMatch ?? backend.statusMatch(for: lane)).laneName
+    }
+
+    /// The machine a backend's lanes run on; nil is this Mac.
+    static func laneHost(_ backend: any LaneBackend) -> String? {
+        (backend as? CommandLaneBackend)?.tmuxSessions?.validHost
+    }
+
     /// The sessions no row attaches, one per session however many backends
-    /// listed it; a row on any backend that listed a session claims it.
+    /// listed it. A row on any backend that listed a session claims it by
+    /// name or folder; a row on another backend claims it only by name, as a
+    /// wrapper does that attaches a tmux lane or a Claude Code background
+    /// session of the same name. Folders alone are not enough across
+    /// backends: a Codex lane and a Claude lane share a folder.
     static func unclaimed(_ found: [Found], lanes: [AgentLane], backends: [String: any LaneBackend]) -> [Found] {
         var reporters: [String: Set<String>] = [:]
         for item in found { reporters[item.session.key, default: []].insert(item.backendID) }
@@ -249,8 +292,9 @@ enum DetachedSessions {
             guard seen.insert(key).inserted else { continue }
             let ids = reporters[key] ?? []
             let claimed = lanes.contains { lane in
-                guard ids.contains(lane.backendID), let backend = backends[lane.backendID] else { return false }
-                return claims(lane, backend: backend, item.session)
+                guard let backend = backends[lane.backendID] else { return false }
+                if ids.contains(lane.backendID) { return claims(lane, backend: backend, item.session) }
+                return laneHost(backend) == item.session.host && laneName(lane, backend: backend) == item.session.name
             }
             if !claimed { out.append(item) }
         }

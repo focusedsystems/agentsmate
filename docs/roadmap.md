@@ -157,6 +157,11 @@ Landed. The README's Lanes that survive anything section and
   section, with Reattach and Adopt actions.
 - The restore snapshot is written whenever the lane list changes (debounced),
   not only at quit, so a crash or reboot keeps it.
+- Closing a row leaves its session running; Stop ends it.
+  `closeStopsLane` is off by default.
+- Backends judge lane sessions by folder as well as name (`isRelevant`,
+  `DiscoveredSession.isInside(anyOf:)`), so lanes with unmarked names can be
+  listed, and a row on another backend claims a session of its own name.
 - The tmux backend gains an optional lane host, `ssh -t <host> tmux attach -t …`,
   so lanes on another machine can be attached. This needs real testing before
   it is on by default.

@@ -36,6 +36,26 @@ final class TmuxLaneSessionsTests: XCTestCase {
         XCTAssertFalse(TmuxLaneSessions(prefixes: [""]).discovers, "an empty prefix matches nothing")
     }
 
+    func testRelevanceByFolder() {
+        let listing = "alpha\t0\t/tmp/work/alpha\nalpha-notes\t0\t/tmp/work/alpha/notes\nbeta\t1\t/tmp/workshop\nlane-x\t0\t/tmp/x\n"
+        let byFolder = TmuxLaneSessions(prefixes: ["lane-"], isRelevant: { $0.isInside(anyOf: ["/tmp/work"]) })
+        XCTAssertTrue(byFolder.discovers)
+        XCTAssertEqual(byFolder.sessions(fromListing: listing).map(\.name), ["alpha", "alpha-notes"],
+                       "the rule on name and folder wins over prefixes; a sibling folder with the same start is not inside")
+        let either = TmuxLaneSessions(isRelevant: { $0.name.hasPrefix("lane-") || $0.isInside(anyOf: ["/tmp/workshop/"]) })
+        XCTAssertEqual(either.sessions(fromListing: listing).map(\.name), ["beta", "lane-x"])
+        XCTAssertTrue(TmuxLaneSessions(isRelevant: { _ in true }).discovers)
+    }
+
+    func testIsInside() {
+        let session = DiscoveredSession(kind: "tmux", name: "a", directory: "/tmp/work/a/")
+        XCTAssertTrue(session.isInside(anyOf: ["/tmp/work/a"]))
+        XCTAssertTrue(session.isInside(anyOf: ["/elsewhere", "/tmp/work"]))
+        XCTAssertFalse(session.isInside(anyOf: ["/tmp/work/a/b", "/tmp/wor", ""]))
+        XCTAssertFalse(session.isInside(anyOf: [String]()))
+        XCTAssertFalse(DiscoveredSession(kind: "tmux", name: "a").isInside(anyOf: ["/"]), "no folder is in no folder")
+    }
+
     func testHostValidation() {
         for good in ["build-host", "user@build-host", "user@10.0.0.5", "[fe80::1%en0]", "host.example.test"] {
             XCTAssertTrue(TmuxLaneSessions.isValidHost(good), good)
@@ -144,6 +164,9 @@ final class TmuxLaneSessionsTests: XCTestCase {
         XCTAssertEqual(ClaudeBackgroundLaneBackend.sessions(from: records, isLaneSession: nil).map(\.name), ["lane-a", "other"])
         XCTAssertEqual(ClaudeBackgroundLaneBackend.sessions(from: records, isLaneSession: { $0.hasPrefix("lane-") }).map(\.name),
                        ["lane-a"])
+        XCTAssertEqual(ClaudeBackgroundLaneBackend.sessions(from: records, isLaneSession: { $0.hasPrefix("lane-") },
+                                                            isRelevant: { $0.isInside(anyOf: ["/tmp/c"]) }).map(\.name),
+                       ["other"], "the rule on name and folder wins over the name rule")
         var lane = AgentLane(id: "x", title: "X", directory: URL(fileURLWithPath: "/tmp/Some Folder"), backendID: "claude-bg")
         let backend = ClaudeBackgroundLaneBackend()
         XCTAssertEqual(backend.sessionName(for: lane), "some-folder")
@@ -181,6 +204,27 @@ final class DetachedMatchingTests: XCTestCase {
         XCTAssertEqual(row.statusMatch, .lane("lane-two"))
         XCTAssertEqual(row.id, DetachedSessions.laneID(left[0]), "the same id every launch")
     }
+
+    func testRowsOnOtherBackendsClaimByNameOnly() {
+        // A wrapper lane that may attach a tmux session or a background
+        // session of the same name, and a background backend that lists them.
+        let wrapper = CommandLaneBackend.tmuxLane(id: "w", displayName: "W", command: "w", statusAgent: "claude",
+                                                  tmuxSessions: TmuxLaneSessions(sessionName: { $0.title }))
+        let codex = CommandLaneBackend.tmuxLane(id: "c", displayName: "C", command: "c", statusAgent: "codex")
+        let background = ClaudeBackgroundLaneBackend(id: "bg")
+        let backends: [String: any LaneBackend] = ["w": wrapper, "c": codex, "bg": background]
+        let s = { (name: String, dir: String) in DiscoveredSession(kind: ClaudeBackgroundLaneBackend.kind, name: name, directory: dir) }
+        let found: [DetachedSessions.Found] = [
+            .init(backendID: "bg", session: s("one", "/tmp/one")),
+            .init(backendID: "bg", session: s("two", "/tmp/two")),
+        ]
+        let lanes = [
+            AgentLane(id: "1", title: "one", directory: URL(fileURLWithPath: "/tmp/elsewhere"), backendID: "w"),
+            AgentLane(id: "2", title: "Two", directory: URL(fileURLWithPath: "/tmp/two"), backendID: "c"),
+        ]
+        let left = DetachedSessions.unclaimed(found, lanes: lanes, backends: backends)
+        XCTAssertEqual(left.map(\.session.name), ["two"], "another backend's row claims by name, never by folder alone")
+    }
 }
 
 @MainActor
@@ -215,8 +259,8 @@ final class DetachedStoreTests: XCTestCase {
         XCTAssertTrue(store.isDetached(row.id), "syncing the app's lanes keeps Detached rows")
 
         // A row added for the session's folder claims it; closing the row
-        // without stopping lists the session again.
-        store.configuration.closeStopsLane = false
+        // without stopping, the default, lists the session again.
+        XCTAssertFalse(store.configuration.closeStopsLane, "closing a row leaves its session running by default")
         store.add(AgentLane(id: "b", title: "B", directory: URL(fileURLWithPath: "/tmp/b"), backendID: "fake", isClosable: true),
                   open: false)
         XCTAssertTrue(store.detachedIDs.isEmpty)

@@ -22,8 +22,13 @@ public struct ClaudeBackgroundLaneBackend: LaneBackend {
     /// section. Interactive sessions are never listed: they are not this
     /// backend's to attach.
     public var discoversSessions = true
-    /// Which background sessions count as lanes; nil counts every one.
+    /// Which background sessions count as lanes, by name; nil counts every one.
     public var isLaneSession: (@Sendable (String) -> Bool)?
+    /// Which background sessions count as lanes from their name and folder
+    /// together, in place of ``isLaneSession``. A session's name is whatever
+    /// started it chose, so the folder it works in is often the only sign of
+    /// whose it is; ``DiscoveredSession/isInside(anyOf:)`` helps.
+    public var isRelevant: (@Sendable (DiscoveredSession) -> Bool)?
     /// The `claude agents --json` list shared by every app on the Mac, read
     /// rather than run again while it is fresh.
     public var agentsListCache: URL = ClaudeBackgroundLaneBackend.defaultAgentsListCache
@@ -77,7 +82,7 @@ public struct ClaudeBackgroundLaneBackend: LaneBackend {
         guard discoversSessions else { return [] }
         let binary: URL? = claude.contains("/") ? URL(fileURLWithPath: claude) : ClaudeBinary.locate()
         guard let binary else { return [] }
-        let cache = agentsListCache, filter = isLaneSession
+        let cache = agentsListCache, filter = isLaneSession, relevant = isRelevant
         let records = await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .background).async {
                 LaneRowMetadataReader.processSlots.wait()
@@ -85,15 +90,18 @@ public struct ClaudeBackgroundLaneBackend: LaneBackend {
                 continuation.resume(returning: ClaudeAgentsList.shared(binary: binary, cache: cache))
             }
         }
-        return Self.sessions(from: records, isLaneSession: filter)
+        return Self.sessions(from: records, isLaneSession: filter, isRelevant: relevant)
     }
 
-    static func sessions(from records: [LaneStatus], isLaneSession: (@Sendable (String) -> Bool)?) -> [DiscoveredSession] {
+    static func sessions(from records: [LaneStatus], isLaneSession: (@Sendable (String) -> Bool)?,
+                         isRelevant: (@Sendable (DiscoveredSession) -> Bool)? = nil) -> [DiscoveredSession] {
         var seen = Set<String>()
         return records.compactMap { record in
-            guard let name = record.lane, !name.isEmpty,
-                  isLaneSession?(name) ?? true, seen.insert(name).inserted else { return nil }
-            return DiscoveredSession(kind: kind, name: name, directory: record.directory)
+            guard let name = record.lane, !name.isEmpty else { return nil }
+            let session = DiscoveredSession(kind: kind, name: name, directory: record.directory)
+            let counts = isRelevant.map { $0(session) } ?? isLaneSession?(name) ?? true
+            guard counts, seen.insert(name).inserted else { return nil }
+            return session
         }
     }
 
