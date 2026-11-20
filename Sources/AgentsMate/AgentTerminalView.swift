@@ -16,6 +16,11 @@ open class AgentTerminalView: LocalProcessTerminalView {
     /// Cleans text before it is typed in as a paste. The default keeps
     /// newlines and tabs and drops every other control character.
     public var pasteSanitizer: (String) -> String = ShellQuote.pasteSafe
+    /// Answers a ⌘-clicked link: an OSC 8 hyperlink, or a plain http or
+    /// https URL printed in the terminal. Returns whether it was handled;
+    /// an unhandled http, https or mailto link opens in the default app,
+    /// and any other scheme is dropped.
+    public var onOpenLink: ((URL) -> Bool)?
 
     private var colorRequests = TerminalColorSchemeRequests()
     private var clipboardRequests = ClipboardRequests()
@@ -153,13 +158,21 @@ open class AgentTerminalView: LocalProcessTerminalView {
     /// Plain movement is not passed on: a program that asks for every mouse
     /// event (mode 1003) otherwise hears each pixel the pointer crosses, and
     /// agent TUIs redraw hover states as it passes over them. Clicks, drags
-    /// and the wheel still reach it, and ⌘ keeps link previews.
+    /// and the wheel still reach it, and ⌘ keeps link previews. A ⌘-click
+    /// opens the link under the pointer through `onOpenLink`.
     public func installInputHandling() {
         removeInputHandling()
         installSelectionOverride()
         // Local monitors run on the main thread, inside the app's event loop.
-        inputMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .scrollWheel, .mouseMoved]) { [weak self] event in
+        inputMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .scrollWheel, .mouseMoved, .leftMouseDown, .leftMouseUp]) { [weak self] event in
             guard let self else { return event }
+            if event.type == .leftMouseDown || event.type == .leftMouseUp {
+                let dropCommand = MainActor.assumeIsolated { () -> Bool in
+                    guard event.window === self.window else { return false }
+                    return self.handleLinkClick(event)
+                }
+                return dropCommand ? Self.withoutCommand(event) ?? event : event
+            }
             let handled = MainActor.assumeIsolated { () -> Bool in
                 guard event.window === self.window else { return false }
                 if event.type == .keyDown {
@@ -244,6 +257,99 @@ open class AgentTerminalView: LocalProcessTerminalView {
         return true
     }
 
+    // MARK: Links
+
+    /// Whether the last left press landed in this view, so its release,
+    /// wherever it happens, belongs to it.
+    private var pressedHere = false
+    private var linkClickCell: (column: Int, row: Int)?
+
+    /// A ⌘-click opens the link under it here rather than in SwiftTerm,
+    /// which does not see plain URLs. Every release of a press in this view
+    /// goes on without ⌘, wherever it ends, so SwiftTerm does not open the
+    /// link again; a program that takes the mouse still hears it. Any open
+    /// SwiftTerm still asks for goes through `openLink(_:)` as well.
+    /// Returns whether the event should go on without ⌘.
+    private func handleLinkClick(_ event: NSEvent) -> Bool {
+        if event.type == .leftMouseDown {
+            pressedHere = !isHiddenOrHasHiddenAncestor && bounds.contains(convert(event.locationInWindow, from: nil))
+            linkClickCell = pressedHere && event.modifierFlags.contains(.command) && event.clickCount == 1 ? cell(at: event) : nil
+            return false
+        }
+        guard pressedHere else { return false }
+        pressedHere = false
+        let down = linkClickCell
+        linkClickCell = nil
+        guard event.modifierFlags.contains(.command) else { return false }
+        if let down, let up = cell(at: event), down == up, let url = link(atColumn: up.column, row: up.row) {
+            openLink(url)
+        }
+        return true
+    }
+
+    /// Give `url` to the app, and open it in the default app when the app
+    /// leaves it and it is http, https or mailto.
+    public func openLink(_ url: URL) {
+        if onOpenLink?(url) == true { return }
+        if TerminalLinks.opensInSystem(url) { openInSystem(url) }
+    }
+
+    /// Opens a link the app left, after the scheme check. Tests replace it.
+    var openInSystem: (URL) -> Void = { NSWorkspace.shared.open($0) }
+
+    /// Stands in as SwiftTerm's terminal delegate so its own link opener
+    /// (an OSC 8 link on a ⌘-release) comes through `openLink(_:)` rather
+    /// than straight to NSWorkspace. Everything else goes to the view.
+    private lazy var linkDelegate = TerminalLinkDelegate(view: self)
+
+    /// Route SwiftTerm's link requests through `openLink(_:)`. Called from
+    /// the initialisers; safe to call again.
+    func routeSwiftTermLinks() {
+        terminalDelegate = linkDelegate
+    }
+
+    public override init(frame: NSRect) {
+        super.init(frame: frame)
+        routeSwiftTermLinks()
+    }
+
+    public required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        routeSwiftTermLinks()
+    }
+
+    /// The link at a visible cell: the cell's OSC 8 hyperlink, else a plain
+    /// http or https URL printed across it.
+    public func link(atColumn column: Int, row: Int) -> URL? {
+        let terminal = getTerminal()
+        guard let line = terminal.getLine(row: row), column >= 0, column < min(terminal.cols, line.count) else { return nil }
+        if let payload = line[column].getPayload() as? String {
+            return TerminalLinks.hyperlinkURL(fromPayload: payload)
+        }
+        let characters = (0..<min(terminal.cols, line.count)).map { terminal.getCharacter(for: line[$0]) }
+        return TerminalLinks.detectedURL(in: characters, at: column)
+    }
+
+    /// The visible cell under the pointer, measured the way SwiftTerm sizes
+    /// its cells.
+    private func cell(at event: NSEvent) -> (column: Int, row: Int)? {
+        let terminal = getTerminal()
+        let point = convert(event.locationInWindow, from: nil)
+        let glyph = font.glyph(withName: "W")
+        let width = max(1, font.advancement(forGlyph: glyph).width)
+        let height = max(1, ceil(CTFontGetAscent(font) + CTFontGetDescent(font) + CTFontGetLeading(font)))
+        let column = Int(point.x / width), row = Int((frame.height - point.y) / height)
+        guard point.x >= 0, column < terminal.cols, row >= 0, row < terminal.rows else { return nil }
+        return (column, row)
+    }
+
+    private nonisolated static func withoutCommand(_ event: NSEvent) -> NSEvent? {
+        NSEvent.mouseEvent(with: event.type, location: event.locationInWindow,
+                           modifierFlags: event.modifierFlags.subtracting(.command), timestamp: event.timestamp,
+                           windowNumber: event.windowNumber, context: nil, eventNumber: event.eventNumber,
+                           clickCount: event.clickCount, pressure: event.pressure)
+    }
+
     open override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if window?.firstResponder === self, let shortcut = shortcutResolver?(event) ?? TerminalShortcut(event),
            onShortcut?(shortcut) == true {
@@ -302,6 +408,33 @@ open class AgentTerminalView: LocalProcessTerminalView {
         } else {
             send(txt: cleaned.replacingOccurrences(of: "\n", with: " "))
         }
+    }
+}
+
+/// SwiftTerm's terminal delegate for an `AgentTerminalView`: the view's own
+/// handling for everything but link requests, which go to `openLink(_:)`.
+/// Bells and other unhandled requests keep SwiftTerm's defaults, as they
+/// did with the view as its own delegate.
+final class TerminalLinkDelegate: TerminalViewDelegate {
+    private unowned let view: AgentTerminalView
+
+    init(view: AgentTerminalView) { self.view = view }
+
+    func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
+        view.sizeChanged(source: source, newCols: newCols, newRows: newRows)
+    }
+    func setTerminalTitle(source: TerminalView, title: String) { view.setTerminalTitle(source: source, title: title) }
+    func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {
+        view.hostCurrentDirectoryUpdate(source: source, directory: directory)
+    }
+    func send(source: TerminalView, data: ArraySlice<UInt8>) { view.send(source: source, data: data) }
+    func scrolled(source: TerminalView, position: Double) { view.scrolled(source: source, position: position) }
+    func rangeChanged(source: TerminalView, startY: Int, endY: Int) { view.rangeChanged(source: source, startY: startY, endY: endY) }
+    func clipboardCopy(source: TerminalView, content: Data) { view.clipboardCopy(source: source, content: content) }
+
+    func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {
+        guard let url = TerminalLinks.url(from: link) else { return }
+        view.openLink(url)
     }
 }
 
