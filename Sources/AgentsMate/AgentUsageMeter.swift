@@ -2,12 +2,13 @@ import SwiftUI
 import AgentsMateStatus
 
 /// Reads each usage source every minute, at background priority so the
-/// read runs on the efficiency cores, on a timer the system may coalesce.
+/// read runs on the efficiency cores, on a timer the system may coalesce
+/// and that slows while the app is out of use.
 @MainActor
 public final class AgentUsageModel: ObservableObject {
     @Published public private(set) var usages: [AgentUsage] = []
     public let sources: [any AgentUsageSource]
-    private var timer: Timer?
+    private var timer: CadenceTimer?
 
     public init(sources: [any AgentUsageSource]) {
         self.sources = sources
@@ -16,12 +17,7 @@ public final class AgentUsageModel: ObservableObject {
     public func start() {
         guard timer == nil else { return }
         refresh()
-        let timer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.refresh() }
-        }
-        timer.tolerance = 15
-        RunLoop.main.add(timer, forMode: .common)
-        self.timer = timer
+        timer = CadenceTimer(interval: 60) { [weak self] in self?.refresh() }
     }
 
     public func refresh() {

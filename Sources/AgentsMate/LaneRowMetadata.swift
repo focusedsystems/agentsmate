@@ -30,26 +30,45 @@ public enum LaneRowMetadataReader {
     /// The branch checked out in the repository that holds `directory`, or a
     /// short commit for a detached HEAD. Nil outside a repository.
     public static func branch(in directory: String) -> String? {
+        headFile(for: directory).flatMap(branch(headFile:))
+    }
+
+    /// The branch a HEAD file names.
+    public static func branch(headFile: URL) -> String? {
+        parseHead(try? String(contentsOf: headFile, encoding: .utf8))
+    }
+
+    /// The HEAD file of the repository that holds `directory`, following a
+    /// worktree's or submodule's `.git` file to its real git folder. Nil
+    /// outside a repository.
+    public static func headFile(for directory: String) -> URL? {
         var url = URL(fileURLWithPath: directory).standardizedFileURL
         let fm = FileManager.default
         while true {
             let dotGit = url.appendingPathComponent(".git")
             var isDir: ObjCBool = false
             if fm.fileExists(atPath: dotGit.path, isDirectory: &isDir) {
-                var gitDir = dotGit
-                if !isDir.boolValue {
-                    // A worktree or submodule: ".git" names the real folder.
-                    guard let text = try? String(contentsOf: dotGit, encoding: .utf8),
-                          let line = text.split(separator: "\n").first(where: { $0.hasPrefix("gitdir:") }) else { return nil }
-                    let path = line.dropFirst("gitdir:".count).trimmingCharacters(in: .whitespaces)
-                    gitDir = URL(fileURLWithPath: path, relativeTo: url).standardizedFileURL
-                }
-                return parseHead(try? String(contentsOf: gitDir.appendingPathComponent("HEAD"), encoding: .utf8))
+                if isDir.boolValue { return dotGit.appendingPathComponent("HEAD") }
+                // A worktree or submodule: ".git" names the real folder.
+                return gitDir(fromDotGitFile: try? String(contentsOf: dotGit, encoding: .utf8), in: url)?
+                    .appendingPathComponent("HEAD")
             }
             let parent = url.deletingLastPathComponent()
             if parent.path == url.path { return nil }
             url = parent
         }
+    }
+
+    /// The folder a `.git` file's `gitdir:` line names, resolved against the
+    /// folder holding the file when it is relative.
+    static func gitDir(fromDotGitFile text: String?, in folder: URL) -> URL? {
+        guard let text,
+              let line = text.split(whereSeparator: \.isNewline).first(where: { $0.hasPrefix("gitdir:") }) else { return nil }
+        let path = line.dropFirst("gitdir:".count).trimmingCharacters(in: .whitespaces)
+        guard !path.isEmpty else { return nil }
+        // Relative to the folder itself, not to its parent.
+        let base = URL(fileURLWithPath: folder.path, isDirectory: true)
+        return URL(fileURLWithPath: path, relativeTo: base).standardizedFileURL
     }
 
     static func parseHead(_ text: String?) -> String? {
@@ -132,8 +151,16 @@ public enum LaneRowMetadataReader {
         ["/opt/homebrew/bin/gh", "/usr/local/bin/gh", "/usr/bin/gh"].first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
+    /// At most two helper processes run at once across every sweep.
+    static let processSlots = DispatchSemaphore(value: 2)
+
+    /// Run a helper at background QoS, waiting for a free slot. Call it off
+    /// the main thread and outside Swift's concurrency pool: it blocks.
     static func run(_ executable: String, _ arguments: [String], directory: String? = nil, timeout: TimeInterval = 8) -> String {
+        processSlots.wait()
+        defer { processSlots.signal() }
         let process = Process()
+        process.qualityOfService = .background
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
         if let directory { process.currentDirectoryURL = URL(fileURLWithPath: directory) }
@@ -142,7 +169,7 @@ public enum LaneRowMetadataReader {
         process.standardError = FileHandle.nullDevice
         process.standardInput = FileHandle.nullDevice
         guard (try? process.run()) != nil else { return "" }
-        DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { if process.isRunning { process.terminate() } }
+        DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + timeout) { if process.isRunning { process.terminate() } }
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         return String(decoding: data, as: UTF8.self)

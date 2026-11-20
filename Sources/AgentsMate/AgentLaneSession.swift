@@ -38,7 +38,9 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
     /// What the program calls itself: Claude's session name, or the shell's title.
     @Published public private(set) var programTitle: String?
     /// The shell's working directory, followed as it changes.
-    @Published public private(set) var currentDirectory: String
+    @Published public private(set) var currentDirectory: String {
+        didSet { if currentDirectory != oldValue { onDirectoryChange?(self) } }
+    }
     /// The latest record from the status feed for this lane.
     @Published public private(set) var record: LaneStatus?
     /// Set when a record that wants a person arrives while the lane is out of sight.
@@ -84,12 +86,24 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
 
     var onShortcut: ((TerminalShortcut) -> Bool)?
     var shortcutResolver: ((NSEvent) -> TerminalShortcut?)?
-    private var poll: Timer?
+    private var poll: CadenceTimer?
 
     /// Whether the row is on screen.
     var isShown = false {
-        didSet { if isShown { needsAttention = false } }
+        didSet {
+            if isShown { needsAttention = false }
+            if isShown != oldValue { visibilityChanged() }
+        }
     }
+    /// Whether the row is the selected one, on screen or not.
+    var isSelected = false {
+        didSet { if isSelected != oldValue { visibilityChanged() } }
+    }
+    /// The shell reports its directory itself (OSC 7), so the kernel need
+    /// not be asked.
+    private(set) var directoryFromShell = false
+    /// Called when the working directory changes, however it was learned.
+    var onDirectoryChange: ((AgentLaneSession) -> Void)?
 
     init(lane: AgentLane, backend: any LaneBackend) {
         self.lane = lane
@@ -198,6 +212,9 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
             onWantsAttention?(self)
         }
         if new?.state.wantsAttention != true { needsAttention = false }
+        // A hook just fired: the moment an agent is likely to have labelled
+        // its row, so look even when the row is out of sight.
+        readMetadata()
     }
 
     /// Start the backend's process, or start it again after it ended. A
@@ -229,12 +246,48 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
             }
         }
         startProcess(configuration: configuration)
-        poll?.invalidate()
-        poll = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.followDirectory()
-                self?.readMetadata()
-            }
+        directoryFromShell = false
+        updatePoll()
+    }
+
+    /// How often an attached lane looks at its directory and session file.
+    enum PollCadence {
+        /// On screen or selected: the session file is read this often.
+        static let visible: TimeInterval = 5
+        /// Out of sight, and the shell does not report its directory.
+        static let hidden: TimeInterval = 30
+    }
+
+    /// The poll interval a lane needs, or nil for none: a lane out of sight
+    /// whose shell reports its own directory has nothing to poll for.
+    nonisolated static func pollInterval(attached: Bool, visible: Bool, directoryFromShell: Bool) -> TimeInterval? {
+        guard attached else { return nil }
+        if visible { return PollCadence.visible }
+        return directoryFromShell ? nil : PollCadence.hidden
+    }
+
+    private var isVisible: Bool { isShown || isSelected }
+
+    private func visibilityChanged() {
+        if isVisible { readMetadata() }
+        updatePoll()
+    }
+
+    private func updatePoll() {
+        guard let interval = Self.pollInterval(attached: isAttached, visible: isVisible,
+                                               directoryFromShell: directoryFromShell) else {
+            poll?.invalidate()
+            poll = nil
+            return
+        }
+        if let poll, poll.isValid {
+            poll.setInterval(interval)
+            return
+        }
+        poll = CadenceTimer(interval: interval) { [weak self] in
+            guard let self else { return }
+            if !self.directoryFromShell { self.followDirectory() }
+            if self.isVisible { self.readMetadata() }
         }
     }
 
@@ -326,7 +379,13 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
     public nonisolated func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {
         guard let directory, let url = URL(string: directory), url.isFileURL else { return }
         let path = url.path
-        Task { @MainActor in self.currentDirectory = path }
+        Task { @MainActor in
+            self.currentDirectory = path
+            if !self.directoryFromShell {
+                self.directoryFromShell = true
+                self.updatePoll()
+            }
+        }
     }
 
     public nonisolated func processTerminated(source: TerminalView, exitCode: Int32?) {
@@ -336,6 +395,7 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
             guard ended == ObjectIdentifier(self.view) else { return }
             self.hasExited = true
             self.poll?.invalidate()
+            self.poll = nil
         }
     }
 }

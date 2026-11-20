@@ -22,6 +22,9 @@ public enum ClaudeBinary {
     private static func loginShellLookup() -> URL? {
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
         let process = Process()
+        // Callers wait on this, often on the main thread while an app starts,
+        // so it must not queue behind background work.
+        process.qualityOfService = .userInitiated
         process.executableURL = URL(fileURLWithPath: shell)
         process.arguments = ["-lic", "command -v claude"]
         let pipe = Pipe()

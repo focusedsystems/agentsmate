@@ -41,14 +41,16 @@ public struct TmuxPresenceSource: LanePresenceSource {
 
     public func sessions() async -> [LanePresence] {
         let tmux = tmux
-        return await Task.detached { () -> [LanePresence] in
+        return await Task.detached(priority: .background) { () -> [LanePresence] in
             let process = Process()
+            process.qualityOfService = .background
             process.executableURL = URL(fileURLWithPath: tmux)
             process.arguments = ["list-sessions", "-F", "#{session_name}\t#{session_attached}\t#{pane_current_path}"]
             let pipe = Pipe()
             process.standardOutput = pipe
             process.standardError = FileHandle.nullDevice
             guard (try? process.run()) != nil else { return [] }
+            DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + 5) { if process.isRunning { process.terminate() } }
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             process.waitUntilExit()
             return Self.parse(String(decoding: data, as: UTF8.self))

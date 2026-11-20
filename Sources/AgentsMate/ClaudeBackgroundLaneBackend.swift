@@ -78,7 +78,7 @@ public struct ClaudeAgentsStatusSource: LaneStatusSource {
 
     public func records() async -> [LaneStatus] {
         let binary = binary, interactive = includeInteractive, cache = cache
-        return await Task.detached {
+        return await Task.detached(priority: .background) {
             ClaudeAgentsList.shared(binary: binary, cache: cache, includeInteractive: interactive)
         }.value
     }

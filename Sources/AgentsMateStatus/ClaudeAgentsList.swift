@@ -50,6 +50,7 @@ public enum ClaudeAgentsList {
     /// The raw output of `claude agents --json`, or nil when the call fails.
     public static func fetchData(binary: URL, timeout: TimeInterval = 10) -> Data? {
         let process = Process()
+        process.qualityOfService = .background
         process.executableURL = binary
         process.arguments = ["agents", "--json"]
         let pipe = Pipe()
@@ -57,7 +58,7 @@ public enum ClaudeAgentsList {
         process.standardError = FileHandle.nullDevice
         guard (try? process.run()) != nil else { return nil }
         let deadline = DispatchTime.now() + timeout
-        DispatchQueue.global().asyncAfter(deadline: deadline) { if process.isRunning { process.terminate() } }
+        DispatchQueue.global(qos: .background).asyncAfter(deadline: deadline) { if process.isRunning { process.terminate() } }
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         guard process.terminationStatus == 0 else { return nil }

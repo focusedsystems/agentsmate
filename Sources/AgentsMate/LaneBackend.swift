@@ -112,6 +112,8 @@ public enum LaneCommand {
     public static func run(_ arguments: [String]) {
         guard !arguments.isEmpty else { return }
         let process = Process()
+        // Nobody waits on its output; the lane's row updates when it is done.
+        process.qualityOfService = .background
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = arguments
         process.standardOutput = FileHandle.nullDevice
