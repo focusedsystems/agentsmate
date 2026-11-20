@@ -97,7 +97,12 @@ public final class AgentLaneStore: ObservableObject {
         }
     }
     /// Whether the lanes are on screen; set by the view that shows them.
-    public var isShowing = false { didSet { updateShown() } }
+    public var isShowing = false {
+        didSet {
+            updateShown()
+            if isShowing != oldValue { transcriptTimer?.setInterval(TranscriptSchedule.interval(showing: isShowing)) }
+        }
+    }
 
     public var configuration: Configuration {
         didSet { if configuration.baseFontSize != oldValue.baseFontSize { applyFont() } }
@@ -191,6 +196,7 @@ public final class AgentLaneStore: ObservableObject {
             MainActor.assumeIsolated { self?.apply(notes: notes) }
         }
         statusFeed?.start()
+        if statusFeed != nil { startTranscripts() }
         if configuration.showsRowMetadata { startRowMetadata() }
         if configuration.notifies { notifier = LaneNotifier(store: self) }
         if let model = configuration.summaryModel { summarizer = LaneSummarizer(model: model) }
@@ -1079,8 +1085,48 @@ public final class AgentLaneStore: ObservableObject {
             let match = session.lane.statusMatch ?? session.backend.statusMatch(for: session.lane)
             let found = presence.find(for: session.lane, match: match)
             session.update(orphan: configuration.highlightsOrphans && found?.attachedClients == 0 && !session.isAttached)
+            session.update(present: found != nil)
         }
         objectWillChange.send()
+    }
+
+    // MARK: Transcripts
+
+    private var transcriptTimer: CadenceTimer?
+    private var transcripts = LaneTranscriptCache()
+    private var readingTranscripts = false
+
+    private func startTranscripts() {
+        transcriptTimer = CadenceTimer(interval: TranscriptSchedule.interval(showing: isShowing)) { [weak self] in
+            self?.refreshTranscripts()
+        }
+    }
+
+    /// Read what each lane's conversation file gained, off the main actor,
+    /// for files whose size or modification time changed. Skipped while the
+    /// last read is still going.
+    func refreshTranscripts() {
+        guard !readingTranscripts else { return }
+        var wanted: [AgentLane.ID: LaneTranscriptCache.Source] = [:]
+        for (id, session) in sessions {
+            if let source = LaneTranscriptCache.Source(session.record) { wanted[id] = source }
+        }
+        guard !wanted.isEmpty else { return }
+        readingTranscripts = true
+        let cache = transcripts
+        Task.detached(priority: .background) {
+            var cache = cache
+            let changed = cache.read(Set(wanted.values))
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.readingTranscripts = false
+                self.transcripts = cache
+                for (id, source) in wanted {
+                    guard let path = cache.path(for: source), let transcript = changed[path] else { continue }
+                    self.sessions[id]?.update(transcript: transcript)
+                }
+            }
+        }
     }
 
     private func updateShown() {

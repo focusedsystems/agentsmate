@@ -6,11 +6,39 @@ AgentsMate reads that folder.
 
 | State | Written when |
 |---|---|
-| `running` | A prompt was submitted or a tool ran |
-| `waitingForInput` | The agent is idle at its prompt or asking a question |
+| `running` | A prompt was submitted or a tool ran, or the turn ended with a background shell still running |
+| `waitingForInput` | The session started, the agent opened a question dialog, or its turn ended on a question |
 | `permissionRequested` | The agent stopped on a permission prompt |
-| `done` | The agent finished its turn |
+| `done` | The agent finished its turn without asking anything |
 | `ended` | The agent process exited |
+
+## How a turn ends
+
+The end of a turn (Claude Code's `Stop`, Codex's `agent-turn-complete`) is
+read for what the agent is actually doing:
+
+1. If the last reply ends on a question, the state is `waitingForInput` and
+   the record's `message` is that question.
+2. Otherwise, if a background shell the agent started is still running, the
+   state stays `running`. The agent wakes when the shell finishes, and its
+   next `Stop` settles the state.
+3. Otherwise the state is `done`.
+
+A reply ends on a question when its last line of text, after code blocks and
+trailing whitespace are set aside, ends in a question mark. The check is
+deliberately narrow: a quote, table row, heading, inline code or link at the
+end does not count, and neither does a question followed by anything else.
+
+Claude Code's `Stop` hook sends the last reply (`last_assistant_message`) and
+the background work in flight (`background_tasks`). Releases that leave either
+out are covered by reading the end of the conversation file named in
+`transcript_path`; nothing else in the hook reads the transcript. Codex sends
+its last reply as `last-assistant-message`, and its turns are not held open by
+background shells.
+
+Claude Code's idle reminder, sent about a minute after a turn ends
+(`Notification` with `idle_prompt`), writes nothing: the lane keeps the state
+its turn ended with, and no attention is raised for it.
 
 ## Folder
 
@@ -66,6 +94,18 @@ notify = ["agentsmate-status", "codex", "--then", "/path/to/your-existing-notifi
 Codex reports the end of a turn, and approval requests where the release sends
 them, so a Codex lane shows `done` and `permissionRequested` but not `running`.
 
+## Conversation files
+
+Apps read each lane's conversation file with `LaneTranscript` for its recent
+prompts, last reply, the pull requests the agent linked and the background
+shells it has running. A Claude Code record names its file in
+`transcriptPath`; a Codex lane's file is found under `$CODEX_HOME/sessions`
+(default `~/.codex/sessions`) by its thread id. The reader keeps its place in
+the file and parses only what was appended, and the store looks only at files
+whose size or modification time changed: every 5 seconds while the lanes are
+on screen and every 30 seconds otherwise, at background priority and slower
+still while the app is in the background.
+
 ## Matching records to lanes
 
 A `CommandLaneBackend` with a `statusAgent` matches the newest record from that
@@ -73,6 +113,10 @@ agent whose folder is the lane's folder and which came from inside a tmux
 session. A conversation started by hand in the same folder never colours a lane.
 An app can set `AgentLane.statusMatch` to `.lane("<tmux session>")` to match by
 name instead.
+
+A lane whose session a presence source lists (a tmux session, say), or which
+a daemon's session list reports, is alive: it counts as active in the Active
+filter before anyone opens it here.
 
 When a lane's command records which agent session it attached, set
 `sessionIDFile` on the backend to that file. Status is then matched by session

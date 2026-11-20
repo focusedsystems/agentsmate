@@ -382,7 +382,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
             guard let session = store.session(for: lane) else { return false }
             if !query.isEmpty, !session.title.lowercased().contains(query),
                !lane.path.lowercased().contains(query) { return false }
-            if filterAttached, !session.isAttached { return false }
+            if filterAttached, !session.isActive { return false }
             if filterRunning, session.status != .running { return false }
             if filterNeedsYou, !Self.wantsYou(session.status) { return false }
             return true
@@ -404,9 +404,9 @@ public struct AgentLaneSidebar<Accessory: View>: View {
     private var filterBar: some View {
         let all = sessions
         return HStack(spacing: 2) {
-            LaneFilterToggle(symbol: "circle.fill", symbolScale: 0.7, title: "Attached",
-                             help: "Show only \(labels.laneNoun)s attached here",
-                             count: all.filter(\.isAttached).count, isOn: $filterAttached)
+            LaneFilterToggle(symbol: "circle.fill", symbolScale: 0.7, title: "Active",
+                             help: "Show only \(labels.laneNoun)s attached here or running elsewhere",
+                             count: all.filter(\.isActive).count, isOn: $filterAttached)
             LaneFilterToggle(symbol: "bolt.fill", symbolScale: 1, title: "Running",
                              help: "Show only \(labels.laneNoun)s whose agent is working",
                              count: all.filter { $0.status == .running }.count, isOn: $filterRunning)
