@@ -25,7 +25,7 @@ final class LaneSummarizer {
         guard !running.contains(path) else { return }
         running.insert(path)
         let model = model
-        Task.detached(priority: .utility) {
+        Task.detached(priority: .background) {
             let digest = TranscriptDigest.read(path: path)
             let summary = digest.flatMap { Self.summarise($0, binary: binary, model: model) }
             await MainActor.run { [weak self, weak session] in
@@ -55,6 +55,7 @@ final class LaneSummarizer {
 
     nonisolated static func summarise(_ digest: TranscriptDigest, binary: URL, model: String) -> String? {
         let process = Process()
+        process.qualityOfService = .background
         process.executableURL = binary
         // A summary only reads the text it is given. No tools, no MCP
         // servers, no project or user settings that could grant either, and
@@ -80,7 +81,7 @@ final class LaneSummarizer {
         guard (try? process.run()) != nil else { return nil }
         input.fileHandleForWriting.write(Data(prompt(for: digest).utf8))
         try? input.fileHandleForWriting.close()
-        DispatchQueue.global().asyncAfter(deadline: .now() + 60) { if process.isRunning { process.terminate() } }
+        DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + 60) { if process.isRunning { process.terminate() } }
         let data = output.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         guard process.terminationStatus == 0 else { return nil }

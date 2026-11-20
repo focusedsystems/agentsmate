@@ -86,10 +86,16 @@ public final class AgentLaneStore: ObservableObject {
         didSet {
             defaults.set(selectedID, forKey: keys.selectedLane)
             updateShown()
+            if selectedID != oldValue { rowMetadataSelectionChanged() }
         }
     }
     /// The lane shown beside the selected one, when split.
-    @Published public var splitID: AgentLane.ID? { didSet { updateShown() } }
+    @Published public var splitID: AgentLane.ID? {
+        didSet {
+            updateShown()
+            if splitID != oldValue { rowMetadataSelectionChanged() }
+        }
+    }
     /// Whether the lanes are on screen; set by the view that shows them.
     public var isShowing = false { didSet { updateShown() } }
 
@@ -305,55 +311,133 @@ public final class AgentLaneStore: ObservableObject {
 
     // MARK: Row metadata
 
-    private var metadataTimer: Timer?
-    private var pullRequestCache: [String: (date: Date, value: LaneRowMetadata.PullRequest?)] = [:]
-    private var readingMetadata = false
+    private var fullSweepTimer: CadenceTimer?
+    private var visibleSweepTimer: CadenceTimer?
+    private var selectionRefresh: Timer?
+    private var pullRequestCache: [String: RowMetadataSchedule.CachedPullRequest] = [:]
+    private var sweeps = RowMetadataSweeps()
     private let gh = LaneRowMetadataReader.locateGH()
+    private lazy var headWatchers = HeadWatchers { [weak self] head in self?.headChanged(head) }
 
     private func startRowMetadata() {
+        syncHeadWatchers()
         refreshRowMetadata()
-        metadataTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.refreshRowMetadata() }
+        fullSweepTimer = CadenceTimer(interval: RowMetadataSchedule.fullSweep) { [weak self] in
+            self?.refreshRowMetadata()
+        }
+        visibleSweepTimer = CadenceTimer(interval: RowMetadataSchedule.visibleSweep) { [weak self] in
+            self?.refreshVisibleRowMetadata()
         }
     }
 
-    /// Read every lane's branch and ports, and the pull request for each
-    /// branch at most every five minutes, off the main thread.
+    /// Read every lane's branch, ports and pull request, off the main
+    /// thread. Skipped while the last full read is still going. Branches
+    /// also follow each repository's HEAD file as it changes, and the
+    /// selected lanes are read more often than the rest.
     public func refreshRowMetadata() {
-        guard !readingMetadata else { return }
-        readingMetadata = true
-        let jobs = lanes.compactMap { lane -> (String, String, pid_t?)? in
-            guard let session = sessions[lane.id] else { return nil }
-            return (lane.id, session.isStarted ? session.currentDirectory : lane.path, session.shellPID)
+        sweep(.all, lanes: lanes.map(\.id))
+    }
+
+    /// The lanes the person is looking at: the selected one and the split.
+    private var visibleLaneIDs: [AgentLane.ID] {
+        [selectedID, splitID].compactMap { $0 }.reduce(into: []) { if !$0.contains($1) { $0.append($1) } }
+    }
+
+    private func refreshVisibleRowMetadata() {
+        let ids = visibleLaneIDs
+        if !ids.isEmpty { sweep(.lanes, lanes: ids) }
+    }
+
+    /// The selection moved: read its row soon, once rapid cycling settles.
+    private func rowMetadataSelectionChanged() {
+        guard configuration.showsRowMetadata else { return }
+        selectionRefresh?.invalidate()
+        let timer = Timer(timeInterval: 0.4, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshVisibleRowMetadata() }
+        }
+        timer.tolerance = 0.1
+        RunLoop.main.add(timer, forMode: .common)
+        selectionRefresh = timer
+    }
+
+    private func sweep(_ kind: RowMetadataSweeps.Kind, lanes ids: [AgentLane.ID]) {
+        guard configuration.showsRowMetadata, sweeps.begin(kind, lanes: ids) else { return }
+        syncHeadWatchers()
+        let jobs = ids.compactMap { id -> (String, String, pid_t?)? in
+            guard let session = sessions[id] else { return nil }
+            return (id, session.isStarted ? session.currentDirectory : session.lane.path, session.shellPID)
         }
         let cache = pullRequestCache, gh = gh
-        Task.detached(priority: .utility) {
+        // A dispatch queue rather than a task: helpers block while they wait
+        // for one of the two process slots.
+        DispatchQueue.global(qos: .background).async { [weak self] in
             var results: [String: LaneRowMetadata] = [:]
-            var fresh: [String: (date: Date, value: LaneRowMetadata.PullRequest?)] = [:]
+            var fresh: [String: RowMetadataSchedule.CachedPullRequest] = [:]
             for (id, directory, pid) in jobs {
                 var meta = LaneRowMetadata()
                 meta.branch = LaneRowMetadataReader.branch(in: directory)
                 if let pid { meta.ports = LaneRowMetadataReader.listeningPorts(pids: LaneRowMetadataReader.processTree(pid)) }
                 if let branch = meta.branch {
-                    let key = directory + "#" + branch
-                    if let hit = cache[key] ?? fresh[key], Date().timeIntervalSince(hit.date) < 300 {
+                    let key = RowMetadataSchedule.cacheKey(directory: directory, branch: branch)
+                    let hit = fresh[key] ?? cache[key]
+                    if let hit, !RowMetadataSchedule.needsFetch(hit, now: Date()) {
                         meta.pullRequest = hit.value
                     } else {
                         let value = LaneRowMetadataReader.pullRequest(branch: branch, in: directory, gh: gh)
-                        fresh[key] = (Date(), value)
+                        fresh[key] = .init(date: Date(), value: value)
                         meta.pullRequest = value
                     }
                 }
                 results[id] = meta
             }
             let found = results, cached = fresh
-            await MainActor.run { [weak self] in
+            Task { @MainActor [weak self] in
                 guard let self else { return }
                 for (id, meta) in found where self.sessions[id]?.rowMetadata != meta { self.sessions[id]?.rowMetadata = meta }
                 self.pullRequestCache.merge(cached) { _, new in new }
-                self.readingMetadata = false
+                let next = self.sweeps.end(kind)
+                if !next.isEmpty { self.sweep(.lanes, lanes: next) }
             }
         }
+    }
+
+    /// Watch the HEAD file of every lane's repository.
+    private func syncHeadWatchers() {
+        guard configuration.showsRowMetadata else { return }
+        var heads: [AgentLane.ID: URL] = [:]
+        for (id, session) in sessions {
+            let directory = session.isStarted ? session.currentDirectory : session.lane.path
+            heads[id] = LaneRowMetadataReader.headFile(for: directory)
+        }
+        headWatchers.watch(heads)
+    }
+
+    private func laneDirectoryChanged(_ session: AgentLaneSession) {
+        guard configuration.showsRowMetadata else { return }
+        syncHeadWatchers()
+        if let head = headWatchers.head(of: session.id) { headChanged(head) } else { branchChanged(session.id, to: nil) }
+    }
+
+    /// A HEAD file changed: update the branch of every lane in that
+    /// repository, and look up a pull request for a new branch.
+    private func headChanged(_ head: URL) {
+        let branch = LaneRowMetadataReader.branch(headFile: head)
+        for id in headWatchers.lanes(watching: head) { branchChanged(id, to: branch) }
+    }
+
+    private func branchChanged(_ id: AgentLane.ID, to branch: String?) {
+        guard let session = sessions[id], session.rowMetadata.branch != branch else { return }
+        var meta = session.rowMetadata
+        meta.branch = branch
+        meta.pullRequest = nil
+        var fetch = false
+        if let branch {
+            let directory = session.isStarted ? session.currentDirectory : session.lane.path
+            let hit = pullRequestCache[RowMetadataSchedule.cacheKey(directory: directory, branch: branch)]
+            if let hit, !RowMetadataSchedule.needsFetch(hit, now: Date()) { meta.pullRequest = hit.value } else { fetch = true }
+        }
+        session.rowMetadata = meta
+        if fetch { sweep(.lanes, lanes: [id]) }
     }
 
     /// Add a backend, or replace one with the same id. Lanes already
@@ -757,8 +841,11 @@ public final class AgentLaneStore: ObservableObject {
             guard let self, self.layout.assignments[id] == nil, self.layout.section(of: lane) != section else { return }
             self.layout.move(id, to: section)
         }
+        session.onDirectoryChange = { [weak self] session in self?.laneDirectoryChanged(session) }
         applyIconOverride(to: session)
         sessions[lane.id] = session
+        session.isSelected = id == selectedID || id == splitID
+        session.isShown = isShowing && session.isSelected
     }
 
     /// Show a lane, attaching it the first time or after it ended. Opening a
@@ -998,7 +1085,8 @@ public final class AgentLaneStore: ObservableObject {
 
     private func updateShown() {
         for (id, session) in sessions {
-            session.isShown = isShowing && (id == selectedID || id == splitID)
+            session.isSelected = id == selectedID || id == splitID
+            session.isShown = isShowing && session.isSelected
             if session.isShown { notifier?.clear(id) }
         }
     }
