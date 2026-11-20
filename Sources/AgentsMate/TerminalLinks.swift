@@ -37,7 +37,8 @@ public enum TerminalLinks {
     /// character per cell. Only an explicit `http://` or `https://` counts;
     /// the URL ends at whitespace, quotes or angle brackets, and loses
     /// trailing punctuation and closing brackets it did not open. A URL that
-    /// wraps onto the next row is cut at the row's end.
+    /// wraps onto the next row is cut at the row's end; use
+    /// `detectedURL(inWrappedRows:row:column:)` for a soft-wrapped line.
     public static func detectedURL(in row: [Character], at column: Int) -> URL? {
         guard row.indices.contains(column), isURLCharacter(row[column]) else { return nil }
         var start = column
@@ -71,6 +72,16 @@ public enum TerminalLinks {
               let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
               let host = url.host, !host.isEmpty else { return nil }
         return url
+    }
+
+    /// The plain URL at `column` of `rows[row]`, where `rows` are the
+    /// screen rows of one logical line: every row after the first is a soft
+    /// wrap of the one before it, so the rows join without a break. Callers
+    /// pass only rows the terminal marked as wrapped, never a hard break.
+    public static func detectedURL(inWrappedRows rows: [[Character]], row: Int, column: Int) -> URL? {
+        guard rows.indices.contains(row), rows[row].indices.contains(column) else { return nil }
+        let offset = rows[..<row].reduce(0) { $0 + $1.count } + column
+        return detectedURL(in: Array(rows.joined()), at: offset)
     }
 
     /// Characters a printed URL may hold: printable ASCII but space,

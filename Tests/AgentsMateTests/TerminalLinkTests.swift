@@ -55,6 +55,37 @@ final class TerminalLinkTests: XCTestCase {
         XCTAssertEqual(detect("→https://example.com/a→", column: 4), "https://example.com/a")
     }
 
+    private func detect(wrapped rows: [String], row: Int, column: Int) -> String? {
+        TerminalLinks.detectedURL(inWrappedRows: rows.map(Array.init), row: row, column: column)?.absoluteString
+    }
+
+    func testJoinsAURLWrappedAcrossTwoRows() {
+        let rows = ["PR: https://example.c", "om/org/repo/pull/42  "]
+        let url = "https://example.com/org/repo/pull/42"
+        XCTAssertEqual(detect(wrapped: rows, row: 0, column: 4), url)
+        XCTAssertEqual(detect(wrapped: rows, row: 0, column: 20), url)
+        XCTAssertEqual(detect(wrapped: rows, row: 1, column: 0), url)
+        XCTAssertEqual(detect(wrapped: rows, row: 1, column: 18), url)
+        XCTAssertNil(detect(wrapped: rows, row: 1, column: 20))
+        XCTAssertNil(detect(wrapped: rows, row: 0, column: 1))
+    }
+
+    func testJoinsAURLWrappedAcrossThreeRows() {
+        let rows = ["see https://", "example.com/items/1", "23/edit). done"]
+        let url = "https://example.com/items/123/edit"
+        XCTAssertEqual(detect(wrapped: rows, row: 0, column: 6), url)
+        XCTAssertEqual(detect(wrapped: rows, row: 1, column: 9), url)
+        XCTAssertEqual(detect(wrapped: rows, row: 2, column: 1), url)
+        XCTAssertNil(detect(wrapped: rows, row: 2, column: 8), "trimmed bracket and the next word are not the link")
+        XCTAssertNil(detect(wrapped: rows, row: 2, column: 11))
+    }
+
+    func testWrappedRowsKeepTheSchemeRule() {
+        XCTAssertNil(detect(wrapped: ["ftp://exampl", "e.com/a"], row: 1, column: 2))
+        XCTAssertNil(detect(wrapped: ["abc"], row: 1, column: 0))
+        XCTAssertNil(detect(wrapped: ["abc"], row: 0, column: 9))
+    }
+
     func testReadsOSC8Payloads() {
         XCTAssertEqual(TerminalLinks.hyperlinkURL(fromPayload: ";https://example.com/a")?.absoluteString, "https://example.com/a")
         XCTAssertEqual(TerminalLinks.hyperlinkURL(fromPayload: "id=7;https://example.com/a;b")?.absoluteString, "https://example.com/a;b")
@@ -131,6 +162,24 @@ final class TerminalLinkTests: XCTestCase {
         XCTAssertNil(view.link(atColumn: 2, row: 0))
         XCTAssertEqual(view.link(atColumn: 2, row: 1)?.absoluteString, "https://example.com/osc")
         XCTAssertNil(view.link(atColumn: 7, row: 1))
+    }
+
+    /// A real terminal 20 columns wide: a URL printed past the edge wraps
+    /// and is found whole from either row, while one ending at a hard line
+    /// break leaves the next line alone.
+    @MainActor
+    func testFindsWrappedURLsInTheBufferButNotAcrossHardBreaks() {
+        let view = AgentTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 400))
+        view.getTerminal().resize(cols: 20, rows: 10)
+        view.feed(text: "go https://example.com/a/b/c/d/e/f/g/h/i/j/k\r\n")
+        let url = "https://example.com/a/b/c/d/e/f/g/h/i/j/k"
+        XCTAssertEqual(view.link(atColumn: 5, row: 0)?.absoluteString, url)
+        XCTAssertEqual(view.link(atColumn: 3, row: 1)?.absoluteString, url)
+        XCTAssertEqual(view.link(atColumn: 1, row: 2)?.absoluteString, url)
+
+        view.feed(text: "https://example.com\r\n/more-text-here\r\n")
+        XCTAssertEqual(view.link(atColumn: 4, row: 3)?.absoluteString, "https://example.com")
+        XCTAssertNil(view.link(atColumn: 3, row: 4))
     }
 }
 
