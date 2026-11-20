@@ -56,8 +56,14 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
 
     /// One line on what the agent is working on, when summaries are on.
     @Published public internal(set) var summary: String?
-    /// The person's last few prompts in this lane, when summaries are on.
+    /// The person's last few prompts in this lane, from its conversation file.
     @Published public internal(set) var recentPrompts: [String] = []
+    /// The agent's last reply, from its conversation file.
+    @Published public internal(set) var lastReply: String?
+    /// Pull request links the agent posted in its replies, oldest first.
+    @Published public internal(set) var pullRequestLinks: [URL] = []
+    /// Background shells the agent started that have not finished.
+    @Published public internal(set) var openBackgroundTasks: [LaneTranscript.BackgroundTask] = []
     /// What a script in the lane last said about its work.
     @Published public internal(set) var note: LaneNote?
     /// Branch, pull request and ports, when the store reads them.
@@ -80,6 +86,17 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
 
     /// The lane's session runs with no terminal attached anywhere.
     @Published public private(set) var isOrphan = false
+    /// A presence source lists the lane's session as running.
+    @Published public private(set) var isPresent = false
+
+    /// The lane's session is running somewhere: a presence source or a
+    /// daemon's session list has it, whether or not it is attached here.
+    public var isAlive: Bool {
+        isPresent || (record.map { $0.isPolled && $0.state != .ended } ?? false)
+    }
+
+    /// Attached here, or running somewhere: what the Active filter shows.
+    public var isActive: Bool { isAttached || isAlive }
     /// Bumped on every start, so SwiftUI re-hosts the new view.
     @Published public private(set) var generation = 0
     @Published public var wantsFocus = false
@@ -193,6 +210,19 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
 
     func update(orphan: Bool) {
         if orphan != isOrphan { isOrphan = orphan }
+    }
+
+    func update(present: Bool) {
+        if present != isPresent { isPresent = present }
+    }
+
+    /// Take what the conversation file says.
+    func update(transcript: LaneTranscript) {
+        let prompts = Array(transcript.prompts.suffix(3))
+        if prompts != recentPrompts { recentPrompts = prompts }
+        if transcript.lastReply != lastReply { lastReply = transcript.lastReply }
+        if transcript.pullRequestLinks != pullRequestLinks { pullRequestLinks = transcript.pullRequestLinks }
+        if transcript.openBackgroundTasks != openBackgroundTasks { openBackgroundTasks = transcript.openBackgroundTasks }
     }
 
     /// Takes effect the next time the lane is attached.

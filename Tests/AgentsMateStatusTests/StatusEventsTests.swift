@@ -21,10 +21,11 @@ final class StatusEventsTests: XCTestCase {
         let permission = claude(#"{"hook_event_name":"Notification","notification_type":"permission_prompt","message":"Claude needs your permission to use Bash"}"#)
         XCTAssertEqual(permission?.state, .permissionRequested)
         XCTAssertEqual(permission?.message, "Claude needs your permission to use Bash")
-        XCTAssertEqual(claude(#"{"hook_event_name":"Notification","notification_type":"idle_prompt"}"#)?.state, .waitingForInput)
+        XCTAssertNil(claude(#"{"hook_event_name":"Notification","notification_type":"idle_prompt"}"#))
+        XCTAssertEqual(claude(#"{"hook_event_name":"Notification","notification_type":"elicitation_dialog"}"#)?.state, .waitingForInput)
         XCTAssertNil(claude(#"{"hook_event_name":"Notification","notification_type":"auth_success"}"#))
         XCTAssertEqual(claude(#"{"hook_event_name":"Notification","message":"Claude needs your permission to use Edit"}"#)?.state, .permissionRequested)
-        XCTAssertEqual(claude(#"{"hook_event_name":"Notification","message":"Claude is waiting for your input"}"#)?.state, .waitingForInput)
+        XCTAssertNil(claude(#"{"hook_event_name":"Notification","message":"Claude is waiting for your input"}"#))
     }
 
     func testClaudeRecordCarriesLaneAndFolder() throws {
@@ -142,5 +143,76 @@ final class LaneStatusPickTests: XCTestCase {
         XCTAssertEqual(match.find(in: [permission, idle])?.state, .permissionRequested)
         XCTAssertEqual(match.find(in: [permission, busy])?.state, .running)
         XCTAssertEqual(match.find(in: [idle])?.state, .done)
+    }
+}
+
+final class TurnEndTests: XCTestCase {
+    private func stop(_ fields: [String: Any], transcript: LaneTranscript? = nil) -> LaneStatus? {
+        var object = fields
+        object["hook_event_name"] = "Stop"
+        let data = try! JSONSerialization.data(withJSONObject: object)
+        return StatusEvents.claude(hookInput: data, lane: "l", transcript: { _ in transcript })
+    }
+
+    func testStopOnAQuestionWaitsForThePerson() {
+        let status = stop(["last_assistant_message": "Tests pass.\n\nShould I merge it?", "background_tasks": []])
+        XCTAssertEqual(status?.state, .waitingForInput)
+        XCTAssertEqual(status?.message, "Should I merge it?")
+    }
+
+    func testStopWithABackgroundShellStaysRunning() {
+        let tasks: [[String: Any]] = [["id": "b1", "type": "shell", "status": "running", "description": "Run tests"]]
+        XCTAssertEqual(stop(["last_assistant_message": "Started the tests.", "background_tasks": tasks])?.state, .running)
+        // Other kinds of background work, and finished shells, do not count.
+        let others: [[String: Any]] = [["id": "m1", "type": "monitor", "status": "running", "description": "watch"],
+                                       ["id": "b2", "type": "shell", "status": "completed", "description": "x"]]
+        XCTAssertEqual(stop(["last_assistant_message": "Watching.", "background_tasks": others])?.state, .done)
+    }
+
+    func testAQuestionWinsOverAnOpenShell() {
+        let tasks: [[String: Any]] = [["id": "b1", "type": "shell", "status": "running", "description": "x"]]
+        XCTAssertEqual(stop(["last_assistant_message": "Which branch?", "background_tasks": tasks])?.state, .waitingForInput)
+    }
+
+    func testStopOtherwiseIsDone() {
+        let status = stop(["last_assistant_message": "All done.", "background_tasks": []])
+        XCTAssertEqual(status?.state, .done)
+        XCTAssertNil(status?.message)
+        XCTAssertEqual(stop([:])?.state, .done)
+    }
+
+    func testOlderHooksFallBackToTheTranscript() {
+        let asking = Fixture.read([Fixture.prompt("Ship it"), Fixture.reply("Ready. Merge now?")])
+        XCTAssertEqual(stop(["transcript_path": "/t.jsonl"], transcript: asking)?.message, "Merge now?")
+        let shell = Fixture.read([Fixture.backgroundBash("u1"), Fixture.backgroundStarted("u1", task: "b1"), Fixture.reply("Running in the background.")])
+        XCTAssertEqual(stop(["transcript_path": "/t.jsonl"], transcript: shell)?.state, .running)
+        let finished = Fixture.read([Fixture.backgroundBash("u1"), Fixture.backgroundStarted("u1", task: "b1"),
+                                     Fixture.notification(task: "b1", useID: "u1"), Fixture.reply("Tests passed.")])
+        XCTAssertEqual(stop(["transcript_path": "/t.jsonl"], transcript: finished)?.state, .done)
+    }
+
+    func testTheTranscriptIsReadOnlyWhenTheHookLeavesSomethingOut() {
+        var reads = 0
+        let data = try! JSONSerialization.data(withJSONObject: ["hook_event_name": "Stop", "transcript_path": "/t.jsonl",
+                                                                "last_assistant_message": "Done.", "background_tasks": []])
+        _ = StatusEvents.claude(hookInput: data, lane: nil, transcript: { _ in reads += 1; return nil })
+        XCTAssertEqual(reads, 0)
+        _ = StatusEvents.claude(hookInput: Data(#"{"hook_event_name":"PostToolUse","transcript_path":"/t.jsonl"}"#.utf8), lane: nil,
+                                transcript: { _ in reads += 1; return nil })
+        XCTAssertEqual(reads, 0)
+    }
+
+    func testIdleReminderLeavesTheStateAlone() {
+        XCTAssertNil(StatusEvents.claude(hookInput: Data(#"{"hook_event_name":"Notification","notification_type":"idle_prompt","message":"Claude is waiting for your input"}"#.utf8), lane: "l"))
+        XCTAssertNil(StatusEvents.claude(hookInput: Data(#"{"hook_event_name":"Notification","message":"Claude is waiting for your input"}"#.utf8), lane: "l"))
+    }
+
+    func testCodexTurnEndingOnAQuestion() {
+        let asking = StatusEvents.codex(notifyPayload: Data(#"{"type":"agent-turn-complete","thread-id":"t1","last-assistant-message":"Built it.\nShall I push?"}"#.utf8), lane: "cx")
+        XCTAssertEqual(asking?.state, .waitingForInput)
+        XCTAssertEqual(asking?.message, "Shall I push?")
+        XCTAssertEqual(asking?.sessionID, "t1")
+        let done = StatusEvents.codex(notifyPayload: Data(#"{"type":"agent-turn-complete","last-assistant-message":"Pushed."}"#.utf8), lane: "cx")
+        XCTAssertEqual(done?.state, .done)
     }
 }
