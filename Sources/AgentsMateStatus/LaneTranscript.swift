@@ -389,24 +389,26 @@ public struct LaneTranscript: Equatable, Sendable {
     // MARK: Pull requests
 
     private static let pullRequestPattern: NSRegularExpression = {
-        let segment = #"[^\s/<>()\[\]"'`]+"#
+        let label = PullRequestLink.label
+        let name = PullRequestLink.name
         let pattern = [
-            #"https://github\.com/\#(segment)/\#(segment)/pull/\d+"#,
-            #"https://dev\.azure\.com/\#(segment)/\#(segment)/_git/\#(segment)/pullrequest/\d+"#,
-            #"https://\#(segment)\.visualstudio\.com/(?:\#(segment)/)?\#(segment)/_git/\#(segment)/pullrequest/\d+"#,
+            #"https://github\.com/\#(label)/\#(name)/pull/\d+"#,
+            #"https://dev\.azure\.com/\#(label)/\#(name)/_git/\#(name)/pullrequest/\d+"#,
+            #"https://\#(label)\.visualstudio\.com/(?:\#(label)/)?\#(name)/_git/\#(name)/pullrequest/\d+"#,
         ].joined(separator: "|")
         // The pattern is a constant, so it always compiles.
         return try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
     }()
 
-    /// The GitHub and Azure DevOps pull request links in `text`, once each.
+    /// The GitHub and Azure DevOps pull request links in `text`, once each,
+    /// keeping only those ``PullRequestLink/isTrusted(_:)`` accepts.
     public static func pullRequestLinks(in text: String) -> [URL] {
         guard text.contains("/pull/") || text.localizedCaseInsensitiveContains("/pullrequest/") else { return [] }
         let range = NSRange(text.startIndex..., in: text)
         var out: [URL] = []
         for match in pullRequestPattern.matches(in: text, range: range) {
             guard let r = Range(match.range, in: text), let url = URL(string: String(text[r])),
-                  !out.contains(url) else { continue }
+                  PullRequestLink.isTrusted(url), !out.contains(url) else { continue }
             out.append(url)
         }
         return out

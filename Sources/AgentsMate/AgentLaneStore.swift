@@ -67,6 +67,13 @@ public final class AgentLaneStore: ObservableObject {
         /// What Reopen As offers, in order; the first four get ⌃⌥1–⌃⌥4.
         /// Each names a registered backend.
         public var reopenChoices: [LaneReopenChoice]
+        /// The id of the app's inbox window scene (a `Window` holding
+        /// ``AgentInboxView``). Set, the sidebar's foot gets an inbox button
+        /// with a badge, and the Agent menu an Agent Inbox item.
+        public var inboxWindowID: String?
+        /// The id of the app's ``AgentMessageWindow`` scene. Set, Message
+        /// Agent opens that window; nil keeps the sidebar's alert.
+        public var messageWindowID: String?
 
         public init(termProgram: String, environment: [String: String] = [:],
                     baseFontSize: CGFloat = NSFont.systemFontSize,
@@ -79,7 +86,10 @@ public final class AgentLaneStore: ObservableObject {
                     showsRowMetadata: Bool = false, notifies: Bool = false, summaryModel: String? = nil,
                     usageSources: [any AgentUsageSource] = [], reopenChoices: [LaneReopenChoice] = [],
                     codexSummaryModel: String? = nil, summarizers: [any LaneSummarizing] = [],
-                    summaryCacheFile: URL? = Configuration.defaultSummaryCacheFile, rowStyle: LaneRowStyle = .standard) {
+                    summaryCacheFile: URL? = Configuration.defaultSummaryCacheFile, rowStyle: LaneRowStyle = .standard,
+                    inboxWindowID: String? = nil, messageWindowID: String? = nil) {
+            self.inboxWindowID = inboxWindowID
+            self.messageWindowID = messageWindowID
             self.codexSummaryModel = codexSummaryModel
             self.summarizers = summarizers
             self.summaryCacheFile = summaryCacheFile
@@ -158,7 +168,7 @@ public final class AgentLaneStore: ObservableObject {
     }
 
     /// Start a lane's process, letting the app prepare it first.
-    private func start(_ session: AgentLaneSession) {
+    func start(_ session: AgentLaneSession) {
         if !session.isAttached, let willStartLane, let index = lanes.firstIndex(where: { $0.id == session.id }) {
             let prepared = willStartLane(lanes[index])
             if prepared != lanes[index] {
@@ -292,6 +302,16 @@ public final class AgentLaneStore: ObservableObject {
 
     // MARK: Attention
 
+    /// The lane Message Agent writes to; the message window's picker
+    /// shows and changes it.
+    @Published public var messageTarget: AgentLane.ID?
+    /// The lane the sidebar's message alert is open for, when the app has
+    /// no message window.
+    @Published var messageAlertTarget: AgentLane.ID?
+    /// Opens a pull request link from the inbox. Nil opens it in the
+    /// default browser.
+    public var onOpenPullRequest: ((URL) -> Void)?
+
     private var notifier: LaneNotifier?
     /// The agents' usage limits, when the app gave usage sources.
     public private(set) var usage: AgentUsageModel?
@@ -332,7 +352,7 @@ public final class AgentLaneStore: ObservableObject {
         updateBadge()
     }
 
-    private func updateBadge() {
+    func updateBadge() {
         guard configuration.notifies, LaneNotifier.isAvailable else { return }
         let count = unreadLanes.count
         NSApp.dockTile.badgeLabel = count > 0 ? String(count) : nil
