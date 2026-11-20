@@ -191,7 +191,8 @@ public struct AgentLaneSidebar<Accessory: View>: View {
             if let session = store.session(for: lane) {
                 LaneRow(session: session,
                         index: displayIndex[lane.id] ?? 99,
-                        isSplit: lane.id == store.splitID)
+                        isSplit: lane.id == store.splitID,
+                        style: store.configuration.rowStyle)
                     .tag(lane.id)
             }
         }
@@ -364,6 +365,12 @@ public struct AgentLaneSidebar<Accessory: View>: View {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(session.currentDirectory, forType: .string)
         }
+        if store.summariesAvailable {
+            Button("Copy Summary") { store.copySummary(of: lane.id) }
+                .disabled(session.summary?.isEmpty ?? true)
+        }
+        Button("Copy Last Prompt") { store.copyLastPrompt(of: lane.id) }
+            .disabled(session.recentPrompts.isEmpty)
         Button("Show in Finder") {
             NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: session.currentDirectory)])
         }
@@ -380,13 +387,24 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         let query = searchText.trimmingCharacters(in: .whitespaces).lowercased()
         return store.lanes.filter { lane in
             guard let session = store.session(for: lane) else { return false }
-            if !query.isEmpty, !session.title.lowercased().contains(query),
-               !lane.path.lowercased().contains(query) { return false }
+            if !query.isEmpty, !Self.matches(session, query: query) { return false }
             if filterAttached, !session.isActive { return false }
             if filterRunning, session.status != .running { return false }
             if filterNeedsYou, !Self.wantsYou(session.status) { return false }
             return true
         }
+    }
+
+    /// Whether a search finds the lane: by its name, folder, summary or the
+    /// person's recent prompts in it.
+    static func matches(_ session: AgentLaneSession, query: String) -> Bool {
+        matches(query: query, in: [session.title, session.lane.path, session.summary ?? ""] + session.recentPrompts)
+    }
+
+    nonisolated static func matches(query: String, in fields: [String]) -> Bool {
+        let query = query.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else { return true }
+        return fields.contains { $0.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil }
     }
 
     static func wantsYou(_ status: LaneDisplayStatus) -> Bool {
@@ -580,19 +598,37 @@ struct LaneRow: View {
     @ObservedObject var session: AgentLaneSession
     let index: Int
     let isSplit: Bool
+    var style: LaneRowStyle = .standard
 
     var body: some View {
         HStack(spacing: 8) {
             LaneIconView(icon: session.icon, tintHex: session.tintHex, size: 16)
                 .frame(width: 20)
                 .overlay(alignment: .bottomTrailing) { statusDot.offset(x: 3, y: 3) }
-            VStack(alignment: .leading, spacing: 1) {
-                Text(session.title).lineLimit(1)
-                Text(subtitle)
-                    .font(.caption)
-                    .foregroundStyle(isActive ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
-                    .lineLimit(1)
-                    .truncationMode(.head)
+            if let summary = leadingSummary {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(summary).lineLimit(2)
+                    HStack(spacing: 4) {
+                        Text(session.title)
+                            .font(.caption.weight(.semibold))
+                            .lineLimit(1)
+                            .layoutPriority(1)
+                        Text(subtitle)
+                            .font(.caption)
+                            .foregroundStyle(isActive ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                            .lineLimit(1)
+                            .truncationMode(.head)
+                    }
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(session.title).lineLimit(1)
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(isActive ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                        .lineLimit(1)
+                        .truncationMode(.head)
+                }
             }
             Spacer(minLength: 2)
             if let pr = session.rowMetadata.pullRequest {
@@ -629,8 +665,20 @@ struct LaneRow: View {
         .help(helpText)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(session.title)
-        .accessibilityValue(session.isOrphan ? "Running, nothing attached"
-                            : session.needsAttention ? "\(session.status.title), new" : session.status.title)
+        .accessibilityValue(accessibilityValue)
+    }
+
+    /// The summary the row leads with, in the summary-first style.
+    private var leadingSummary: String? {
+        guard style == .summaryFirst, let summary = session.summary, !summary.isEmpty else { return nil }
+        return summary
+    }
+
+    private var accessibilityValue: String {
+        let status = session.isOrphan ? "Running, nothing attached"
+            : session.needsAttention ? "\(session.status.title), new" : session.status.title
+        guard let summary = session.summary, !summary.isEmpty else { return status }
+        return status + ", " + summary
     }
 
     private var isActive: Bool {
@@ -648,7 +696,9 @@ struct LaneRow: View {
 
     private var statusSubtitle: String {
         if let text = session.note?.text { return text }
-        if let summary = session.summary, session.status != .running { return summary }
+        // A row that leads with the summary has it already; a standard row
+        // shows it once the agent stops working.
+        if leadingSummary == nil, let summary = session.summary, session.status != .running { return summary }
         if session.isOrphan, !session.isAttached { return "Running, nothing attached" }
         if session.lane.isClosable, session.status == .attached || session.status == .detached {
             return session.shortDirectory
@@ -667,6 +717,7 @@ struct LaneRow: View {
 
     private var helpText: String {
         var lines = ["\(session.title) — \(session.status.title)", session.shortDirectory]
+        if let summary = session.summary, !summary.isEmpty { lines.append(summary) }
         if !session.recentPrompts.isEmpty {
             lines.append("Recent requests:")
             lines.append(contentsOf: session.recentPrompts.map { "• " + String($0.prefix(140)) })
@@ -676,7 +727,19 @@ struct LaneRow: View {
             lines.append(contentsOf: note.log.suffix(5))
         }
         if let message = session.record?.message, !message.isEmpty { lines.append(message) }
+        if let reply = Self.hoverReply(session.lastReply) {
+            lines.append("Last reply:")
+            lines.append(reply)
+        }
         return lines.joined(separator: "\n")
+    }
+
+    /// The agent's last reply for the hover: one paragraph, cut short.
+    static func hoverReply(_ reply: String?, limit: Int = 400) -> String? {
+        guard let reply else { return nil }
+        let flat = reply.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        guard !flat.isEmpty else { return nil }
+        return flat.count > limit ? String(flat.prefix(limit)) + "…" : flat
     }
 
     /// Green while the agent works, orange when it asks permission, blue

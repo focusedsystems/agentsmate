@@ -138,6 +138,12 @@ public struct AgentLaneCommands: Commands {
                 }
             }
             Divider()
+            if store.summariesAvailable {
+                Button("Copy Summary") { if let id = store.selectedID { store.copySummary(of: id) } }
+                    .disabled(store.selected?.summary?.isEmpty ?? true)
+            }
+            Button("Copy Last Prompt") { if let id = store.selectedID { store.copyLastPrompt(of: id) } }
+                .disabled(store.selected?.recentPrompts.isEmpty ?? true)
             Button("Show \(noun) in Finder") {
                 if let path = store.selected?.currentDirectory {
                     NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])

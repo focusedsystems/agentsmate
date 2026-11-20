@@ -44,6 +44,42 @@ agent's terminal title.
 
 Backends and the case for each: [docs/backends.md](docs/backends.md).
 
+## Summaries
+
+Set `Configuration.summaryModel` (such as `"haiku"`) to give each row a one-line
+summary that leads with the work, then where it stands: "Billing export: CSV
+writer done, upload step next". Each lane is summarised by its own agent, as a
+short call on the person's own account:
+
+- Claude lanes run `claude -p --model <summaryModel>` with no tools, MCP
+  servers, hooks, slash commands or saved session, and only local settings.
+- Codex lanes run `codex exec --ignore-user-config --ephemeral --sandbox
+  read-only` with hooks and the shell tool off, at low reasoning effort, on
+  `Configuration.codexSummaryModel` (nil is Codex's default model).
+
+Both run at background priority in an empty folder with a clean environment
+and a timeout. At most two run at once. A lane is summarised again when a new
+prompt arrives, and at most every three minutes while only the reply changes.
+A failure (not signed in, a rate limit, a missing CLI) pauses that agent's
+summaries for ten minutes. Summaries are kept in
+`~/Library/Caches/<bundle id>/agent-summaries.json` (`summaryCacheFile`), with
+fingerprints of the prompt and reply they came from and no conversation text,
+so a relaunch shows the last line at once. Apps can add or replace a summarizer
+for an agent with `Configuration.summarizers` and the `LaneSummarizing`
+protocol.
+
+`AgentLaneSettingsSection` shows a "Summarize sessions" switch while
+`summaryModel` is set, saved under `AgentsModeKeys.summarizeSessions` and on by
+default; `store.summariesEnabled` is the same switch. Nil `summaryModel` keeps
+summaries off whatever the switch says.
+
+`Configuration.rowStyle` picks the row layout. `.standard` (the default) keeps
+the name first and shows the summary as the status line while the agent is not
+working. `.summaryFirst` leads every row with the summary and puts the name in
+semibold beneath it. Search matches the summary and the person's recent
+prompts, the row's hover adds the agent's last reply, and the row's menu and
+the Agent menu have Copy Summary and Copy Last Prompt.
+
 ## Keeping the agent CLIs current
 
 The `AgentsMateUpdates` product finds the Claude Code and Codex command-line

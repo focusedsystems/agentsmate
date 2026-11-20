@@ -40,10 +40,27 @@ public final class AgentLaneStore: ObservableObject {
         /// Post a macOS notification when a lane wants the person while
         /// they are looking elsewhere, and badge the Dock with the count.
         public var notifies: Bool
-        /// The model that writes one-line lane summaries when a turn ends,
-        /// such as "haiku". Nil turns summaries off; each one is a short
-        /// call on the person's own Claude Code account.
+        /// The Claude model that writes one-line lane summaries, such as
+        /// "haiku". Nil turns summaries off. Each lane is summarised by its
+        /// own agent: Claude lanes by this model, Codex lanes by
+        /// ``codexSummaryModel``, each a short call on the person's own
+        /// account. The person can still turn them off in Settings.
         public var summaryModel: String?
+        /// The Codex model for Codex lanes' summaries; nil is Codex's default,
+        /// at low reasoning effort.
+        public var codexSummaryModel: String?
+        /// Summarizers that replace the built-in one for their agent, or add
+        /// one for another agent. They run only while ``summaryModel`` is set.
+        public var summarizers: [any LaneSummarizing]
+        /// Where summaries are kept between launches; nil keeps them in
+        /// memory only.
+        public var summaryCacheFile: URL?
+        /// How each sidebar row is laid out.
+        public var rowStyle: LaneRowStyle
+
+        /// `~/Library/Caches/<bundle id>/agent-summaries.json`, or the process
+        /// name in place of the bundle id when there is none.
+        public static var defaultSummaryCacheFile: URL { LaneSummaryCache.defaultURL() }
         /// Where to read the agents' usage limits; the lane sidebar shows a
         /// meter at its foot when there are any.
         public var usageSources: [any AgentUsageSource]
@@ -60,7 +77,13 @@ public final class AgentLaneStore: ObservableObject {
                         .appendingPathComponent("agentsmate-sessions", isDirectory: true),
                     cycleSkipsUnstarted: Bool = false, workspaceFile: URL? = nil,
                     showsRowMetadata: Bool = false, notifies: Bool = false, summaryModel: String? = nil,
-                    usageSources: [any AgentUsageSource] = [], reopenChoices: [LaneReopenChoice] = []) {
+                    usageSources: [any AgentUsageSource] = [], reopenChoices: [LaneReopenChoice] = [],
+                    codexSummaryModel: String? = nil, summarizers: [any LaneSummarizing] = [],
+                    summaryCacheFile: URL? = Configuration.defaultSummaryCacheFile, rowStyle: LaneRowStyle = .standard) {
+            self.codexSummaryModel = codexSummaryModel
+            self.summarizers = summarizers
+            self.summaryCacheFile = summaryCacheFile
+            self.rowStyle = rowStyle
             self.reopenChoices = reopenChoices
             self.usageSources = usageSources
             self.summaryModel = summaryModel
@@ -199,7 +222,7 @@ public final class AgentLaneStore: ObservableObject {
         if statusFeed != nil { startTranscripts() }
         if configuration.showsRowMetadata { startRowMetadata() }
         if configuration.notifies { notifier = LaneNotifier(store: self) }
-        if let model = configuration.summaryModel { summarizer = LaneSummarizer(model: model) }
+        startSummaries()
         if !configuration.usageSources.isEmpty { usage = AgentUsageModel(sources: configuration.usageSources) }
     }
 
@@ -246,7 +269,7 @@ public final class AgentLaneStore: ObservableObject {
     @Published public var paletteVisible = false
 
     /// Lanes matching `query`, best first: every word must appear in the
-    /// name, folder, branch or section; a match at the start of the name
+    /// name, folder, branch, section or summary; a match at the start of the name
     /// ranks first, then recently active lanes.
     public func paletteResults(_ query: String) -> [AgentLane] {
         let words = query.lowercased().split(separator: " ").map(String.init)
@@ -254,7 +277,8 @@ public final class AgentLaneStore: ObservableObject {
         guard !words.isEmpty else { return ordered }
         func haystack(_ lane: AgentLane) -> String {
             let session = sessions[lane.id]
-            return [session?.title ?? lane.title, lane.path, session?.rowMetadata.branch ?? "", layout.section(of: lane) ?? ""]
+            return [session?.title ?? lane.title, lane.path, session?.rowMetadata.branch ?? "", layout.section(of: lane) ?? "",
+                    session?.summary ?? ""]
                 .joined(separator: " ").lowercased()
         }
         let hits = ordered.filter { lane in let text = haystack(lane); return words.allSatisfy(text.contains) }
@@ -271,7 +295,6 @@ public final class AgentLaneStore: ObservableObject {
     private var notifier: LaneNotifier?
     /// The agents' usage limits, when the app gave usage sources.
     public private(set) var usage: AgentUsageModel?
-    private var summarizer: LaneSummarizer?
 
     /// The lanes that want the person and that they have not looked at.
     public var unreadLanes: [AgentLane] {
@@ -849,6 +872,7 @@ public final class AgentLaneStore: ObservableObject {
         }
         session.onDirectoryChange = { [weak self] session in self?.laneDirectoryChanged(session) }
         applyIconOverride(to: session)
+        if summariesEnabled { session.summary = summaries?.summary(for: id) }
         sessions[lane.id] = session
         session.isSelected = id == selectedID || id == splitID
         session.isShown = isShowing && session.isSelected
@@ -1061,8 +1085,6 @@ public final class AgentLaneStore: ObservableObject {
         for session in sessions.values {
             let match = session.lane.statusMatch ?? session.backend.statusMatch(for: session.lane)
             session.update(record: match.find(in: records))
-            // A summary is written when a turn has ended, not while it runs.
-            if let summarizer, let state = session.record?.state, state.wantsAttention { summarizer.refresh(session) }
         }
         objectWillChange.send()
     }
@@ -1121,12 +1143,81 @@ public final class AgentLaneStore: ObservableObject {
                 guard let self else { return }
                 self.readingTranscripts = false
                 self.transcripts = cache
+                var selectedChanged = false
                 for (id, source) in wanted {
                     guard let path = cache.path(for: source), let transcript = changed[path] else { continue }
                     self.sessions[id]?.update(transcript: transcript)
+                    self.summarize(id, transcript: transcript, path: path)
+                    if id == self.selectedID { selectedChanged = true }
                 }
+                // The menu bar's Copy Last Prompt follows the selected lane.
+                if selectedChanged { self.objectWillChange.send() }
+                self.summaries?.tick()
             }
         }
+    }
+
+    // MARK: Summaries
+
+    private var summaries: LaneSummaries?
+
+    /// Whether the app turned summaries on (``Configuration/summaryModel``).
+    public var summariesAvailable: Bool { configuration.summaryModel != nil }
+
+    /// The person's switch for summaries, saved under
+    /// ``AgentsModeKeys/summarizeSessions``; on unless they turn it off.
+    /// Off stops new summaries and hides the ones already written.
+    public var summariesEnabled: Bool {
+        get { summariesAvailable && (defaults.object(forKey: keys.summarizeSessions) as? Bool ?? true) }
+        set {
+            defaults.set(newValue, forKey: keys.summarizeSessions)
+            objectWillChange.send()
+            for (id, session) in sessions {
+                let summary = newValue ? summaries?.summary(for: id) : nil
+                if session.summary != summary { session.summary = summary }
+            }
+            if newValue { refreshTranscripts() }
+        }
+    }
+
+    private func startSummaries() {
+        guard let model = configuration.summaryModel else { return }
+        var all: [any LaneSummarizing] = [ClaudeLaneSummarizer(model: model),
+                                          CodexLaneSummarizer(model: configuration.codexSummaryModel)]
+        all += configuration.summarizers
+        let summaries = LaneSummaries(summarizers: all, cache: configuration.summaryCacheFile.map(LaneSummaryCache.init(url:)))
+        summaries.onSummary = { [weak self] id, summary in
+            guard let self, self.summariesEnabled, let session = self.sessions[id], session.summary != summary else { return }
+            session.summary = summary
+            self.objectWillChange.send()
+        }
+        self.summaries = summaries
+    }
+
+    private func summarize(_ id: AgentLane.ID, transcript: LaneTranscript, path: String) {
+        guard let summaries, summariesEnabled, let agent = sessions[id]?.record?.agent,
+              let digest = TranscriptDigest(transcript) else { return }
+        summaries.retain(Set(sessions.keys))
+        summaries.consider(id, agent: agent, source: path, digest: digest)
+    }
+
+    /// Put the lane's summary on the pasteboard. False when it has none.
+    @discardableResult
+    public func copySummary(of id: AgentLane.ID) -> Bool {
+        guard let summary = sessions[id]?.summary, !summary.isEmpty else { return false }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(summary, forType: .string)
+        return true
+    }
+
+    /// Put the person's last prompt in the lane on the pasteboard. False
+    /// when its conversation has none yet.
+    @discardableResult
+    public func copyLastPrompt(of id: AgentLane.ID) -> Bool {
+        guard let prompt = sessions[id]?.recentPrompts.last, !prompt.isEmpty else { return false }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(prompt, forType: .string)
+        return true
     }
 
     private func updateShown() {
@@ -1157,4 +1248,6 @@ public struct AgentsModeKeys: Sendable {
     public var dockMaximized: String { prefix + "dockMaximized" }
     public var dockListWidth: String { prefix + "dockListWidth" }
     public var backendOverrides: String { prefix + "backendOverrides" }
+    /// The person's switch for one-line lane summaries.
+    public var summarizeSessions: String { prefix + "summarizeSessions" }
 }
