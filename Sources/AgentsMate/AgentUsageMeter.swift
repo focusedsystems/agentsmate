@@ -1,7 +1,8 @@
 import SwiftUI
 import AgentsMateStatus
 
-/// Reads each usage source every minute, off the main thread.
+/// Reads each usage source every minute, at background priority so the
+/// read runs on the efficiency cores, on a timer the system may coalesce.
 @MainActor
 public final class AgentUsageModel: ObservableObject {
     @Published public private(set) var usages: [AgentUsage] = []
@@ -15,14 +16,17 @@ public final class AgentUsageModel: ObservableObject {
     public func start() {
         guard timer == nil else { return }
         refresh()
-        timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.refresh() }
         }
+        timer.tolerance = 15
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
     }
 
     public func refresh() {
         let sources = sources
-        Task.detached(priority: .utility) {
+        Task.detached(priority: .background) {
             let read = sources.compactMap { $0.read() }
             await MainActor.run { [weak self] in if self?.usages != read { self?.usages = read } }
         }
@@ -49,6 +53,15 @@ public struct AgentUsageMeter: View {
                             .tint(window.percent >= 90 ? .red : window.percent >= 70 ? .orange : .accentColor)
                         Text("\(Int(window.percent.rounded()))%").font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary).frame(width: 34, alignment: .trailing)
+                        if let reset = window.resetsAt {
+                            TimelineView(.periodic(from: .now, by: 60)) { context in
+                                Text(Self.shortReset(reset, now: context.date))
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .fixedSize()
+                            }
+                        }
                     }
                     // Spent: say when it comes back, and how long that is.
                     if window.percent >= 100, let reset = window.resetsAt {
@@ -69,6 +82,14 @@ public struct AgentUsageMeter: View {
             }
         }
         .onAppear { model.start() }
+    }
+
+    /// The bar's own reset label: the time alone when it is today ("14:00"),
+    /// the weekday too when it is later ("Tue 14:00").
+    static func shortReset(_ reset: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
+        calendar.isDate(reset, inSameDayAs: now)
+            ? reset.formatted(.dateTime.hour().minute())
+            : reset.formatted(.dateTime.weekday(.abbreviated).hour().minute())
     }
 
     /// "Resets Tue 14:00 · in 2 days, 5 hours".
