@@ -104,6 +104,9 @@ switch.
 
 ## Phase 3: inbox and messaging
 
+Landed. The README's Inbox and messaging section describes the behaviour. The
+pull request chips show each link's number; Phase 4 adds its state.
+
 - Inbox: Mark Read, double-click to show, summary and pull request chips, and
   unread notifications counted under Asking You. Polled idle lanes count as
   Finished.

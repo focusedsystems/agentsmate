@@ -22,6 +22,17 @@ final class ShortcutBindingTests: XCTestCase {
         XCTAssertNil(bindings.overrides[.clear], "setting a default back removes the override")
     }
 
+    func testDefaultsDoNotCollide() {
+        let defaults = Array(LaneShortcutBindings.defaults.values)
+        XCTAssertEqual(Set(defaults).count, defaults.count, "two actions share a default")
+        let message = LaneShortcutBindings.defaults[.messageAgent]
+        XCTAssertEqual(message, LaneKeyBinding("k", command: true, option: true))
+        XCTAssertEqual(message?.display, "⌥⌘K")
+        let press = key("k", code: 40, flags: [.command, .option])
+        XCTAssertTrue(message?.matches(press) == true)
+        XCTAssertNil(LaneShortcutBindings().terminalShortcut(for: press), "⌥⌘K is not Clear; it reaches the menu")
+    }
+
     func testPlainKeysAreNotShortcuts() {
         XCTAssertNil(LaneKeyBinding(event: key("a", code: 0, flags: [])))
         XCTAssertNil(LaneKeyBinding(event: key("A", code: 0, flags: .shift)))

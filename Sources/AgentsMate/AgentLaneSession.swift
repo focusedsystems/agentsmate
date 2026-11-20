@@ -157,6 +157,14 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
         return true
     }
 
+    /// Clear the row's unread mark without showing it.
+    func markRead() {
+        if needsAttention { needsAttention = false }
+    }
+
+    /// Whether text typed in now reaches a program that takes a paste.
+    var acceptsText: Bool { programIsForeground && view.acceptsBracketedPaste }
+
     public var status: LaneDisplayStatus {
         if let record, record.state != .ended {
             switch record.state {

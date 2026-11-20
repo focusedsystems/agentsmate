@@ -20,6 +20,8 @@ public struct AgentLaneCommands: Commands {
     let inboxWindowID: String?
     /// Back and Forward through lanes visited, on ⌘[ and ⌘].
     let historyCommands: Bool
+    /// The row selected in the inbox, when the inbox window is in front.
+    @FocusedValue(\.agentInboxSelection) private var inboxSelection
 
     public init(store: AgentLaneStore, menuTitle: String = "Agent", labels: AgentsModeLabels = .init(),
                 numberShortcuts: Bool = true, emptyText: String = "No Lanes", fontCommands: Bool = true,
@@ -36,6 +38,10 @@ public struct AgentLaneCommands: Commands {
     }
 
     private var noun: String { labels.laneNoun.capitalized }
+
+    /// Mark Read acts on the inbox's selected row while the inbox is in
+    /// front, and on the selected lane otherwise.
+    private var markReadTarget: AgentLane.ID? { inboxSelection ?? store.selectedID }
 
     public var body: some Commands {
         CommandMenu(menuTitle) {
@@ -59,8 +65,8 @@ public struct AgentLaneCommands: Commands {
             .laneShortcut(store.shortcuts.binding(for: .previous))
             .disabled(store.lanes.isEmpty)
             Divider()
-            if let inboxWindowID {
-                AgentInboxMenuItem(store: store, windowID: inboxWindowID)
+            if let inboxID = inboxWindowID ?? store.configuration.inboxWindowID {
+                AgentInboxMenuItem(store: store, windowID: inboxID)
             }
             Button("Jump to Unread") {
                 reveal()
@@ -68,6 +74,11 @@ public struct AgentLaneCommands: Commands {
             }
             .laneShortcut(store.shortcuts.binding(for: .jumpToUnread))
             .disabled(store.unreadLanes.isEmpty)
+            Button("Mark Read") { if let id = markReadTarget { store.markRead(id) } }
+                .disabled(markReadTarget.flatMap { store.sessions[$0]?.needsAttention } != true)
+            Button("Mark All Read") { store.markAllRead() }
+                .disabled(store.unreadLanes.isEmpty)
+            AgentMessageMenuItem(store: store, reveal: reveal)
             Button("Go to \(noun)…") {
                 reveal()
                 store.paletteVisible = true

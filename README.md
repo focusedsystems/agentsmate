@@ -80,6 +80,43 @@ semibold beneath it. Search matches the summary and the person's recent
 prompts, the row's hover adds the agent's last reply, and the row's menu and
 the Agent menu have Copy Summary and Copy Last Prompt.
 
+## Inbox and messaging
+
+`AgentInboxView` lists every lane that has stopped for the person. Asking You
+holds the lanes asking a question or permission and any lane whose
+notification has not been read; Finished holds the lanes that ended a turn and
+the ones a daemon's session list reports idle. Each row shows the lane's
+summary, what the agent last said, and the pull requests it posted as chips.
+Double-click a row or press Return to show its lane. Mark Read and Mark All
+Read are on the row's menu, the inbox toolbar and the Agent menu
+(`store.markRead(_:)`, `store.markAllRead()`). Chips open through
+`store.onOpenPullRequest`, or the default browser when it is nil.
+
+Put the inbox in a `Window` scene and give its id to the store, and the
+sidebar's foot gets an inbox button with a badge counting Asking You, beside
+the usage meter:
+
+```swift
+Window("Agent Inbox", id: "inbox") { AgentInboxView(store: store) { _ in showAgents() } }
+AgentMessageWindow(store: store)
+```
+
+```swift
+AgentLaneStore.Configuration(termProgram: "MyApp", inboxWindowID: "inbox",
+                             messageWindowID: AgentMessageWindow.defaultID)
+```
+
+Message Agent (⌥⌘K, rebindable as `.messageAgent`) is in the Agent menu and
+on every row's menu. With `messageWindowID` set it opens `AgentMessageWindow`:
+a target picker that starts on the selected lane, a message field where Return
+sends and Option-Return starts a new line, and ⎋ to close. Without it, the
+sidebar's alert does the same job. Sending types the text into the lane's
+terminal and presses Return. A lane not attached here is attached in the
+background first (`store.attachInBackground(_:)`), without moving the
+selection or the keyboard, and the text waits until its agent takes a paste.
+If nothing takes it within 20 seconds it goes on the clipboard instead.
+`store.message(_:to:)` is the same send for an app's own surfaces.
+
 ## Keeping the agent CLIs current
 
 The `AgentsMateUpdates` product finds the Claude Code and Codex command-line

@@ -57,9 +57,9 @@ public struct AgentLaneSidebar<Accessory: View>: View {
     @State private var pendingSwitch: (id: AgentLane.ID, backendID: String, title: String)?
     @State private var savingWorkspace = false
     @State private var workspaceName = ""
-    @State private var messaging: AgentLane.ID?
     @State private var choosingIcon: AgentLane.ID?
     @State private var message = ""
+    @Environment(\.openWindow) private var openWindow
 
     public init(store: AgentLaneStore, labels: AgentsModeLabels = .init(), rowActions: [LaneAction] = [],
                 @ViewBuilder accessory: () -> Accessory) {
@@ -101,10 +101,21 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         }
         .listStyle(.sidebar)
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            if let usage = store.usage {
+            let inboxID = store.configuration.inboxWindowID
+            if store.usage != nil || inboxID != nil {
                 VStack(spacing: 0) {
                     Divider()
-                    AgentUsageMeter(model: usage).padding(.horizontal, 12).padding(.vertical, 8)
+                    HStack(alignment: .center, spacing: 8) {
+                        if let usage = store.usage {
+                            AgentUsageMeter(model: usage)
+                        } else {
+                            Spacer(minLength: 0)
+                        }
+                        if let inboxID {
+                            AgentInboxButton(store: store, windowID: inboxID)
+                        }
+                    }
+                    .padding(.horizontal, 12).padding(.vertical, 8)
                 }
                 .background(inDock ? AnyShapeStyle(.bar) : AnyShapeStyle(.clear))
             }
@@ -144,13 +155,20 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         } message: {
             Text("Saves the \(labels.laneNoun)s you opened, with their sections. A workspace with the same name is replaced.")
         }
-        .alert("Message", isPresented: Binding(get: { messaging != nil }, set: { if !$0 { messaging = nil } })) {
+        .alert("Message", isPresented: Binding(get: { store.messageAlertTarget != nil },
+                                               set: { if !$0 { store.messageAlertTarget = nil } })) {
             TextField("Message", text: $message)
-            Button("Send") { if let id = messaging { store.send(message, to: id, submit: true) } }
+            Button("Send") {
+                let text = message
+                if let id = store.messageAlertTarget, !text.trimmingCharacters(in: .whitespaces).isEmpty {
+                    Task { await store.message(text, to: id) }
+                }
+            }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Typed into the agent and sent. If no agent is running there, it goes on the clipboard instead.")
+            Text("Typed into \(store.messageAlertTarget.flatMap { store.sessions[$0]?.title } ?? "the agent") and sent. A \(labels.laneNoun) not attached here is attached in the background first. If nothing takes it, it goes on the clipboard instead.")
         }
+        .onChange(of: store.messageAlertTarget) { if store.messageAlertTarget != nil { message = "" } }
         .alert("Rename Section", isPresented: renamingBinding) {
             TextField("Name", text: $sectionName)
             Button("Rename") { if let old = renaming { store.renameSection(old, to: sectionName) } }
@@ -295,8 +313,10 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         }
         Button("Detach") { store.detach(lane.id) }
             .disabled(!session.isAttached)
-        Button("Message…") { message = ""; messaging = lane.id }
-            .disabled(!session.isAttached)
+        Button("Message…") { store.showMessageAgent(to: lane.id, openWindow: openWindow) }
+        if session.needsAttention {
+            Button("Mark Read") { store.markRead(lane.id) }
+        }
         Button("Change Icon…") { choosingIcon = lane.id }
         Button("Rename…") { laneName = session.customTitle ?? session.title; renamingLane = lane.id }
         if session.customTitle != nil {

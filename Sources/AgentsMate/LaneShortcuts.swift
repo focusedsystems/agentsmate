@@ -4,7 +4,7 @@ import AppKit
 /// A command in the lanes that has a keyboard shortcut a person can change.
 public enum LaneShortcutAction: String, CaseIterable, Codable, Sendable, Identifiable {
     case next, previous, clear, newLane, closeLane, split, maximize, togglePanel
-    case biggerFont, smallerFont, resetFont, jumpToUnread, goToLane, back, forward, reattach
+    case biggerFont, smallerFont, resetFont, jumpToUnread, goToLane, messageAgent, back, forward, reattach
     case reopenAs1, reopenAs2, reopenAs3, reopenAs4
 
     /// The Reopen As choice this action picks, zero-based.
@@ -39,6 +39,7 @@ public enum LaneShortcutAction: String, CaseIterable, Codable, Sendable, Identif
         case .resetFont: "Actual Size"
         case .jumpToUnread: "Jump to Unread"
         case .goToLane: "Go to Lane"
+        case .messageAgent: "Message Agent"
         case .back: "Back"
         case .forward: "Forward"
         case .reattach: "Reattach"
@@ -175,6 +176,7 @@ public struct LaneShortcutBindings: Codable, Equatable, Sendable {
         .resetFont: .init("0", command: true),
         .jumpToUnread: .init("u", command: true, shift: true),
         .goToLane: .init("o", command: true, shift: true),
+        .messageAgent: .init("k", command: true, option: true),
         // ⌘[ and ⌘], as in Finder, Safari and Xcode.
         .back: .init("[", command: true),
         .forward: .init("]", command: true),
