@@ -120,6 +120,9 @@ public struct AgentLaneCommands: Commands {
                 if let id = store.selectedID { store.stop(id) }
             }
             .disabled(store.selectedID.map { !store.canStop($0) } ?? true)
+            DetachedAdoptMenu(store: store, id: store.selectedID)
+            Button("Look for Detached Sessions") { store.sweepForDetachedSessions() }
+                .disabled(!store.configuration.findsDetachedSessions)
             Button("Clear Screen") { store.clearSelected() }
                 .laneShortcut(store.shortcuts.binding(for: .clear))
                 .disabled(!store.selectedIsAttached)

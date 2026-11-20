@@ -193,6 +193,53 @@ session too" in `AgentLaneSettingsSection`), on by default and shown when a
 registered backend can rename. `store.renameAgentSession(_:to:)` sends the
 command by itself and returns an `AgentRenameOutcome`.
 
+## Lanes that survive anything
+
+### Detached sessions
+
+At launch, and then about every ten minutes, the store asks each backend for
+the lane sessions it can see (`LaneBackend.discoverSessions()`). A session no
+row attaches goes into a Detached section at the foot of the list, as a row
+that has not been started. A backend lists only its own lane sessions, never
+everything a tmux server or daemon holds:
+
+- `CommandLaneBackend` lists nothing unless it has `tmuxSessions`, and then
+  only the tmux sessions whose names start with one of its `prefixes` (or that
+  its `matches` rule accepts).
+- `ClaudeBackgroundLaneBackend` lists Claude Code's background sessions from
+  the `claude agents --json` list every app shares, never interactive ones.
+  `isLaneSession` narrows it; `discoversSessions = false` turns it off.
+
+A row claims a session by the name its backend knows it by
+(`LaneBackend.sessionName(for:)`, `TmuxLaneSessions.sessionName`), else by the
+name its status matches, else by folder.
+
+A Detached row's menu, and the Agent menu for the selected one:
+
+- **Reattach** attaches the session in place; the row stays in Detached.
+  Clicking the row does the same.
+- **Adopt Into Section** moves it into a section, attaches it, and keeps it
+  as a lane of the person's own, so the restore snapshot and workspaces
+  record it with its session's name (`AgentLane.sessionName`).
+- **Stop Session** ends it, where the backend can (tmux by name, `claude stop`).
+
+Detached rows are left out of the restore snapshot and workspaces; the next
+launch finds them again. `Configuration.findsDetachedSessions` (on by default)
+turns the sweep off, and `store.sweepForDetachedSessions()` runs one now.
+
+### A restore snapshot that is always current
+
+Once the app has run `restoreAtLaunch()` or `performLaunchBehavior()`, the
+store writes the restore snapshot by itself about two seconds after the lanes,
+the selection or what is attached changes, on a background queue, with an
+atomic replace of the workspaces file. A crash or a reboot then reopens what
+was open. `saveRestore()` at quit still writes it at once.
+
+The snapshot (`store.restoreSnapshot()`) holds the lanes the person opened
+that are attached here, plus those a restore brought back that have not been
+shown yet, and marks the selected one. "Reopen the lanes open at quit" keeps
+its meaning: it decides whether that snapshot is reopened at launch.
+
 ## Keeping the agent CLIs current
 
 The `AgentsMateUpdates` product finds the Claude Code and Codex command-line

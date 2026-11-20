@@ -84,6 +84,10 @@ public final class AgentLaneStore: ObservableObject {
         /// Claude Code's pull request status cache, read once at launch as a
         /// warm start for GitHub links. Nil skips it; a missing file is fine.
         public var pullRequestSeedFile: URL?
+        /// At launch and about every ten minutes, ask each backend for its
+        /// lane sessions (``LaneBackend/discoverSessions()``) and list the
+        /// ones no row attaches in a Detached section.
+        public var findsDetachedSessions: Bool
 
         /// `~/Library/Caches/<bundle id>/agent-pull-requests.json`.
         public static var defaultPullRequestLedgerFile: URL { PullRequestLedgerCache.defaultURL() }
@@ -106,7 +110,9 @@ public final class AgentLaneStore: ObservableObject {
                     inboxWindowID: String? = nil, messageWindowID: String? = nil,
                     pullRequestResolvers: [any PullRequestResolver] = [],
                     pullRequestLedgerFile: URL? = Configuration.defaultPullRequestLedgerFile,
-                    pullRequestSeedFile: URL? = Configuration.defaultPullRequestSeedFile) {
+                    pullRequestSeedFile: URL? = Configuration.defaultPullRequestSeedFile,
+                    findsDetachedSessions: Bool = true) {
+            self.findsDetachedSessions = findsDetachedSessions
             self.pullRequestResolvers = pullRequestResolvers
             self.pullRequestLedgerFile = pullRequestLedgerFile
             self.pullRequestSeedFile = pullRequestSeedFile
@@ -135,10 +141,13 @@ public final class AgentLaneStore: ObservableObject {
         }
     }
 
-    @Published public private(set) var lanes: [AgentLane] = []
+    @Published public private(set) var lanes: [AgentLane] = [] {
+        didSet { if lanes != oldValue { scheduleRestoreWrite() } }
+    }
     @Published public private(set) var sessions: [AgentLane.ID: AgentLaneSession] = [:]
     @Published public var selectedID: AgentLane.ID? {
         didSet {
+            if selectedID != oldValue { scheduleRestoreWrite() }
             defaults.set(selectedID, forKey: keys.selectedLane)
             updateShown()
             if selectedID != oldValue { rowMetadataSelectionChanged() }
@@ -215,6 +224,7 @@ public final class AgentLaneStore: ObservableObject {
         didSet {
             guard layout != oldValue, let data = try? JSONEncoder().encode(layout) else { return }
             defaults.set(data, forKey: keys.layout)
+            scheduleRestoreWrite()
         }
     }
 
@@ -257,7 +267,16 @@ public final class AgentLaneStore: ObservableObject {
         startSummaries()
         startPullRequestLedger()
         if !configuration.usageSources.isEmpty { usage = AgentUsageModel(sources: configuration.usageSources) }
+        if configuration.findsDetachedSessions { startDiscovery() }
+        terminationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
+            // Terminals ending as the app quits are not the person closing
+            // them; the app's own saveRestore() records what was open.
+            MainActor.assumeIsolated { self?.freezeRestore() }
+        }
     }
+
+    private var terminationObserver: NSObjectProtocol?
 
     // MARK: History
 
@@ -407,7 +426,8 @@ public final class AgentLaneStore: ObservableObject {
     /// also follow each repository's HEAD file as it changes, and the
     /// selected lanes are read more often than the rest.
     public func refreshRowMetadata() {
-        sweep(.all, lanes: lanes.map(\.id))
+        // Detached rows are read once someone reattaches or adopts them.
+        sweep(.all, lanes: lanes.compactMap { detachedIDs.contains($0.id) && sessions[$0.id]?.isAttached != true ? nil : $0.id })
     }
 
     /// The lanes the person is looking at: the selected one and the split.
@@ -526,6 +546,7 @@ public final class AgentLaneStore: ObservableObject {
             session.update(backend: backend)
         }
         apply(statusFeed?.records ?? [])
+        if discoveryTimer != nil { sweepSoon() }
     }
 
     public func backend(id: String) -> (any LaneBackend)? { backends[id] }
@@ -545,7 +566,7 @@ public final class AgentLaneStore: ObservableObject {
             lane.backendID = backendID
             return lane
         }
-        let opened = lanes.filter { $0.isClosable && !fixed.map(\.id).contains($0.id) }
+        let opened = lanes.filter { ($0.isClosable || detachedIDs.contains($0.id)) && !fixed.map(\.id).contains($0.id) }
         let newLanes = fixed + opened
         guard newLanes != lanes else { return }
         let ids = Set(newLanes.map(\.id))
@@ -558,6 +579,7 @@ public final class AgentLaneStore: ObservableObject {
         if splitID.map({ !ids.contains($0) }) ?? false { splitID = nil }
         if selectedID.map({ !ids.contains($0) }) ?? true { selectedID = newLanes.first?.id }
         apply(statusFeed?.records ?? [])
+        reconcileDetached()
     }
 
     /// Add a lane the person opened, and open it.
@@ -576,6 +598,7 @@ public final class AgentLaneStore: ObservableObject {
             }
             makeSession(for: lane)
             apply(statusFeed?.records ?? [])
+            if !detachedIDs.contains(lane.id) { reconcileDetached() }
         }
         // A lane added without opening waits as a bookmark until first shown.
         if shouldOpen { open(lane.id, focus: focus) }
@@ -598,29 +621,47 @@ public final class AgentLaneStore: ObservableObject {
         }
     }
 
+    /// Every write of the workspaces file goes through this queue, so the
+    /// restore snapshot written in the background and a workspace saved from
+    /// a menu never overwrite each other's change.
+    private let workspaceIO = DispatchQueue(label: "agentsmate.workspaces", qos: .background)
+
     private func writeWorkspaces(_ change: (inout LaneWorkspaceFile) -> Void) {
         guard let url = configuration.workspaceFile else { return }
-        reloadWorkspaces()
-        guard workspaceError == nil else { return }
-        var file = workspaces
-        change(&file)
-        do {
-            try file.save(url)
+        // A read-modify-write that the person is waiting on: run it now,
+        // after any snapshot write already queued.
+        let result: Result<LaneWorkspaceFile, Error> = workspaceIO.sync {
+            Result {
+                var file = try LaneWorkspaceFile.load(url)
+                change(&file)
+                try file.save(url)
+                return file
+            }
+        }
+        switch result {
+        case .success(let file):
             workspaces = file
-        } catch {
+            workspaceError = nil
+        case .failure(let error):
             workspaceError = "The workspaces file could not be saved: \(error.localizedDescription)"
         }
     }
 
     /// The lanes the person opened, with the sections, as a workspace.
     public func snapshot(named name: String, onlyAttached: Bool = false) -> LaneWorkspace {
-        let opened = displayOrder.filter { $0.isClosable && (!onlyAttached || sessions[$0.id]?.isAttached == true) }
+        workspace(named: name, lanes: displayOrder.filter { $0.isClosable && (!onlyAttached || sessions[$0.id]?.isAttached == true) },
+                  marksSelection: false)
+    }
+
+    private func workspace(named name: String, lanes opened: [AgentLane], marksSelection: Bool) -> LaneWorkspace {
         let lanes = opened.map { lane in
             LaneWorkspace.Lane(title: layout.names[lane.id],
                                directory: sessions[lane.id]?.currentDirectory ?? lane.directory?.path,
                                backendID: lane.backendID,
                                section: layout.section(of: lane),
-                               pinned: layout.pinned.contains(lane.id) ? true : nil)
+                               pinned: layout.pinned.contains(lane.id) ? true : nil,
+                               variant: lane.variant, sessionName: lane.sessionName,
+                               selected: marksSelection && lane.id == selectedID ? true : nil)
         }
         let used = Set(lanes.compactMap(\.section))
         return LaneWorkspace(name: name, sections: layout.orderedSections(for: self.lanes).filter { used.contains($0) || layout.sections.contains($0) },
@@ -651,29 +692,124 @@ public final class AgentLaneStore: ObservableObject {
     public func open(workspace: LaneWorkspace, resume: Bool = false) {
         for name in workspace.sections { layout.addSection(name) }
         var first: AgentLane.ID?
+        var chosen: AgentLane.ID?
         for saved in workspace.lanes {
             let path = saved.directory.map { ($0 as NSString).expandingTildeInPath }
             let already = lanes.contains { lane in
-                lane.backendID == saved.backendID && path.map { LaneStatusMatch.normalizedPath($0) == LaneStatusMatch.normalizedPath(lane.path) } ?? false
+                guard !detachedIDs.contains(lane.id), lane.backendID == saved.backendID else { return false }
+                if let name = saved.sessionName ?? lane.sessionName { return name == lane.sessionName && name == saved.sessionName }
+                return lane.variant == saved.variant
+                    && path.map { LaneStatusMatch.normalizedPath($0) == LaneStatusMatch.normalizedPath(lane.path) } ?? false
             }
             if already { continue }
-            let lane = AgentLane(id: UUID().uuidString, title: (path as NSString?)?.lastPathComponent ?? "Lane",
+            var lane = AgentLane(id: UUID().uuidString, title: saved.sessionName ?? (path as NSString?)?.lastPathComponent ?? "Lane",
                                  directory: path.map { URL(fileURLWithPath: $0, isDirectory: true) },
                                  backendID: saved.backendID, isClosable: true, section: saved.section)
+            lane.variant = saved.variant
+            lane.sessionName = saved.sessionName
+            // A session the restore brings back attaches here, so its
+            // Detached row (if the sweep already found it) goes.
+            if let name = saved.sessionName,
+               let row = lanes.first(where: { detachedIDs.contains($0.id) && $0.backendID == saved.backendID && $0.sessionName == name }),
+               sessions[row.id]?.isAttached != true {
+                removeDetachedRow(row.id)
+            }
             add(lane, focus: false, open: false)
-            if resume { sessions[lane.id]?.resumeOnStart = true }
+            if resume {
+                sessions[lane.id]?.resumeOnStart = true
+                restoredPending.insert(lane.id)
+            }
             if let title = saved.title { setName(lane.id, to: title) }
             if saved.pinned == true { layout.setPinned(lane.id, true) }
             if first == nil { first = lane.id }
+            if saved.selected == true { chosen = lane.id }
         }
-        if let first, selected?.lane.isClosable != true { selectedID = first }
+        if let pick = chosen ?? first, selected?.lane.isClosable != true { selectedID = pick }
     }
 
     /// Record the lanes attached now, to reopen at the next launch. Call when
     /// the app quits.
+    ///
+    /// The snapshot is also written by itself, about two seconds after the
+    /// lanes, the selection or what is attached changes, so a crash or a
+    /// reboot keeps it; see ``restoreSnapshot()``.
     public func saveRestore() {
-        let workspace = snapshot(named: "Last Session", onlyAttached: true)
-        writeWorkspaces { $0.restore = workspace.lanes.isEmpty ? nil : workspace }
+        restoreTimer?.invalidate()
+        restoreTimer = nil
+        let restore = currentRestore()
+        writeWorkspaces { $0.restore = restore }
+        if workspaceError == nil { lastWrittenRestore = .some(restore) }
+    }
+
+    /// What the restore snapshot records: the lanes the person opened that
+    /// are attached here, in list order, and those a restore brought back
+    /// that have not been shown yet, since they were open too. The selected
+    /// one is marked.
+    public func restoreSnapshot() -> LaneWorkspace {
+        let open = displayOrder.filter { lane in
+            guard lane.isClosable, !detachedIDs.contains(lane.id), let session = sessions[lane.id] else { return false }
+            return session.isAttached || (!session.isStarted && restoredPending.contains(lane.id))
+        }
+        return workspace(named: "Last Session", lanes: open, marksSelection: true)
+    }
+
+    private func currentRestore() -> LaneWorkspace? {
+        let snapshot = restoreSnapshot()
+        return snapshot.lanes.isEmpty ? nil : snapshot
+    }
+
+    // MARK: Restore snapshot
+
+    /// How long after a change the restore snapshot is written, so a burst
+    /// of changes (a restore, cycling through lanes) is one write.
+    static let restoreDebounce: TimeInterval = 2
+    private var restoreTimer: Timer?
+    /// Lanes a restore added that have not been started yet.
+    private var restoredPending: Set<AgentLane.ID> = []
+    /// Off until the app has decided what to reopen at launch, so lanes set
+    /// up before that never overwrite the snapshot it is about to read.
+    private(set) var restoreSettled = false
+    private var restoreFrozen = false
+    private var lastWrittenRestore: LaneWorkspace??
+
+    private func scheduleRestoreWrite() {
+        guard restoreSettled, !restoreFrozen, configuration.workspaceFile != nil else { return }
+        restoreTimer?.invalidate()
+        let timer = Timer(timeInterval: Self.restoreDebounce, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.writeRestoreInBackground() }
+        }
+        timer.tolerance = Self.restoreDebounce * CadenceTimer.toleranceFraction
+        RunLoop.main.add(timer, forMode: .common)
+        restoreTimer = timer
+    }
+
+    /// Write the snapshot now, off the main thread, if it changed.
+    func writeRestoreInBackground() {
+        restoreTimer = nil
+        guard !restoreFrozen, let url = configuration.workspaceFile else { return }
+        let restore = currentRestore()
+        if let last = lastWrittenRestore, last == restore { return }
+        lastWrittenRestore = .some(restore)
+        workspaces.restore = restore
+        workspaceIO.async {
+            // An unreadable file is left alone rather than replaced.
+            guard var file = try? LaneWorkspaceFile.load(url) else { return }
+            guard file.restore != restore else { return }
+            file.restore = restore
+            try? file.save(url)
+        }
+    }
+
+    /// Whether a snapshot write is waiting out its debounce.
+    var restoreWritePending: Bool { restoreTimer != nil }
+
+    /// Wait for any snapshot write already queued, for tests.
+    func flushWorkspaceWrites() { workspaceIO.sync {} }
+
+    private func freezeRestore() {
+        restoreFrozen = true
+        restoreTimer?.invalidate()
+        restoreTimer = nil
     }
 
     /// Bring back the lanes open at the last quit, each resuming its last
@@ -681,6 +817,7 @@ public final class AgentLaneStore: ObservableObject {
     /// open at launch. Returns whether anything was added.
     @discardableResult
     public func restoreAtLaunch() -> Bool {
+        defer { restoreSettled = true }
         reloadWorkspaces()
         if let restore = workspaces.restore, !restore.lanes.isEmpty {
             open(workspace: restore, resume: true)
@@ -691,6 +828,126 @@ public final class AgentLaneStore: ObservableObject {
             return true
         }
         return false
+    }
+
+    // MARK: Detached sessions
+
+    /// Rows for sessions a backend found running with no row of their own,
+    /// shown in the Detached section. They are not started until the person
+    /// reattaches one, are left out of the restore snapshot and workspaces,
+    /// and go when their session does. ``adopt(_:into:)`` makes one a lane
+    /// of the person's own.
+    @Published public private(set) var detachedIDs: Set<AgentLane.ID> = []
+
+    /// Whether a row is in the Detached section.
+    public func isDetached(_ id: AgentLane.ID) -> Bool { detachedIDs.contains(id) }
+
+    /// How often backends are asked for their sessions after launch. Each
+    /// ask is at most one helper process per backend, one at a time.
+    static let discoveryInterval: TimeInterval = 600
+    /// How long after launch (or a backend registering) the first ask
+    /// waits, so the app's own lanes and the restore are in first.
+    static let firstDiscoveryDelay: TimeInterval = 3
+
+    private var discoveryTimer: CadenceTimer?
+    private var discoveryKick: Task<Void, Never>?
+    private var sweepingSessions = false
+    /// Everything the last sweep found, kept so rows added later can claim
+    /// their sessions without asking the backends again.
+    private var discovered: [DetachedSessions.Found] = []
+
+    private func startDiscovery() {
+        discoveryTimer = CadenceTimer(interval: Self.discoveryInterval) { [weak self] in
+            self?.sweepForDetachedSessions()
+        }
+        sweepSoon()
+    }
+
+    /// One sweep a moment from now, however many times this is called.
+    private func sweepSoon() {
+        guard discoveryKick == nil else { return }
+        discoveryKick = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(Self.firstDiscoveryDelay))
+            guard let self else { return }
+            self.discoveryKick = nil
+            self.sweepForDetachedSessions()
+        }
+    }
+
+    /// Ask every backend for its lane sessions now and update the Detached
+    /// section. Skipped while the last sweep is still going.
+    public func sweepForDetachedSessions() {
+        guard configuration.findsDetachedSessions, !sweepingSessions else { return }
+        sweepingSessions = true
+        let backends = availableBackends
+        Task { @MainActor [weak self] in
+            var found: [DetachedSessions.Found] = []
+            // One backend at a time, so the sweep holds at most one helper.
+            for backend in backends {
+                for session in await backend.discoverSessions() {
+                    found.append(.init(backendID: backend.id, session: session))
+                }
+            }
+            guard let self else { return }
+            self.sweepingSessions = false
+            self.discovered = found
+            self.reconcileDetached()
+        }
+    }
+
+    /// Match the last sweep against the rows: add a Detached row for each
+    /// session nothing attaches, and take away rows whose session has gone
+    /// or now has a row of its own, unless they are attached here.
+    private func reconcileDetached() {
+        guard configuration.findsDetachedSessions else { return }
+        let rows = lanes.filter { !detachedIDs.contains($0.id) }
+        let wanted = DetachedSessions.unclaimed(discovered, lanes: rows, backends: backends)
+        let wantedIDs = Set(wanted.map(DetachedSessions.laneID))
+        for id in detachedIDs where !wantedIDs.contains(id) && sessions[id]?.isAttached != true {
+            removeDetachedRow(id)
+        }
+        for found in wanted where backends[found.backendID] != nil {
+            let lane = DetachedSessions.lane(for: found)
+            guard !detachedIDs.contains(lane.id), !lanes.contains(where: { $0.id == lane.id }) else { continue }
+            detachedIDs.insert(lane.id)
+            lanes.append(lane)
+            makeSession(for: lane)
+        }
+        apply(statusFeed?.records ?? [])
+        if let presence = statusFeed?.presence { apply(presence: presence) }
+    }
+
+    /// Drop sessions a lane's row attached from the last sweep, once the
+    /// lane has stopped them, so they are not listed again before the next.
+    private func forgetDiscovered(claimedBy lane: AgentLane, backend: any LaneBackend) {
+        discovered.removeAll { $0.backendID == lane.backendID && DetachedSessions.claims(lane, backend: backend, $0.session) }
+    }
+
+    private func removeDetachedRow(_ id: AgentLane.ID) {
+        guard detachedIDs.remove(id) != nil else { return }
+        sessions[id]?.detach()
+        sessions.removeValue(forKey: id)
+        lanes.removeAll { $0.id == id }
+        if splitID == id { splitID = nil }
+        if selectedID == id { selectedID = displayOrder.first?.id }
+    }
+
+    /// Make a Detached row a lane of the person's own: it moves to `section`
+    /// (nil for none), attaches here in the background if it is not already,
+    /// and from then on is kept like any lane they opened, so the restore
+    /// snapshot and workspaces record it with its session's name.
+    public func adopt(_ id: AgentLane.ID, into section: String?) {
+        guard detachedIDs.contains(id), let index = lanes.firstIndex(where: { $0.id == id }),
+              let session = sessions[id] else { return }
+        detachedIDs.remove(id)
+        var lane = lanes[index]
+        lane.isClosable = true
+        lane.section = section
+        lanes[index] = lane
+        session.update(lane: lane)
+        layout.move(id, to: section)
+        attachInBackground(id)
+        objectWillChange.send()
     }
 
     // MARK: Dock
@@ -857,6 +1114,7 @@ public final class AgentLaneStore: ObservableObject {
     /// quit (or the launch workspace), else open one new lane in the
     /// background, else nothing.
     public func performLaunchBehavior(newLaneDirectory: URL? = nil) {
+        defer { restoreSettled = true }
         let reopen = defaults.object(forKey: keys.reopenLast) as? Bool ?? true
         if reopen, configuration.workspaceFile != nil, restoreAtLaunch() { return }
         if defaults.bool(forKey: keys.openAtLaunch), !lanes.contains(where: \.isClosable) {
@@ -881,6 +1139,8 @@ public final class AgentLaneStore: ObservableObject {
         lane.backendID = backendID ?? source.backendID
         lane.section = layout.section(of: source)
         lane.statusMatch = nil
+        // The copy is a lane of its own, not another view of the same session.
+        lane.sessionName = nil
         if source.directory == nil { lane.directory = URL(fileURLWithPath: session.currentDirectory) }
         // A persistent lane in the same folder would attach the same session,
         // so the copy asks for a lane of its own: the next free number.
@@ -961,6 +1221,11 @@ public final class AgentLaneStore: ObservableObject {
             self.layout.move(id, to: section)
         }
         session.onDirectoryChange = { [weak self] session in self?.laneDirectoryChanged(session) }
+        session.onAttachmentChange = { [weak self] session in
+            guard let self else { return }
+            if session.isStarted { self.restoredPending.remove(session.id) }
+            self.scheduleRestoreWrite()
+        }
         applyIconOverride(to: session)
         if summariesEnabled { session.summary = summaries?.summary(for: id) }
         session.pullRequests = pullRequestLedger?.pullRequests(for: id) ?? []
@@ -988,7 +1253,15 @@ public final class AgentLaneStore: ObservableObject {
 
     /// The lanes as the list shows them, grouped.
     public var groups: [LaneGroup] {
-        layout.groups(for: lanes) { [sessions] lane in sessions[lane.id]?.lastActivity }
+        let detached = detachedIDs
+        var groups = layout.groups(for: detached.isEmpty ? lanes : lanes.filter { !detached.contains($0.id) }) { [sessions] lane in
+            sessions[lane.id]?.lastActivity
+        }
+        let found = lanes.filter { detached.contains($0.id) }
+        if !found.isEmpty {
+            groups.append(LaneGroup(section: LaneLayout.detachedSection, lanes: found, isDetached: true))
+        }
+        return groups
     }
 
     /// The lanes in the order the list shows them; ⌘1–⌘9 and cycling follow it.
@@ -1020,7 +1293,8 @@ public final class AgentLaneStore: ObservableObject {
     }
 
     public func setAllCollapsed(_ collapsed: Bool) {
-        layout.collapsed = collapsed ? Set(layout.orderedSections(for: lanes) + [LaneLayout.pinnedSection]) : []
+        layout.collapsed = collapsed
+            ? Set(layout.orderedSections(for: lanes) + [LaneLayout.pinnedSection, LaneLayout.detachedSection]) : []
     }
 
     /// Every section a lane can be moved to.
@@ -1036,22 +1310,33 @@ public final class AgentLaneStore: ObservableObject {
 
     /// End the lane's session, not just the terminal here. Its conversation
     /// is kept, so opening the lane again resumes it.
+    /// A Detached row goes with its session.
     public func stop(_ id: AgentLane.ID) {
-        guard let session = sessions[id], session.backend.canStop else { return }
+        guard let session = sessions[id], session.backend.canStop(session.lane) else { return }
         session.detach()
         session.backend.stop(session.lane)
+        if detachedIDs.contains(id) {
+            discovered.removeAll { DetachedSessions.laneID($0) == id }
+            removeDetachedRow(id)
+        } else {
+            forgetDiscovered(claimedBy: session.lane, backend: session.backend)
+        }
         statusFeed?.reload()
     }
 
     /// Whether the lane's session can be stopped from here.
-    public func canStop(_ id: AgentLane.ID) -> Bool { sessions[id]?.backend.canStop == true }
+    public func canStop(_ id: AgentLane.ID) -> Bool {
+        guard let session = sessions[id] else { return false }
+        return session.backend.canStop(session.lane)
+    }
 
     /// End and remove a lane the person opened, stopping its session too
     /// when ``Configuration/closeStopsLane`` is on.
     public func close(_ id: AgentLane.ID) {
         guard let index = lanes.firstIndex(where: { $0.id == id }), lanes[index].isClosable else { return }
-        if configuration.closeStopsLane, let session = sessions[id], session.backend.canStop {
+        if configuration.closeStopsLane, let session = sessions[id], session.backend.canStop(session.lane) {
             session.backend.stop(session.lane)
+            forgetDiscovered(claimedBy: session.lane, backend: session.backend)
         }
         let decision = willCloseLane?(lanes[index], sessions[id]?.isAttached == true) ?? .remove
         if decision == .keepRow {
@@ -1064,7 +1349,12 @@ public final class AgentLaneStore: ObservableObject {
             return
         }
         let closed = lanes[index]
-        defer { didCloseLane?(closed, .remove) }
+        restoredPending.remove(id)
+        defer {
+            // A session left running shows in Detached again.
+            reconcileDetached()
+            didCloseLane?(closed, .remove)
+        }
         sessions[id]?.detach()
         sessions.removeValue(forKey: id)
         lanes.remove(at: index)

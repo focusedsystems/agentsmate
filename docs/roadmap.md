@@ -149,6 +149,9 @@ behaviour.
 
 ## Phase 6: lanes that survive anything
 
+Landed. The README's Lanes that survive anything section and
+`docs/backends.md` describe the behaviour; the lane host is still untested.
+
 - A launch sweep lists the lane-prefixed sessions a backend can see (tmux,
   Claude background sessions). It adds any that have no row to a Detached
   section, with Reattach and Adopt actions.

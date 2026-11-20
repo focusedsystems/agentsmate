@@ -61,6 +61,11 @@ public struct LaneLayout: Codable, Equatable, Sendable {
 
     /// The name of the group pinned lanes are shown in.
     public static let pinnedSection = "Pinned"
+    /// The name of the group that holds sessions running with no row.
+    public static let detachedSection = "Detached"
+
+    /// Names a person's section cannot take, because a group of the list has them.
+    static func isReserved(_ name: String) -> Bool { name == pinnedSection || name == detachedSection }
 
     /// The section a lane is in: the person's choice, else the app's, else none.
     public func section(of lane: AgentLane) -> String? {
@@ -82,13 +87,13 @@ public struct LaneLayout: Codable, Equatable, Sendable {
 
     public mutating func addSection(_ name: String) {
         let name = name.trimmingCharacters(in: .whitespaces)
-        guard !name.isEmpty, name != Self.pinnedSection, !sections.contains(name) else { return }
+        guard !name.isEmpty, !Self.isReserved(name), !sections.contains(name) else { return }
         sections.append(name)
     }
 
     public mutating func renameSection(_ old: String, to new: String, lanes: [AgentLane]) {
         let new = new.trimmingCharacters(in: .whitespaces)
-        guard !new.isEmpty, new != old, new != Self.pinnedSection else { return }
+        guard !new.isEmpty, new != old, !Self.isReserved(new) else { return }
         if !sections.contains(old) { sections = orderedSections(for: lanes) }
         sections = sections.map { $0 == old ? new : $0 }
         var seen = Set<String>()
@@ -116,7 +121,7 @@ public struct LaneLayout: Codable, Equatable, Sendable {
 
     public mutating func move(_ laneID: String, to section: String?) {
         assignments[laneID] = section ?? ""
-        if let section, !sections.contains(section), section != Self.pinnedSection { sections.append(section) }
+        if let section, !sections.contains(section), !Self.isReserved(section) { sections.append(section) }
     }
 
     public mutating func setPinned(_ laneID: String, _ pinned: Bool) {
@@ -186,6 +191,8 @@ public struct LaneGroup: Identifiable, Equatable, Sendable {
     public var section: String?
     public var lanes: [AgentLane]
     public var isPinned = false
+    /// The Detached group: sessions the launch sweep found with no row.
+    public var isDetached = false
 
-    public var id: String { isPinned ? "\u{1}pinned" : section ?? "\u{1}none" }
+    public var id: String { isPinned ? "\u{1}pinned" : isDetached ? "\u{1}detached" : section ?? "\u{1}none" }
 }
