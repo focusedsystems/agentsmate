@@ -45,6 +45,15 @@ final class UsageResetTests: XCTestCase {
         XCTAssertEqual(AgentUsageMeter.delta(from: now, to: now.addingTimeInterval(3 * 3600 + 20 * 60)), "3 hours, 20 minutes")
         XCTAssertEqual(AgentUsageMeter.delta(from: now, to: now.addingTimeInterval(30)), "under a minute")
         XCTAssertTrue(AgentUsageMeter.resetLine(now.addingTimeInterval(86_400), now: now).hasSuffix("in 1 day"))
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let morning = calendar.date(bySettingHour: 9, minute: 0, second: 0, of: now)!
+        let today = morning.addingTimeInterval(3 * 3600)
+        let later = morning.addingTimeInterval(2 * 86_400)
+        XCTAssertEqual(AgentUsageMeter.shortReset(today, now: morning, calendar: calendar),
+                       today.formatted(.dateTime.hour().minute()))
+        XCTAssertEqual(AgentUsageMeter.shortReset(later, now: morning, calendar: calendar),
+                       later.formatted(.dateTime.weekday(.abbreviated).hour().minute()))
     }
 }
 
