@@ -83,7 +83,8 @@ Finished, and Claude's sixty-second idle reminder shows Needs You.
 
 ## Phase 2: summaries
 
-`LaneSummarizer` runs `claude -p` for every lane, caches in memory, and has no
+Landed. The README's Summaries section describes the behaviour. Before it,
+`LaneSummarizer` ran `claude -p` for every lane, cached in memory, and had no
 switch.
 
 - A `LaneSummarizing` protocol with two implementations: Claude
