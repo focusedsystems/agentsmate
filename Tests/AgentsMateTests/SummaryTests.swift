@@ -118,13 +118,30 @@ final class SummarizerCommandTests: XCTestCase {
     }
 
     func testRunTimesOut() throws {
-        let tool = try script("sleep 30\n")
+        // One process that would run for ten minutes: only the stop can end
+        // it, so returning well inside that proves the timeout fired. The
+        // timer runs on a busy queue so a loaded machine cannot defer it.
+        let tool = try script("exec sleep 600\n")
         defer { try? FileManager.default.removeItem(at: tool) }
         let started = Date()
-        let result = try SummaryProcess.run(tool, arguments: [], input: "", environment: [:], timeout: 0.5)
+        let result = try SummaryProcess.run(tool, arguments: [], input: "", environment: [:], timeout: 0.5,
+                                            timerQueue: .global(qos: .userInitiated))
         XCTAssertTrue(result.timedOut)
-        XCTAssertLessThan(Date().timeIntervalSince(started), 10)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 60)
         XCTAssertThrowsError(try result.summary()) { XCTAssertEqual($0 as? LaneSummaryError, .timedOut) }
+    }
+
+    func testRunKillsAToolThatIgnoresTheStop() throws {
+        // The tool ignores SIGTERM for ten minutes; it is killed after the
+        // grace and the run returns.
+        let tool = try script("trap '' TERM\nexec sleep 600\n")
+        defer { try? FileManager.default.removeItem(at: tool) }
+        let started = Date()
+        let result = try SummaryProcess.run(tool, arguments: [], input: "", environment: [:], timeout: 0.5,
+                                            timerQueue: .global(qos: .userInitiated))
+        XCTAssertTrue(result.timedOut)
+        XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(started), SummaryProcess.killGrace)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 60)
     }
 
     func testFailureIsClassified() throws {

@@ -709,6 +709,7 @@ struct LaneRow: View {
         let status = session.isOrphan ? "Running, nothing attached"
             : session.needsAttention ? "\(session.status.title), new" : session.status.title
         var parts = [status]
+        if let notice = session.renameNotice { parts.append(notice) }
         if let summary = session.summary, !summary.isEmpty { parts.append(summary) }
         parts += session.displayedPullRequests.map(\.accessibilityDescription)
         return parts.joined(separator: ", ")
@@ -722,6 +723,7 @@ struct LaneRow: View {
     }
 
     private var subtitle: String {
+        if let notice = session.renameNotice { return notice }
         let base = statusSubtitle
         guard let branch = session.rowMetadata.branch else { return base }
         return base + " · " + branch

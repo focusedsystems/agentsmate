@@ -439,7 +439,7 @@ public final class AgentLaneStore: ObservableObject {
             guard let session = sessions[id] else { return nil }
             return (id, session.isStarted ? session.currentDirectory : session.lane.path, session.shellPID)
         }
-        let cache = pullRequestCache, gh = gh
+        let cache = pullRequestCache, gh = gh, ledger = pullRequestLedger?.state
         // A dispatch queue rather than a task: helpers block while they wait
         // for one of the two process slots.
         DispatchQueue.global(qos: .background).async { [weak self] in
@@ -449,7 +449,12 @@ public final class AgentLaneStore: ObservableObject {
                 var meta = LaneRowMetadata()
                 meta.branch = LaneRowMetadataReader.branch(in: directory)
                 if let pid { meta.ports = LaneRowMetadataReader.listeningPorts(pids: LaneRowMetadataReader.processTree(pid)) }
-                if let branch = meta.branch {
+                if let branch = meta.branch, let ledger,
+                   let known = RowMetadataSchedule.ledgerPullRequest(ledger, lane: id, branch: branch, directory: directory) {
+                    // The ledger already tracks this branch's pull request
+                    // and rechecks it itself, so `gh` is not asked again.
+                    meta.pullRequest = known
+                } else if let branch = meta.branch {
                     let key = RowMetadataSchedule.cacheKey(directory: directory, branch: branch)
                     let hit = fresh[key] ?? cache[key]
                     if let hit, !RowMetadataSchedule.needsFetch(hit, now: Date()) {
@@ -657,7 +662,7 @@ public final class AgentLaneStore: ObservableObject {
                                  backendID: saved.backendID, isClosable: true, section: saved.section)
             add(lane, focus: false, open: false)
             if resume { sessions[lane.id]?.resumeOnStart = true }
-            if let title = saved.title { rename(lane.id, to: title) }
+            if let title = saved.title { setName(lane.id, to: title) }
             if saved.pinned == true { layout.setPinned(lane.id, true) }
             if first == nil { first = lane.id }
         }
@@ -743,12 +748,54 @@ public final class AgentLaneStore: ObservableObject {
     // MARK: Naming, duplicating, switching agent
 
     /// Give a row a name of the person's own; nil returns to the automatic name.
+    /// A new name also renames the agent's own session, when its backend has
+    /// a ``LaneBackend/renameCommand`` and ``renamesAgentSession`` is on;
+    /// see ``renameAgentSession(_:to:)``.
     public func rename(_ id: AgentLane.ID, to name: String?) {
+        let before = sessions[id]?.customTitle
+        setName(id, to: name)
+        if let value = sessions[id]?.customTitle, value != before { renameAgentSession(id, to: value) }
+    }
+
+    /// The row's name only, as a restored or duplicated lane takes it.
+    func setName(_ id: AgentLane.ID, to name: String?) {
         let name = name?.trimmingCharacters(in: .whitespaces)
         let value = name?.isEmpty == false ? name : nil
         sessions[id]?.customTitle = value
         if let value { layout.names[id] = value } else { layout.names.removeValue(forKey: id) }
     }
+
+    /// Type the backend's rename command into the lane's agent, so its own
+    /// session takes the name too. It is typed only when the lane is attached
+    /// here, the agent has the terminal, is not running a turn or asking
+    /// permission, and its input line reads as empty; otherwise nothing is
+    /// typed, and the row says why for a moment when that is worth knowing.
+    @discardableResult
+    public func renameAgentSession(_ id: AgentLane.ID, to name: String) -> AgentRenameOutcome {
+        guard let session = sessions[id] else { return .notAttached }
+        let command = session.backend.renameCommand.flatMap { LaneRename.command(format: $0, name: name) }
+        let outcome = AgentRenameOutcome.decide(command: command, enabled: renamesAgentSession,
+                                                attached: session.isAttached, agentInForeground: session.acceptsText,
+                                                state: session.record?.state, input: session.readInputLine)
+        if outcome == .sent, let command { session.typeCommand(command) }
+        session.showRenameNotice(outcome.notice)
+        return outcome
+    }
+
+    /// The person's switch for renaming the agent's session with its lane,
+    /// saved under ``AgentsModeKeys/renameAgentSession``; on unless they
+    /// turn it off.
+    public var renamesAgentSession: Bool {
+        get { defaults.object(forKey: keys.renameAgentSession) as? Bool ?? true }
+        set {
+            defaults.set(newValue, forKey: keys.renameAgentSession)
+            objectWillChange.send()
+        }
+    }
+
+    /// Whether any registered backend can rename its agent's session, so
+    /// Settings shows the switch.
+    public var agentRenameAvailable: Bool { backends.values.contains { $0.renameCommand != nil } }
 
     /// Told when the person picks an icon or colour for a lane, with the new
     /// choice (nil for each means back to the app's own), so an app can keep
@@ -849,7 +896,7 @@ public final class AgentLaneStore: ObservableObject {
         let taken = Set(sessions.values.map(\.title))
         let name = session.title.nextCopyName(taken: taken)
         let added = add(lane, focus: focus, after: id)
-        rename(lane.id, to: name)
+        setName(lane.id, to: name)
         return added
     }
 
@@ -1334,4 +1381,6 @@ public struct AgentsModeKeys: Sendable {
     public var backendOverrides: String { prefix + "backendOverrides" }
     /// The person's switch for one-line lane summaries.
     public var summarizeSessions: String { prefix + "summarizeSessions" }
+    /// The person's switch for renaming the agent's session with its lane.
+    public var renameAgentSession: String { prefix + "renameAgentSession" }
 }

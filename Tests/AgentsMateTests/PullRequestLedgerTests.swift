@@ -209,7 +209,9 @@ final class PullRequestDisplayTests: XCTestCase {
     func testGitHubResolverCommandAndAnswers() {
         let url = URL(string: "https://github.com/acme/widgets/pull/7")!
         XCTAssertEqual(GitHubPullRequestResolver.arguments(for: url),
-                       ["pr", "view", "--json", "title,state,number,isDraft", "--", url.absoluteString])
+                       ["pr", "view", "--json", "title,state,number,isDraft,headRefName", "--", url.absoluteString])
+        XCTAssertEqual(GitHubPullRequestResolver.parse(#"{"number":7,"state":"OPEN","isDraft":false,"title":"T","headRefName":"fix/x"}"#,
+                                                       url: url)?.headBranch, "fix/x")
         XCTAssertEqual(GitHubPullRequestResolver.parse(#"{"number":7,"state":"OPEN","isDraft":true,"title":"WIP"}"#, url: url),
                        .init(number: 7, title: "WIP", state: .draft, repository: "acme/widgets"))
         XCTAssertEqual(GitHubPullRequestResolver.parse(#"{"number":7,"state":"MERGED","isDraft":false,"title":""}"#, url: url)?.state, .merged)
@@ -261,5 +263,83 @@ final class PullRequestDisplayTests: XCTestCase {
         session.pullRequests = [LanePullRequest(url: URL(string: "https://github.com/acme/w/pull/2")!,
                                                 details: .init(number: 2, state: .merged))]
         XCTAssertEqual(session.displayedPullRequests.map(\.state), [.merged], "deduped to the ledger's entry")
+    }
+}
+
+final class BranchPullRequestDedupeTests: XCTestCase {
+    private func state(head: String?, repository: String = "acme/widgets", lane: String = "a") -> PullRequestLedgerState {
+        let url = URL(string: "https://github.com/\(repository)/pull/7")!
+        var state = PullRequestLedgerState()
+        state.lanes[lane] = .init(urls: [url], updatedAt: Date())
+        state.resolutions[PullRequestKey.of(url)] = .init(details: .init(number: 7, state: .open, repository: repository,
+                                                                         headBranch: head), checkedAt: Date())
+        return state
+    }
+
+    private func lookup(_ state: PullRequestLedgerState, lane: String = "a", branch: String = "fix/x",
+                        origin: String? = "acme/widgets") -> LaneRowMetadata.PullRequest? {
+        RowMetadataSchedule.ledgerPullRequest(state, lane: lane, branch: branch, directory: "/repo", repository: { _ in origin })
+    }
+
+    func testLedgerAnswersForTheBranchItTracks() {
+        let found = lookup(state(head: "fix/x"))
+        XCTAssertEqual(found?.number, 7)
+        XCTAssertEqual(found?.state, .open)
+        XCTAssertEqual(found?.url, URL(string: "https://github.com/acme/widgets/pull/7"))
+        // Owner and repository names compare without case.
+        XCTAssertEqual(lookup(state(head: "fix/x"), origin: "Acme/Widgets")?.number, 7)
+    }
+
+    func testFallsBackToTheBranchLookupWhenUnsure() {
+        XCTAssertNil(lookup(state(head: "fix/x"), branch: "main"))
+        XCTAssertNil(lookup(state(head: nil)))
+        XCTAssertNil(lookup(state(head: "fix/x"), origin: "acme/other"))
+        XCTAssertNil(lookup(state(head: "fix/x"), origin: nil))
+        XCTAssertNil(lookup(state(head: "fix/x"), lane: "b"))
+    }
+
+    func testLedgerWrittenBeforeHeadBranchesStillReads() throws {
+        let json = #"{"lanes":{},"resolutions":{"github.com/a/b/pull/1":{"checkedAt":"2026-01-01T00:00:00Z","details":{"number":1,"state":"open"}}}}"#
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let state = try decoder.decode(PullRequestLedgerState.self, from: Data(json.utf8))
+        XCTAssertNil(state.resolutions["github.com/a/b/pull/1"]?.details.headBranch)
+    }
+
+    func testOriginRepositoryFromConfigAndRemotes() throws {
+        let config = """
+        [core]
+        \tbare = false
+        [remote "upstream"]
+        \turl = https://github.com/other/thing.git
+        [remote "origin"]
+        \turl = git@github.com:acme/widgets.git
+        \tfetch = +refs/heads/*:refs/remotes/origin/*
+        """
+        XCTAssertEqual(LaneRowMetadataReader.originURL(inConfig: config), "git@github.com:acme/widgets.git")
+        XCTAssertNil(LaneRowMetadataReader.originURL(inConfig: "[core]\n\tbare = false\n"))
+        for remote in ["git@github.com:acme/widgets.git", "https://github.com/acme/widgets", "https://github.com/acme/widgets.git/",
+                       "ssh://git@github.com/acme/widgets.git"] {
+            XCTAssertEqual(LaneRowMetadataReader.gitHubRepository(fromRemote: remote), "acme/widgets", remote)
+        }
+        XCTAssertNil(LaneRowMetadataReader.gitHubRepository(fromRemote: "https://gitlab.com/acme/widgets.git"))
+        XCTAssertNil(LaneRowMetadataReader.gitHubRepository(fromRemote: "https://github.com/acme"))
+
+        // A worktree reads its main repository's config.
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("origin-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let git = root.appendingPathComponent("repo/.git")
+        let worktreeGit = git.appendingPathComponent("worktrees/wt")
+        try FileManager.default.createDirectory(at: worktreeGit, withIntermediateDirectories: true)
+        try config.write(to: git.appendingPathComponent("config"), atomically: true, encoding: .utf8)
+        try "ref: refs/heads/main\n".write(to: git.appendingPathComponent("HEAD"), atomically: true, encoding: .utf8)
+        try "ref: refs/heads/wt\n".write(to: worktreeGit.appendingPathComponent("HEAD"), atomically: true, encoding: .utf8)
+        try "../..\n".write(to: worktreeGit.appendingPathComponent("commondir"), atomically: true, encoding: .utf8)
+        let worktree = root.appendingPathComponent("repo/.worktrees/wt")
+        try FileManager.default.createDirectory(at: worktree, withIntermediateDirectories: true)
+        try "gitdir: \(worktreeGit.path)\n".write(to: worktree.appendingPathComponent(".git"), atomically: true, encoding: .utf8)
+        XCTAssertEqual(LaneRowMetadataReader.originRepository(in: root.appendingPathComponent("repo").path), "acme/widgets")
+        XCTAssertEqual(LaneRowMetadataReader.originRepository(in: worktree.path), "acme/widgets")
+        XCTAssertNil(LaneRowMetadataReader.originRepository(in: root.path))
     }
 }

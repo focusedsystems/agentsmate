@@ -27,12 +27,18 @@ public struct PullRequestDetails: Codable, Equatable, Sendable {
     public var state: PullRequestState
     /// The repository as its host writes it, such as `owner/repo`.
     public var repository: String?
+    /// The branch the pull request merges from, when the resolver says. A
+    /// lane on that branch in that repository then shows this pull request
+    /// without a lookup of its own.
+    public var headBranch: String?
 
-    public init(number: Int, title: String? = nil, state: PullRequestState, repository: String? = nil) {
+    public init(number: Int, title: String? = nil, state: PullRequestState, repository: String? = nil,
+                headBranch: String? = nil) {
         self.number = number
         self.title = title
         self.state = state
         self.repository = repository
+        self.headBranch = headBranch
     }
 }
 
@@ -82,7 +88,7 @@ public struct GitHubPullRequestResolver: PullRequestResolver {
     /// The arguments for one lookup. The link goes after `--`, so it can
     /// never be read as an option.
     static func arguments(for url: URL) -> [String] {
-        ["pr", "view", "--json", "title,state,number,isDraft", "--", url.absoluteString]
+        ["pr", "view", "--json", "title,state,number,isDraft,headRefName", "--", url.absoluteString]
     }
 
     public func resolve(_ url: URL) async throws -> PullRequestDetails {
@@ -111,7 +117,9 @@ public struct GitHubPullRequestResolver: PullRequestResolver {
         default: kind = (object["isDraft"] as? Bool) == true ? .draft : .open
         }
         let title = (object["title"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-        return PullRequestDetails(number: number, title: title, state: kind, repository: PullRequestKey.repository(of: url))
+        let head = (object["headRefName"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        return PullRequestDetails(number: number, title: title, state: kind, repository: PullRequestKey.repository(of: url),
+                                  headBranch: head)
     }
 }
 
@@ -228,6 +236,20 @@ struct PullRequestLedgerState: Codable, Equatable, Sendable {
     var lanes: [String: Lane] = [:]
     /// By ``PullRequestKey``.
     var resolutions: [String: Resolution] = [:]
+
+    /// The newest of the lane's pull requests that merges from `branch` in
+    /// `repository` (`owner/repo`, compared without case), as the row's
+    /// branch chip shows it. Nil when the ledger does not know one, so the
+    /// branch is looked up instead.
+    func pullRequest(for lane: String, branch: String, repository: String) -> LaneRowMetadata.PullRequest? {
+        let repository = repository.lowercased()
+        for url in (lanes[lane]?.urls ?? []).reversed() {
+            guard let details = resolutions[PullRequestKey.of(url)]?.details,
+                  details.headBranch == branch, details.repository?.lowercased() == repository else { continue }
+            return .init(number: details.number, state: details.state, url: url)
+        }
+        return nil
+    }
 }
 
 /// The ledger file: `~/Library/Caches/<bundle id>/agent-pull-requests.json`.

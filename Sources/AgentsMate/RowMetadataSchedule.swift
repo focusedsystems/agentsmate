@@ -16,6 +16,17 @@ enum RowMetadataSchedule {
 
     static func cacheKey(directory: String, branch: String) -> String { directory + "#" + branch }
 
+    /// The branch's pull request when the lane's ledger already has it: one
+    /// the agent posted, whose resolver named this branch as its head, in the
+    /// repository the folder's `origin` points at. Reads only the git config.
+    static func ledgerPullRequest(_ ledger: PullRequestLedgerState, lane: String, branch: String,
+                                  directory: String,
+                                  repository: (String) -> String? = LaneRowMetadataReader.originRepository(in:))
+        -> LaneRowMetadata.PullRequest? {
+        guard ledger.lanes[lane] != nil, let repo = repository(directory) else { return nil }
+        return ledger.pullRequest(for: lane, branch: branch, repository: repo)
+    }
+
     /// Whether to ask `gh` again. A merged or closed pull request is final
     /// for its branch; anything else is reused for five minutes.
     static func needsFetch(_ cached: CachedPullRequest?, now: Date) -> Bool {
