@@ -101,21 +101,11 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         }
         .listStyle(.sidebar)
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            let inboxID = store.configuration.inboxWindowID
-            if store.usage != nil || inboxID != nil {
+            if let usage = store.usage {
                 VStack(spacing: 0) {
                     Divider()
-                    HStack(alignment: .center, spacing: 8) {
-                        if let usage = store.usage {
-                            AgentUsageMeter(model: usage)
-                        } else {
-                            Spacer(minLength: 0)
-                        }
-                        if let inboxID {
-                            AgentInboxButton(store: store, windowID: inboxID)
-                        }
-                    }
-                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    AgentUsageMeter(model: usage)
+                        .padding(.horizontal, 12).padding(.vertical, 8)
                 }
                 .background(inDock ? AnyShapeStyle(.bar) : AnyShapeStyle(.clear))
             }
@@ -492,6 +482,11 @@ public struct AgentLaneSidebar<Accessory: View>: View {
                              help: "Show only \(labels.laneNoun)s waiting for input or permission",
                              count: all.filter { Self.wantsYou($0.status) }.count, isOn: $filterNeedsYou)
             Spacer(minLength: 0)
+            // The inbox sits with the other list controls at the top; the
+            // foot belongs to the usage meter.
+            if let inboxID = store.configuration.inboxWindowID {
+                AgentInboxButton(store: store, windowID: inboxID)
+            }
             Menu {
                 Picker("Sort", selection: Binding(get: { store.layout.sort }, set: { store.setSort($0) })) {
                     ForEach(LaneLayout.Sort.allCases, id: \.self) { Text($0.title).tag($0) }

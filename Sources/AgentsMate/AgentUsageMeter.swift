@@ -47,8 +47,8 @@ public struct AgentUsageMeter: View {
                         Text(usage.agent).font(.caption).frame(width: 44, alignment: .leading)
                         ProgressView(value: min(window.percent, 100), total: 100)
                             .tint(window.percent >= 90 ? .red : window.percent >= 70 ? .orange : .accentColor)
-                        Text("\(Int(window.percent.rounded()))%").font(.caption.monospacedDigit())
-                            .foregroundStyle(.secondary).frame(width: 34, alignment: .trailing)
+                        // No percentage beside the bar: the bar says it, and the
+                        // width goes to the bar. The figure is in the tooltip.
                         if let reset = window.resetsAt {
                             TimelineView(.periodic(from: .now, by: 60)) { context in
                                 Text(Self.shortReset(reset, now: context.date))
