@@ -6,7 +6,50 @@ small change in each app that turns it on. Apps pick features up through
 `AgentLaneStore.Configuration` and settings keys, and the package carries no
 app-specific detail.
 
-## Phase 0: one transcript reader
+## Efficiency rules for every phase
+
+The package runs inside apps that stay open all day beside several agents, so
+background work must stay cheap and on the efficiency cores of Apple silicon.
+
+- **Background QoS.** Polling, parsing, summaries and probes run at
+  `.background` (`Task.detached(priority: .background)`,
+  `DispatchQueue.global(qos: .background)`, `Process.qualityOfService =
+  .background`). macOS keeps that work on the efficiency cores. Only work
+  someone is waiting on, such as a click or opening a lane, runs at
+  `.userInitiated`.
+- **Events before timers.** Watch files with `DispatchSource` file-system
+  sources and react to hooks and terminal output. A timer is the fallback.
+- **Coalescable timers.** Every timer has a tolerance of at least 10% of its
+  interval, so the system can batch wake-ups.
+- **Back off when unseen.** Slow down or pause when the app is inactive, the
+  window is occluded, or the Mac is in Low Power Mode
+  (`ProcessInfo.isLowPowerModeEnabled`, thermal state). Catch up once on
+  return.
+- **Incremental reads.** Read only what was appended to a file since the last
+  read, and only for files whose size or modification time changed.
+- **Bounded children.** No more than two helper processes run at once. Each
+  has a timeout, drains its pipes, and is skipped if the last run is still
+  going.
+- **Measure.** Each phase records the idle CPU and wake-ups per minute of an
+  app with ten lanes before and after (`powermetrics`, Activity Monitor
+  Energy), and states them in its pull request.
+
+## Phase 0a: efficiency pass on what exists
+
+- Each lane polls its directory and metadata every 2 s
+  (`AgentLaneSession.poll`). Follow the directory from the shell's OSC 7
+  reports, and read metadata only when the lane is on screen.
+- Row metadata (git branch, `gh pr view`, `lsof` ports) runs every 10 s for
+  every lane (`AgentLaneStore.metadataTimer`). Watch `.git/HEAD` for branch
+  changes. Sweep PRs and ports every 10 minutes, and sooner only for the
+  selected lane.
+- `LaneStatusFeed` both watches the status directory and polls it. Keep the
+  watcher, and slow the poll to a safety net with tolerance.
+- Helper processes (`LaneRowMetadata`, `LanePresence`, `ClaudeAgentsList`,
+  `LaneSummarizer`) start at default QoS. Set `.background`, and replace
+  `DispatchQueue.global()` timeouts with `.background` queues.
+
+## Phase 0b: one transcript reader
 
 Status, summaries and the pull request ledger all need the same facts from an
 agent's transcript. Today `TranscriptDigest` reads the last 512 KB for prompts
@@ -65,8 +108,7 @@ switch.
   Finished.
 - An inbox button with a badge in the sidebar footer, beside the usage meter.
 - Message Agent becomes a small window scene (`AgentMessageWindow`) instead of
-  an alert, on a `.messageAgent` shortcut action. The app picks the default key,
-  since ⇧⌘K is often taken.
+  an alert, on a `.messageAgent` shortcut action whose default is ⌥⌘K.
 - Sending still types the text and presses Return in the lane's terminal. A
   lane not attached here is attached in the background first, so it can be
   messaged from anywhere.
