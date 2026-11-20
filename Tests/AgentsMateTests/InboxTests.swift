@@ -75,7 +75,9 @@ final class InboxStoreTests: XCTestCase {
         var opened: [URL] = []
         store.onOpenPullRequest = { opened.append($0) }
         let url = URL(string: "https://github.com/owner/repo/pull/1")!
-        store.openPullRequest(url)
-        XCTAssertEqual(opened, [url])
+        XCTAssertTrue(store.openPullRequest(url))
+        XCTAssertFalse(store.openPullRequest(URL(string: "https://github.com.evil.example/owner/repo/pull/1")!))
+        XCTAssertFalse(store.openPullRequest(URL(string: "https://github.com/owner/repo/pull/1#x")!))
+        XCTAssertEqual(opened, [url], "an untrusted link never reaches the hook")
     }
 }

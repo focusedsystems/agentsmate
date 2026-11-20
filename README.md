@@ -90,7 +90,11 @@ summary, what the agent last said, and the pull requests it posted as chips.
 Double-click a row or press Return to show its lane. Mark Read and Mark All
 Read are on the row's menu, the inbox toolbar and the Agent menu
 (`store.markRead(_:)`, `store.markAllRead()`). Chips open through
-`store.onOpenPullRequest`, or the default browser when it is nil.
+`store.onOpenPullRequest`, or the default browser when it is nil. Transcript
+text is written by the agent, so a link is collected and opened only when
+`PullRequestLink.isTrusted(_:)` accepts it: `https`, a GitHub or Azure DevOps
+host exactly, no user, password, port, query or fragment, and a pull request
+path.
 
 Put the inbox in a `Window` scene and give its id to the store, and the
 sidebar's foot gets an inbox button with a badge counting Asking You, beside
