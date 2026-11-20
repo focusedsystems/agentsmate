@@ -326,8 +326,26 @@ open class AgentTerminalView: LocalProcessTerminalView {
         if let payload = line[column].getPayload() as? String {
             return TerminalLinks.hyperlinkURL(fromPayload: payload)
         }
-        let characters = (0..<min(terminal.cols, line.count)).map { terminal.getCharacter(for: line[$0]) }
-        return TerminalLinks.detectedURL(in: characters, at: column)
+        // Join the visible rows of the soft-wrapped line around the click,
+        // so a URL that runs past the right edge is found whole from either
+        // row. A hard line break is never joined.
+        var first = row, last = row
+        while first > 0, isWrapped(line: terminal.getLine(row: first)) { first -= 1 }
+        while let next = terminal.getLine(row: last + 1), isWrapped(line: next) { last += 1 }
+        let rows = (first...last).map { index -> [Character] in
+            guard let line = terminal.getLine(row: index) else { return [] }
+            return (0..<min(terminal.cols, line.count)).map { terminal.getCharacter(for: line[$0]) }
+        }
+        return TerminalLinks.detectedURL(inWrappedRows: rows, row: row - first, column: column)
+    }
+
+    /// Whether `line` continues the row above it because the text before it
+    /// ran past the right edge. SwiftTerm 1.11 keeps that flag internal on
+    /// `BufferLine`, so it is read by reflection; without it a row counts as
+    /// its own line, as before.
+    private func isWrapped(line: BufferLine?) -> Bool {
+        guard let line else { return false }
+        return Mirror(reflecting: line).children.first { $0.label == "isWrapped" }?.value as? Bool ?? false
     }
 
     /// The visible cell under the pointer, measured the way SwiftTerm sizes
