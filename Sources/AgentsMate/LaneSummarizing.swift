@@ -218,9 +218,9 @@ enum SummaryProcess {
         return env
     }
 
-    /// How long the pipes are drained after the tool exits. A child that
-    /// left the tool's process group can hold them open; its output is not
-    /// waited for.
+    /// How long a pipe with nothing in it is waited on after the tool
+    /// exits. A child that left the tool's process group can hold it open;
+    /// its output is not waited for.
     static let drainGrace: TimeInterval = 2
     /// How long a tool stopped at its timeout has before it is killed.
     static let killGrace: TimeInterval = 2
@@ -232,8 +232,16 @@ enum SummaryProcess {
     /// group.)
     /// `timerQueue` runs the timeout; tests pass a busier queue than the
     /// background one, so a loaded machine cannot hold the stop back.
+    /// `qualityOfService` is the tool's; tests raise it, because a
+    /// background-priority child on a busy machine can wait a minute or more
+    /// for its first time slice.
+    /// `beforeTimeout` runs after the tool starts and its pipes are being
+    /// drained, and before its timeout begins; tests use it to wait until a tool has set itself
+    /// up (a shell's `trap`, say), so the stop can never land before that.
     static func run(_ executable: URL, arguments: [String], input: String, environment: [String: String],
-                    timeout: TimeInterval, timerQueue: DispatchQueue = .global(qos: .background)) throws -> Result {
+                    timeout: TimeInterval, timerQueue: DispatchQueue = .global(qos: .background),
+                    qualityOfService: QualityOfService = .background,
+                    beforeTimeout: () -> Void = {}) throws -> Result {
         let folder = scratch
         // The prompt goes in as a file, so a tool that exits early can never
         // leave this process writing to a closed pipe.
@@ -244,7 +252,7 @@ enum SummaryProcess {
         defer { try? inputHandle.close() }
 
         let process = Process()
-        process.qualityOfService = .background
+        process.qualityOfService = qualityOfService
         process.executableURL = executable
         process.arguments = arguments
         process.environment = environment
@@ -253,6 +261,9 @@ enum SummaryProcess {
         process.standardInput = inputHandle
         process.standardOutput = output
         process.standardError = error
+        // Closed when the tool exits, so the drain hears of it as an event.
+        let exited = Pipe()
+        process.terminationHandler = { _ in try? exited.fileHandleForWriting.close() }
         do {
             try process.run()
         } catch {
@@ -268,26 +279,56 @@ enum SummaryProcess {
             // A tool that ignores the stop is killed a moment later.
             timerQueue.asyncAfter(deadline: .now() + killGrace) { if process.isRunning { kill(pid, SIGKILL) } }
         }
+        beforeTimeout()
         timerQueue.asyncAfter(deadline: .now() + timeout, execute: killer)
-
-        // Drain both pipes at once, so neither can fill and stall the tool.
-        let outputData = DataBox(), errorData = DataBox()
-        let group = DispatchGroup()
-        for (pipe, box) in [(output, outputData), (error, errorData)] {
-            group.enter()
-            DispatchQueue.global(qos: .background).async {
-                let handle = pipe.fileHandleForReading
-                while case let chunk = handle.availableData, !chunk.isEmpty { box.append(chunk) }
-                group.leave()
-            }
-        }
+        let (outputData, errorData) = drain(output, error, exited: exited)
         process.waitUntilExit()
         killer.cancel()
-        _ = group.wait(timeout: .now() + drainGrace)
         return Result(status: process.terminationStatus,
-                      output: String(decoding: outputData.get(), as: UTF8.self),
-                      error: String(decoding: errorData.get(), as: UTF8.self),
+                      output: String(decoding: outputData, as: UTF8.self),
+                      error: String(decoding: errorData, as: UTF8.self),
                       timedOut: timedOut.get())
+    }
+
+    /// Read both pipes on this thread until each ends, so neither can fill
+    /// and stall the tool. `exited` ends when the tool exits; after that, a
+    /// pipe a child of the tool still holds open is given up after
+    /// ``drainGrace`` with nothing to read. Whatever the tool wrote before it
+    /// exited is always read first: the grace counts only polls that found
+    /// nothing waiting, so a busy machine that is slow to run this thread
+    /// cannot lose the output. Until the exit, nothing wakes this thread but
+    /// output.
+    private static func drain(_ output: Pipe, _ error: Pipe, exited: Pipe) -> (Data, Data) {
+        let fds = [output.fileHandleForReading.fileDescriptor, error.fileHandleForReading.fileDescriptor]
+        let exitFD = exited.fileHandleForReading.fileDescriptor
+        var data = [Data(), Data()]
+        var open = [true, true]
+        var exitedAt: Date?
+        var buffer = [UInt8](repeating: 0, count: 64 * 1024)
+        while open.contains(true) {
+            let waiting = fds.indices.filter { open[$0] }
+            var polls = waiting.map { pollfd(fd: fds[$0], events: Int16(POLLIN), revents: 0) }
+            if exitedAt == nil { polls.append(pollfd(fd: exitFD, events: Int16(POLLIN), revents: 0)) }
+            let ready = poll(&polls, nfds_t(polls.count), exitedAt == nil ? -1 : 100)
+            if ready < 0 {
+                if errno == EINTR { continue }
+                break
+            }
+            if ready == 0 {
+                if let exitedAt, Date().timeIntervalSince(exitedAt) >= drainGrace { break }
+                continue
+            }
+            for (slot, entry) in zip(waiting, polls) where entry.revents != 0 {
+                let count = buffer.withUnsafeMutableBytes { read(entry.fd, $0.baseAddress, $0.count) }
+                if count > 0 {
+                    data[slot].append(contentsOf: buffer[..<count])
+                } else if count == 0 || (errno != EINTR && errno != EAGAIN) {
+                    open[slot] = false
+                }
+            }
+            if exitedAt == nil, let last = polls.last, last.fd == exitFD, last.revents != 0 { exitedAt = Date() }
+        }
+        return (data[0], data[1])
     }
 
     private final class TimedOutFlag: @unchecked Sendable {
@@ -295,13 +336,6 @@ enum SummaryProcess {
         private var value = false
         func set() { lock.withLock { value = true } }
         func get() -> Bool { lock.withLock { value } }
-    }
-
-    private final class DataBox: @unchecked Sendable {
-        private let lock = NSLock()
-        private var value = Data()
-        func append(_ data: Data) { lock.withLock { value.append(data) } }
-        func get() -> Data { lock.withLock { value } }
     }
 }
 

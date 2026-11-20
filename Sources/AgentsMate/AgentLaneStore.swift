@@ -91,6 +91,12 @@ public final class AgentLaneStore: ObservableObject {
         /// lane sessions (``LaneBackend/discoverSessions()``) and list the
         /// ones no row attaches in a Detached section.
         public var findsDetachedSessions: Bool
+        /// Asks the person for a folder when a section header's + starts a
+        /// lane, opening at the folder given (nil for the system's choice),
+        /// and returns nil when they cancel. The default is an `NSOpenPanel`
+        /// (``AgentLaneStore/chooseFolderWithOpenPanel(startingAt:)``); an
+        /// app can offer its own recent folders or repositories instead.
+        public var chooseFolder: @MainActor (_ startingAt: URL?) async -> URL?
 
         /// `~/Library/Caches/<bundle id>/agent-pull-requests.json`.
         public static var defaultPullRequestLedgerFile: URL { PullRequestLedgerCache.defaultURL() }
@@ -114,8 +120,10 @@ public final class AgentLaneStore: ObservableObject {
                     pullRequestResolvers: [any PullRequestResolver] = [],
                     pullRequestLedgerFile: URL? = Configuration.defaultPullRequestLedgerFile,
                     pullRequestSeedFile: URL? = Configuration.defaultPullRequestSeedFile,
-                    findsDetachedSessions: Bool = true) {
+                    findsDetachedSessions: Bool = true,
+                    chooseFolder: @escaping @MainActor (_ startingAt: URL?) async -> URL? = AgentLaneStore.chooseFolderWithOpenPanel) {
             self.findsDetachedSessions = findsDetachedSessions
+            self.chooseFolder = chooseFolder
             self.pullRequestResolvers = pullRequestResolvers
             self.pullRequestLedgerFile = pullRequestLedgerFile
             self.pullRequestSeedFile = pullRequestSeedFile
@@ -1154,19 +1162,88 @@ public final class AgentLaneStore: ObservableObject {
         // A persistent lane in the same folder would attach the same session,
         // so the copy asks for a lane of its own: the next free number.
         lane.variant = nil
-        if let backend = backends[lane.backendID], backend.keepsRunningWhenDetached {
-            let path = LaneStatusMatch.normalizedPath(lane.path)
-            let used = Set(lanes.filter { $0.backendID == lane.backendID && LaneStatusMatch.normalizedPath($0.path) == path }
-                .map { $0.variant ?? "1" })
-            var n = 2
-            while used.contains(String(n)) { n += 1 }
-            lane.variant = String(n)
-        }
+        lane.variant = freeVariant(for: lane)
         let taken = Set(sessions.values.map(\.title))
         let name = session.title.nextCopyName(taken: taken)
         let added = add(lane, focus: focus, after: id)
         setName(lane.id, to: name)
         return added
+    }
+
+    /// The variant a new lane needs so it is a session of its own: nil when
+    /// its backend's sessions end with their terminal or no lane of that
+    /// backend uses its folder, else the next free number from 2.
+    func freeVariant(for lane: AgentLane) -> String? {
+        guard let backend = backends[lane.backendID], backend.keepsRunningWhenDetached else { return nil }
+        let path = LaneStatusMatch.normalizedPath(lane.path)
+        let sharing = lanes.filter { $0.backendID == lane.backendID && LaneStatusMatch.normalizedPath($0.path) == path }
+        guard !sharing.isEmpty else { return nil }
+        let used = Set(sharing.map { $0.variant ?? "1" })
+        var n = 2
+        while used.contains(String(n)) { n += 1 }
+        return String(n)
+    }
+
+    // MARK: New lane in a section
+
+    /// An `NSOpenPanel` for one folder, as a sheet on the key window when
+    /// there is one. The default ``Configuration/chooseFolder``.
+    public static func chooseFolderWithOpenPanel(startingAt folder: URL?) async -> URL? {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Open"
+        panel.message = "Choose the folder the new lane works in."
+        panel.directoryURL = folder
+        let response: NSApplication.ModalResponse
+        if let window = NSApp.keyWindow {
+            response = await panel.beginSheetModal(for: window)
+        } else {
+            response = panel.runModal()
+        }
+        return response == .OK ? panel.url : nil
+    }
+
+    /// The group a lane is shown in.
+    public func group(containing id: AgentLane.ID) -> LaneGroup? {
+        groups.first { $0.lanes.contains { $0.id == id } }
+    }
+
+    /// Whether a group's + can start a lane in it: every group but Detached.
+    public func canAddLane(to group: LaneGroup) -> Bool { !group.isDetached }
+
+    /// Where the folder chooser opens for a new lane in `group`: the
+    /// selected lane's folder when it is in the group, else the first
+    /// lane's, else nil.
+    public func startingFolder(for group: LaneGroup) -> URL? {
+        let member = group.lanes.first { $0.id == selectedID } ?? group.lanes.first
+        guard let member else { return nil }
+        if let directory = member.directory { return directory }
+        return sessions[member.id].map { URL(fileURLWithPath: $0.currentDirectory, isDirectory: true) }
+    }
+
+    /// Ask for a folder with ``Configuration/chooseFolder``, then open a
+    /// lane running `backendID` there, in `group`'s section (pinned when
+    /// `group` is Pinned), and select it. Cancelling changes nothing. A
+    /// folder another lane of that backend already uses gets a session of
+    /// its own (``AgentLane/variant``).
+    @discardableResult
+    public func newLane(in group: LaneGroup, backendID: String, focus: Bool = true) async -> AgentLaneSession? {
+        guard canAddLane(to: group), backends[backendID] != nil else { return nil }
+        guard let folder = await configuration.chooseFolder(startingFolder(for: group)) else { return nil }
+        let section = group.isPinned ? nil : group.section
+        let name = backends[backendID]?.displayName ?? "Lane"
+        var lane = AgentLane(id: UUID().uuidString, title: "\(name) · \(folder.lastPathComponent)",
+                             directory: folder, backendID: backendID, isClosable: true, section: section)
+        lane.variant = freeVariant(for: lane)
+        if let variant = lane.variant { lane.title += " \(variant)" }
+        // A person's move wins over a lane's own section, so record this
+        // one as theirs: the lane stays where its + was pressed.
+        layout.move(lane.id, to: section)
+        if group.isPinned { layout.setPinned(lane.id, true) }
+        return add(lane, focus: focus)
     }
 
     /// Run a lane the person opened on another backend, keeping its name,
@@ -1291,6 +1368,10 @@ public final class AgentLaneStore: ObservableObject {
     public func renameSection(_ old: String, to new: String) { layout.renameSection(old, to: new, lanes: lanes) }
     public func removeSection(_ name: String) { layout.removeSection(name, lanes: lanes) }
     public func moveSection(_ name: String, by offset: Int) { layout.moveSection(name, by: offset, lanes: lanes) }
+    /// Put a section before another, or last when `target` is nil.
+    public func moveSection(_ name: String, before target: String?) {
+        layout.moveSection(name, before: target, lanes: lanes)
+    }
     public func move(_ id: AgentLane.ID, to section: String?) { layout.move(id, to: section) }
     public func setPinned(_ id: AgentLane.ID, _ pinned: Bool) { layout.setPinned(id, pinned) }
     public func moveLane(_ id: AgentLane.ID, before target: AgentLane.ID?) {
@@ -1304,7 +1385,24 @@ public final class AgentLaneStore: ObservableObject {
 
     public func setAllCollapsed(_ collapsed: Bool) {
         layout.collapsed = collapsed
-            ? Set(layout.orderedSections(for: lanes) + [LaneLayout.pinnedSection, LaneLayout.detachedSection]) : []
+            ? Set(layout.orderedSections(for: lanes) + [LaneLayout.pinnedSection, LaneLayout.detachedSection,
+                                                        LaneLayout.unsectionedKey]) : []
+    }
+
+    /// Fold every group but `group`, and open it.
+    public func collapseOtherSections(than group: LaneGroup) {
+        layout.collapseOthers(than: group.collapseKey, groups: groups)
+    }
+
+    /// Fold every group but the one the selected lane is in.
+    public func collapseOtherSectionsThanSelected() {
+        guard let id = selectedID, let group = group(containing: id) else { return }
+        collapseOtherSections(than: group)
+    }
+
+    /// Whether folding the others would change anything.
+    public func canCollapseOtherSections(than group: LaneGroup) -> Bool {
+        groups.count > 1 && Set(groups.map(\.collapseKey)).subtracting([group.collapseKey]) != layout.collapsed
     }
 
     /// Every section a lane can be moved to.
@@ -1668,6 +1766,7 @@ public struct AgentsModeKeys: Sendable {
     public var filterOpen: String { prefix + "filterOpen" }
     public var filterRunning: String { prefix + "filterRunning" }
     public var filterWaiting: String { prefix + "filterWaiting" }
+    public var filterIdle: String { prefix + "filterIdle" }
     public var fontOffset: String { prefix + "fontOffset" }
     public var layout: String { prefix + "layout" }
     public var shortcuts: String { prefix + "shortcuts" }

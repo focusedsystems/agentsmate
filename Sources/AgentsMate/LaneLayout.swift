@@ -64,8 +64,14 @@ public struct LaneLayout: Codable, Equatable, Sendable {
     /// The name of the group that holds sessions running with no row.
     public static let detachedSection = "Detached"
 
+    /// The key ``collapsed`` uses for the lanes in no section, which no
+    /// section name can be.
+    public static let unsectionedKey = "\u{1}none"
+
     /// Names a person's section cannot take, because a group of the list has them.
-    static func isReserved(_ name: String) -> Bool { name == pinnedSection || name == detachedSection }
+    static func isReserved(_ name: String) -> Bool {
+        name == pinnedSection || name == detachedSection || name == unsectionedKey
+    }
 
     /// The section a lane is in: the person's choice, else the app's, else none.
     public func section(of lane: AgentLane) -> String? {
@@ -117,6 +123,23 @@ public struct LaneLayout: Codable, Equatable, Sendable {
         all.remove(at: index)
         all.insert(name, at: target)
         sections = all
+    }
+
+    /// Put a section just before another, or last when `target` is nil, as a
+    /// drag in the list does.
+    public mutating func moveSection(_ name: String, before target: String?, lanes: [AgentLane]) {
+        guard name != target else { return }
+        var all = orderedSections(for: lanes)
+        guard all.contains(name), target.map(all.contains) ?? true else { return }
+        all.removeAll { $0 == name }
+        if let target, let index = all.firstIndex(of: target) { all.insert(name, at: index) } else { all.append(name) }
+        sections = all
+    }
+
+    /// Fold every group but the one with `key` (a ``LaneGroup/collapseKey``),
+    /// and open that one.
+    public mutating func collapseOthers(than key: String, groups: [LaneGroup]) {
+        collapsed = Set(groups.map(\.collapseKey)).subtracting([key])
     }
 
     public mutating func move(_ laneID: String, to section: String?) {
@@ -195,4 +218,16 @@ public struct LaneGroup: Identifiable, Equatable, Sendable {
     public var isDetached = false
 
     public var id: String { isPinned ? "\u{1}pinned" : isDetached ? "\u{1}detached" : section ?? "\u{1}none" }
+
+    /// What ``LaneLayout/collapsed`` holds while this group is folded.
+    public var collapseKey: String {
+        isPinned ? LaneLayout.pinnedSection : isDetached ? LaneLayout.detachedSection
+            : section ?? LaneLayout.unsectionedKey
+    }
+
+    /// The name its header shows; nil for the lanes in no section, which
+    /// show the list's title.
+    public var title: String? {
+        isPinned ? LaneLayout.pinnedSection : isDetached ? LaneLayout.detachedSection : section
+    }
 }

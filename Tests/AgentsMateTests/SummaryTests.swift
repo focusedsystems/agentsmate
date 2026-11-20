@@ -53,6 +53,28 @@ final class SummaryPromptTests: XCTestCase {
     }
 }
 
+/// A file a test tool creates once it has set itself up, and a wait for it
+/// that ``SummaryProcess/run`` calls before the timeout starts. A loaded
+/// machine can take seconds to schedule a background-priority shell, so
+/// without the wait the stop could reach the tool before its first line ran.
+private final class ReadyMarker: @unchecked Sendable {
+    let path = FileManager.default.temporaryDirectory.appendingPathComponent("ready-\(UUID().uuidString)").path
+    private let lock = NSLock()
+    private var armed: Date?
+    /// When the timeout began; nil if the tool never said it was ready.
+    var armedAt: Date? { lock.withLock { armed } }
+
+    func wait() {
+        let deadline = Date().addingTimeInterval(120)
+        while !FileManager.default.fileExists(atPath: path) {
+            guard Date() < deadline else { return }
+            usleep(5_000)
+        }
+        try? FileManager.default.removeItem(atPath: path)
+        lock.withLock { armed = Date() }
+    }
+}
+
 final class SummarizerCommandTests: XCTestCase {
     func testClaudeRunsWithNothingButTheText() {
         let args = ClaudeLaneSummarizer(model: "haiku").arguments
@@ -110,44 +132,63 @@ final class SummarizerCommandTests: XCTestCase {
         // Far more stderr than a pipe holds: the run must still finish.
         let tool = try script("cat >/dev/null\nhead -c 300000 /dev/zero | tr '\\\\0' x >&2\necho 'Docs site: build fixed'\n")
         defer { try? FileManager.default.removeItem(at: tool) }
-        let result = try SummaryProcess.run(tool, arguments: [], input: "hello", environment: [:], timeout: 20)
+        let result = try SummaryProcess.run(tool, arguments: [], input: "hello", environment: [:], timeout: 20,
+                                            qualityOfService: .userInitiated)
         XCTAssertEqual(result.status, 0)
         XCTAssertFalse(result.timedOut)
         XCTAssertGreaterThanOrEqual(result.error.count, 300_000)
         XCTAssertEqual(try result.summary(), "Docs site: build fixed")
     }
 
-    func testRunTimesOut() throws {
-        // One process that would run for ten minutes: only the stop can end
-        // it, so returning well inside that proves the timeout fired. The
-        // timer runs on a busy queue so a loaded machine cannot defer it.
-        let tool = try script("exec sleep 600\n")
+    func testRunReturnsWhenAChildHoldsThePipes() throws {
+        // The tool exits at once, leaving a child with its stdout and stderr:
+        // its reply is kept and the run ends a grace after the exit.
+        let tool = try script("cat >/dev/null\nsleep 30 &\necho 'Docs site: build fixed'\n")
         defer { try? FileManager.default.removeItem(at: tool) }
         let started = Date()
-        let result = try SummaryProcess.run(tool, arguments: [], input: "", environment: [:], timeout: 0.5,
-                                            timerQueue: .global(qos: .userInitiated))
+        let result = try SummaryProcess.run(tool, arguments: [], input: "", environment: [:], timeout: 20,
+                                            qualityOfService: .userInitiated)
+        XCTAssertEqual(try result.summary(), "Docs site: build fixed")
+        XCTAssertLessThan(Date().timeIntervalSince(started), 15)
+    }
+
+    func testRunTimesOut() throws {
+        // One process that would run for ten minutes: only the stop can end
+        // it, so returning well inside that proves the timeout fired.
+        let tool = try script(": >\"$READY\"\nexec sleep 600\n")
+        defer { try? FileManager.default.removeItem(at: tool) }
+        let ready = ReadyMarker()
+        let result = try SummaryProcess.run(tool, arguments: [], input: "", environment: ["READY": ready.path],
+                                            timeout: 0.5, timerQueue: .global(qos: .userInitiated),
+                                            qualityOfService: .userInitiated, beforeTimeout: ready.wait)
+        let armed = try XCTUnwrap(ready.armedAt, "the tool never started")
         XCTAssertTrue(result.timedOut)
-        XCTAssertLessThan(Date().timeIntervalSince(started), 60)
+        XCTAssertLessThan(Date().timeIntervalSince(armed), 60)
         XCTAssertThrowsError(try result.summary()) { XCTAssertEqual($0 as? LaneSummaryError, .timedOut) }
     }
 
     func testRunKillsAToolThatIgnoresTheStop() throws {
         // The tool ignores SIGTERM for ten minutes; it is killed after the
-        // grace and the run returns.
-        let tool = try script("trap '' TERM\nexec sleep 600\n")
+        // grace and the run returns. The timeout starts only once the trap
+        // is set, so the stop always meets a tool that ignores it.
+        let tool = try script("trap '' TERM\n: >\"$READY\"\nexec sleep 600\n")
         defer { try? FileManager.default.removeItem(at: tool) }
-        let started = Date()
-        let result = try SummaryProcess.run(tool, arguments: [], input: "", environment: [:], timeout: 0.5,
-                                            timerQueue: .global(qos: .userInitiated))
+        let ready = ReadyMarker()
+        let result = try SummaryProcess.run(tool, arguments: [], input: "", environment: ["READY": ready.path],
+                                            timeout: 0.5, timerQueue: .global(qos: .userInitiated),
+                                            qualityOfService: .userInitiated, beforeTimeout: ready.wait)
+        let armed = try XCTUnwrap(ready.armedAt, "the tool never started")
         XCTAssertTrue(result.timedOut)
-        XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(started), SummaryProcess.killGrace)
-        XCTAssertLessThan(Date().timeIntervalSince(started), 60)
+        XCTAssertEqual(result.status, SIGKILL)
+        XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(armed), 0.5 + SummaryProcess.killGrace)
+        XCTAssertLessThan(Date().timeIntervalSince(armed), 60)
     }
 
     func testFailureIsClassified() throws {
         let tool = try script("echo 'Not logged in' >&2\nexit 1\n")
         defer { try? FileManager.default.removeItem(at: tool) }
-        let result = try SummaryProcess.run(tool, arguments: [], input: "", environment: [:], timeout: 10)
+        let result = try SummaryProcess.run(tool, arguments: [], input: "", environment: [:], timeout: 10,
+                                            qualityOfService: .userInitiated)
         XCTAssertThrowsError(try result.summary()) { XCTAssertEqual($0 as? LaneSummaryError, .notSignedIn) }
     }
 
