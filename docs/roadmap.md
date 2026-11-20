@@ -163,6 +163,9 @@ Landed. The README's Lanes that survive anything section and
 
 ## Phase 7: sections and navigation polish
 
+Landed. The README's Sections and navigation section describes the
+behaviour.
+
 - A "+" on every section header. It picks an agent, then a folder (the app
   supplies the chooser), and creates the lane in that section.
 - Collapse Other Sections. Search matches section names. Rename sections

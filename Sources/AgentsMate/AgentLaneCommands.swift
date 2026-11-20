@@ -43,6 +43,9 @@ public struct AgentLaneCommands: Commands {
     /// front, and on the selected lane otherwise.
     private var markReadTarget: AgentLane.ID? { inboxSelection ?? store.selectedID }
 
+    /// The group of the selected lane, where New Lane in Section starts one.
+    private var selectedGroup: LaneGroup? { store.selectedID.flatMap { store.group(containing: $0) } }
+
     public var body: some Commands {
         CommandMenu(menuTitle) {
             ForEach(Array(store.lanes.prefix(9).enumerated()), id: \.element.id) { index, lane in
@@ -94,6 +97,15 @@ public struct AgentLaneCommands: Commands {
                     .disabled(!store.canGoForward)
             }
             Divider()
+            Menu("New \(noun) in Section") {
+                ForEach(store.availableBackends, id: \.id) { backend in
+                    Button("\(backend.displayName)…") {
+                        reveal()
+                        if let group = selectedGroup { Task { await store.newLane(in: group, backendID: backend.id) } }
+                    }
+                }
+            }
+            .disabled(selectedGroup.map { !store.canAddLane(to: $0) } ?? true)
             Button("Reattach") {
                 reveal()
                 if let id = store.selectedID { store.reattach(id) }
@@ -142,6 +154,12 @@ public struct AgentLaneCommands: Commands {
             Picker("Sort", selection: Binding(get: { store.layout.sort }, set: { store.setSort($0) })) {
                 ForEach(LaneLayout.Sort.allCases, id: \.self) { Text($0.title).tag($0) }
             }
+            Button("Collapse Other Sections") {
+                reveal()
+                store.collapseOtherSectionsThanSelected()
+            }
+            .disabled(store.selectedID.flatMap { store.group(containing: $0) }
+                .map { !store.canCollapseOtherSections(than: $0) } ?? true)
             Button("Collapse All Sections") { store.setAllCollapsed(true) }
                 .disabled(store.sectionNames.isEmpty && store.layout.pinned.isEmpty)
             Button("Expand All Sections") { store.setAllCollapsed(false) }

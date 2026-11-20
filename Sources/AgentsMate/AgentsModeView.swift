@@ -48,10 +48,13 @@ public struct AgentLaneSidebar<Accessory: View>: View {
     @AppStorage private var filterAttached: Bool
     @AppStorage private var filterRunning: Bool
     @AppStorage private var filterNeedsYou: Bool
+    @AppStorage private var filterIdle: Bool
     @State private var searchText = ""
     @State private var showingNewSection = false
     @State private var renaming: String?
     @State private var sectionName = ""
+    @State private var newSectionName = ""
+    @FocusState private var renameFocused: Bool
     @State private var renamingLane: AgentLane.ID?
     @State private var laneName = ""
     @State private var pendingSwitch: (id: AgentLane.ID, backendID: String, title: String)?
@@ -71,6 +74,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         _filterAttached = AppStorage(wrappedValue: false, keys.filterOpen)
         _filterRunning = AppStorage(wrappedValue: false, keys.filterRunning)
         _filterNeedsYou = AppStorage(wrappedValue: false, keys.filterWaiting)
+        _filterIdle = AppStorage(wrappedValue: false, keys.filterIdle)
     }
 
     init(store: AgentLaneStore, labels: AgentsModeLabels, inDock: Bool, @ViewBuilder accessory: () -> Accessory) {
@@ -80,22 +84,13 @@ public struct AgentLaneSidebar<Accessory: View>: View {
 
     public var body: some View {
         List(selection: selectionBinding) {
+            // Every group folds the same way, the first included; its
+            // header keeps the app's accessory beside the + menu.
             ForEach(visibleGroups) { group in
-                // The section carrying the header buttons does not fold:
-                // its disclosure chevron would flicker in beside them on
-                // hover. Sort and Sections › Collapse All still folds it.
-                if group.id == store.groups.first?.id {
-                    Section {
-                        rows(group)
-                    } header: {
-                        sectionHeader(group)
-                    }
-                } else {
-                    Section(isExpanded: expandedBinding(group)) {
-                        rows(group)
-                    } header: {
-                        sectionHeader(group)
-                    }
+                Section(isExpanded: expandedBinding(group)) {
+                    rows(group)
+                } header: {
+                    sectionHeader(group)
                 }
             }
         }
@@ -130,8 +125,8 @@ public struct AgentLaneSidebar<Accessory: View>: View {
             }
         }
         .alert("New Section", isPresented: $showingNewSection) {
-            TextField("Name", text: $sectionName)
-            Button("Add") { store.addSection(sectionName) }
+            TextField("Name", text: $newSectionName)
+            Button("Add") { store.addSection(newSectionName) }
             Button("Cancel", role: .cancel) {}
         }
         .alert("Rename", isPresented: Binding(get: { renamingLane != nil }, set: { if !$0 { renamingLane = nil } })) {
@@ -169,11 +164,6 @@ public struct AgentLaneSidebar<Accessory: View>: View {
             Text("Typed into \(store.messageAlertTarget.flatMap { store.sessions[$0]?.title } ?? "the agent") and sent. A \(labels.laneNoun) not attached here is attached in the background first. If nothing takes it, it goes on the clipboard instead.")
         }
         .onChange(of: store.messageAlertTarget) { if store.messageAlertTarget != nil { message = "" } }
-        .alert("Rename Section", isPresented: renamingBinding) {
-            TextField("Name", text: $sectionName)
-            Button("Rename") { if let old = renaming { store.renameSection(old, to: sectionName) } }
-            Button("Cancel", role: .cancel) {}
-        }
         .searchable(text: $searchText, placement: .sidebar, prompt: "Search \(labels.laneNoun)s")
         .safeAreaInset(edge: .top, spacing: 0) {
             filterBar
@@ -191,6 +181,10 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         .onDeleteCommand {
             if let id = store.selectedID, store.selected?.lane.isClosable == true { store.close(id) }
         }
+        // A filter that would leave the list empty turns itself off; only a
+        // search that matches nothing leaves the Show All overlay.
+        .onChange(of: statusFilteredCount) { settleFilters(newest: nil) }
+        .onAppear { settleFilters(newest: nil) }
         .overlay {
             if visibleLanes.isEmpty, !store.lanes.isEmpty {
                 VStack(spacing: 6) {
@@ -231,25 +225,35 @@ public struct AgentLaneSidebar<Accessory: View>: View {
     }
 
     private var isFiltering: Bool {
-        !searchText.trimmingCharacters(in: .whitespaces).isEmpty || filterAttached || filterRunning || filterNeedsYou
+        !searchText.trimmingCharacters(in: .whitespaces).isEmpty || !activeFilters.isEmpty
     }
 
     private var displayIndex: [AgentLane.ID: Int] {
         Dictionary(uniqueKeysWithValues: store.displayOrder.enumerated().map { ($1.id, $0) })
     }
 
+    /// Open while searching or filtering, so a match is never hidden; the
+    /// saved fold is left as it was and comes back when the search ends.
     private func expandedBinding(_ group: LaneGroup) -> Binding<Bool> {
-        let key = group.isPinned ? LaneLayout.pinnedSection : group.section
+        let key = group.collapseKey
         return Binding(
-            get: { isFiltering || key.map { !store.layout.collapsed.contains($0) } ?? true },
+            get: { isFiltering || !store.layout.collapsed.contains(key) },
             set: { open in
-                guard let key, !isFiltering else { return }
+                guard !isFiltering else { return }
                 if open == store.layout.collapsed.contains(key) { store.toggleCollapsed(key) }
             })
     }
 
-    private var renamingBinding: Binding<Bool> {
-        Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })
+    private func beginRenaming(_ name: String) {
+        sectionName = name
+        renaming = name
+    }
+
+    /// Return, or leaving the field, keeps the name; ⎋ puts it back.
+    private func commitRename() {
+        guard let old = renaming else { return }
+        renaming = nil
+        store.renameSection(old, to: sectionName)
     }
 
     /// Dragging within a group sets the manual order (and switches the sort
@@ -265,26 +269,73 @@ public struct AgentLaneSidebar<Accessory: View>: View {
 
     @ViewBuilder
     private func sectionHeader(_ group: LaneGroup) -> some View {
-        HStack {
-            Text(group.isPinned ? LaneLayout.pinnedSection : group.section ?? labels.listTitle)
-            Spacer()
+        let title = group.title ?? labels.listTitle
+        let movable = group.section != nil && !group.isPinned && !group.isDetached
+        HStack(spacing: 4) {
+            if movable, let name = group.section, renaming == name {
+                TextField("Section Name", text: $sectionName)
+                    .textFieldStyle(.roundedBorder)
+                    .controlSize(.small)
+                    .focused($renameFocused)
+                    .onSubmit(commitRename)
+                    .onExitCommand { renaming = nil }
+                    .onAppear { DispatchQueue.main.async { renameFocused = true } }
+                    .onChange(of: renameFocused) { if !renameFocused { commitRename() } }
+                    .accessibilityLabel("Section name")
+            } else {
+                Text(title)
+            }
+            Spacer(minLength: 4)
             if group.id == store.groups.first?.id { accessory }
+            if store.canAddLane(to: group) {
+                Menu {
+                    newLaneItems(group)
+                } label: {
+                    Label("New \(labels.laneNoun.capitalized) in \(title)", systemImage: "plus")
+                        .labelStyle(.iconOnly)
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("Start a \(labels.laneNoun) in \(title): pick an agent, then a folder")
+                .accessibilityLabel("New \(labels.laneNoun) in \(title)")
+            }
         }
+        .modifier(SectionDragging(name: movable ? group.section : nil, store: store))
         .contextMenu {
             if group.isDetached {
                 Button("Look for Detached Sessions Again") { store.sweepForDetachedSessions() }
                 Divider()
-            } else if let name = group.section, !group.isPinned {
-                Button("Rename Section…") { sectionName = name; renaming = name }
-                Button("Move Section Up") { store.moveSection(name, by: -1) }
-                Button("Move Section Down") { store.moveSection(name, by: 1) }
-                Button("Remove Section") { store.removeSection(name) }
+            } else {
+                Menu("New \(labels.laneNoun.capitalized) in Section") { newLaneItems(group) }
                 Divider()
+                if movable, let name = group.section {
+                    Button("Rename Section") { beginRenaming(name) }
+                    Button("Move Section Up") { store.moveSection(name, by: -1) }
+                        .disabled(store.sectionNames.first == name)
+                    Button("Move Section Down") { store.moveSection(name, by: 1) }
+                        .disabled(store.sectionNames.last == name)
+                    Button("Remove Section") { store.removeSection(name) }
+                    Divider()
+                }
             }
-            Button("New Section…") { sectionName = ""; showingNewSection = true }
+            Button("New Section…") { newSectionName = ""; showingNewSection = true }
             Divider()
+            Button("Collapse Other Sections") { store.collapseOtherSections(than: group) }
+                .disabled(!store.canCollapseOtherSections(than: group))
             Button("Collapse All") { store.setAllCollapsed(true) }
             Button("Expand All") { store.setAllCollapsed(false) }
+        }
+    }
+
+    /// One item per agent; each asks for a folder, then starts the lane in
+    /// `group` and selects it.
+    @ViewBuilder
+    private func newLaneItems(_ group: LaneGroup) -> some View {
+        ForEach(store.availableBackends, id: \.id) { backend in
+            Button("\(backend.displayName)…") {
+                Task { await store.newLane(in: group, backendID: backend.id) }
+            }
         }
     }
 
@@ -396,7 +447,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
                     .disabled(store.layout.section(of: lane) == name)
             }
             Divider()
-            Button("New Section…") { sectionName = ""; showingNewSection = true }
+            Button("New Section…") { newSectionName = ""; showingNewSection = true }
         }
         Divider()
         if store.canStop(lane.id) {
@@ -443,16 +494,58 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         }
     }
 
+    /// The lanes the search and status filters let through. A search that
+    /// matches a section's name lets all of that section's lanes through.
     private var visibleLanes: [AgentLane] {
         let query = searchText.trimmingCharacters(in: .whitespaces).lowercased()
+        let sectionHits = query.isEmpty ? [] : Self.lanesInSections(matching: query, groups: store.groups,
+                                                                    section: store.layout.section(of:))
+        let filters = activeFilters
         return store.lanes.filter { lane in
             guard let session = store.session(for: lane) else { return false }
-            if !query.isEmpty, !Self.matches(session, query: query) { return false }
-            if filterAttached, !session.isActive { return false }
-            if filterRunning, session.status != .running { return false }
-            if filterNeedsYou, !Self.wantsYou(session.status) { return false }
-            return true
+            if !query.isEmpty, !sectionHits.contains(lane.id), !Self.matches(session, query: query) { return false }
+            return filters.allSatisfy { $0.admits(isActive: session.isActive, status: session.status) }
         }
+    }
+
+    private var activeFilters: Set<LaneStatusFilter> {
+        var on: Set<LaneStatusFilter> = []
+        if filterAttached { on.insert(.active) }
+        if filterRunning { on.insert(.running) }
+        if filterNeedsYou { on.insert(.needsYou) }
+        if filterIdle { on.insert(.idle) }
+        return on
+    }
+
+    private func setFilter(_ filter: LaneStatusFilter, _ on: Bool) {
+        switch filter {
+        case .active: filterAttached = on
+        case .running: filterRunning = on
+        case .needsYou: filterNeedsYou = on
+        case .idle: filterIdle = on
+        }
+    }
+
+    /// How many lanes the status filters alone let through.
+    private var statusFilteredCount: Int {
+        let filters = activeFilters
+        return sessions.filter { s in filters.allSatisfy { $0.admits(isActive: s.isActive, status: s.status) } }.count
+    }
+
+    /// Turn off whatever filters would leave nothing to show.
+    private func settleFilters(newest: LaneStatusFilter?) {
+        let on = activeFilters
+        guard !on.isEmpty else { return }
+        let kept = LaneStatusFilter.settled(on, newest: newest, lanes: sessions.map { ($0.isActive, $0.status) })
+        for filter in on.subtracting(kept) { setFilter(filter, false) }
+    }
+
+    private func filterBinding(_ filter: LaneStatusFilter) -> Binding<Bool> {
+        Binding(get: { activeFilters.contains(filter) },
+                set: { on in
+                    setFilter(filter, on)
+                    if on { settleFilters(newest: filter) }
+                })
     }
 
     /// Whether a search finds the lane: by its name, folder, summary or the
@@ -461,20 +554,31 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         matches(query: query, in: [session.title, session.lane.path, session.summary ?? ""] + session.recentPrompts)
     }
 
+    /// The lanes a search finds by the name of their section: every lane of
+    /// a group whose title matches, and pinned lanes by the section they
+    /// belong to.
+    static func lanesInSections(matching query: String, groups: [LaneGroup],
+                                section: (AgentLane) -> String?) -> Set<AgentLane.ID> {
+        var hits: Set<AgentLane.ID> = []
+        for group in groups {
+            for lane in group.lanes {
+                let names = [group.title, section(lane)].compactMap { $0 }
+                if !names.isEmpty, matches(query: query, in: names) { hits.insert(lane.id) }
+            }
+        }
+        return hits
+    }
+
     nonisolated static func matches(query: String, in fields: [String]) -> Bool {
         let query = query.trimmingCharacters(in: .whitespaces)
         guard !query.isEmpty else { return true }
         return fields.contains { $0.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil }
     }
 
-    static func wantsYou(_ status: LaneDisplayStatus) -> Bool {
-        status == .waitingForInput || status == .permissionRequested
-    }
+    static func wantsYou(_ status: LaneDisplayStatus) -> Bool { LaneStatusFilter.wantsYou(status) }
 
     private func clearFilters() {
-        filterAttached = false
-        filterRunning = false
-        filterNeedsYou = false
+        for filter in LaneStatusFilter.allCases { setFilter(filter, false) }
         searchText = ""
     }
 
@@ -482,15 +586,12 @@ public struct AgentLaneSidebar<Accessory: View>: View {
     private var filterBar: some View {
         let all = sessions
         return HStack(spacing: 2) {
-            LaneFilterToggle(symbol: "circle.fill", symbolScale: 0.7, title: "Active",
-                             help: "Show only \(labels.laneNoun)s attached here or running elsewhere",
-                             count: all.filter(\.isActive).count, isOn: $filterAttached)
-            LaneFilterToggle(symbol: "bolt.fill", symbolScale: 1, title: "Running",
-                             help: "Show only \(labels.laneNoun)s whose agent is working",
-                             count: all.filter { $0.status == .running }.count, isOn: $filterRunning)
-            LaneFilterToggle(symbol: "hand.raised.fill", symbolScale: 1, title: "Needs You",
-                             help: "Show only \(labels.laneNoun)s waiting for input or permission",
-                             count: all.filter { Self.wantsYou($0.status) }.count, isOn: $filterNeedsYou)
+            ForEach(LaneStatusFilter.allCases, id: \.self) { filter in
+                LaneFilterToggle(symbol: filter.symbol, symbolScale: filter.symbolScale, title: filter.title,
+                                 help: filter.help(noun: labels.laneNoun),
+                                 count: all.filter { filter.admits(isActive: $0.isActive, status: $0.status) }.count,
+                                 isOn: filterBinding(filter))
+            }
             Spacer(minLength: 0)
             Menu {
                 Picker("Sort", selection: Binding(get: { store.layout.sort }, set: { store.setSort($0) })) {
@@ -499,7 +600,16 @@ public struct AgentLaneSidebar<Accessory: View>: View {
                 .pickerStyle(.inline)
                 .labelsHidden()
                 Divider()
-                Button("New Section…") { sectionName = ""; showingNewSection = true }
+                Section("Show Only") {
+                    ForEach(LaneStatusFilter.allCases, id: \.self) { filter in
+                        Toggle(filter.title, isOn: filterBinding(filter))
+                    }
+                }
+                Divider()
+                Button("New Section…") { newSectionName = ""; showingNewSection = true }
+                Button("Collapse Other Sections") { store.collapseOtherSectionsThanSelected() }
+                    .disabled(store.selectedID.flatMap { store.group(containing: $0) }
+                        .map { !store.canCollapseOtherSections(than: $0) } ?? true)
                 Button("Collapse All") { store.setAllCollapsed(true) }
                 Button("Expand All") { store.setAllCollapsed(false) }
                 if store.configuration.workspaceFile != nil {
@@ -869,6 +979,99 @@ struct LaneRow: View {
             Circle().fill(Color.blue).frame(width: 7, height: 7)
         case .done, .idle, .attached:
             Circle().fill(Color.secondary).frame(width: 7, height: 7)
+        }
+    }
+}
+
+/// The status chips above the lane list. Several on at once must all hold.
+enum LaneStatusFilter: String, CaseIterable, Sendable {
+    case active, running, needsYou, idle
+
+    static func wantsYou(_ status: LaneDisplayStatus) -> Bool {
+        status == .waitingForInput || status == .permissionRequested
+    }
+
+    /// Whether a lane with this state passes the filter. Idle is a lane
+    /// that is alive (attached here or running elsewhere) with an agent that
+    /// is neither working nor waiting for the person.
+    func admits(isActive: Bool, status: LaneDisplayStatus) -> Bool {
+        switch self {
+        case .active: isActive
+        case .running: status == .running
+        case .needsYou: Self.wantsYou(status)
+        case .idle: isActive && status != .running && !Self.wantsYou(status)
+        }
+    }
+
+    /// The filters to keep on so the list is not left empty: all of `on`
+    /// when some lane passes them, else only `newest` (the chip just turned
+    /// on) when some lane passes it, else none.
+    static func settled(_ on: Set<LaneStatusFilter>, newest: LaneStatusFilter?,
+                        lanes: [(isActive: Bool, status: LaneDisplayStatus)]) -> Set<LaneStatusFilter> {
+        func passes(_ filters: Set<LaneStatusFilter>) -> Bool {
+            lanes.contains { lane in filters.allSatisfy { $0.admits(isActive: lane.isActive, status: lane.status) } }
+        }
+        if on.isEmpty || passes(on) { return on }
+        if let newest, on.contains(newest), passes([newest]) { return [newest] }
+        return []
+    }
+
+    var title: String {
+        switch self {
+        case .active: "Active"
+        case .running: "Running"
+        case .needsYou: "Needs You"
+        case .idle: "Idle"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .active: "circle.fill"
+        case .running: "bolt.fill"
+        case .needsYou: "hand.raised.fill"
+        case .idle: "moon.fill"
+        }
+    }
+
+    var symbolScale: CGFloat { self == .active ? 0.7 : 1 }
+
+    func help(noun: String) -> String {
+        switch self {
+        case .active: "Show only \(noun)s attached here or running elsewhere"
+        case .running: "Show only \(noun)s whose agent is working"
+        case .needsYou: "Show only \(noun)s waiting for input or permission"
+        case .idle: "Show only \(noun)s that are open but not working or waiting for you"
+        }
+    }
+}
+
+/// Drag a section's header onto another's to put it before that one.
+/// Move Section Up and Down in the header's menu do the same from the
+/// keyboard.
+private struct SectionDragging: ViewModifier {
+    let name: String?
+    let store: AgentLaneStore
+    @State private var targeted = false
+
+    static let prefix = "agentsmate-section:"
+
+    func body(content: Content) -> some View {
+        if let name {
+            content
+                .draggable(Self.prefix + name) { Text(name).padding(4) }
+                .dropDestination(for: String.self) { items, _ in
+                    guard let item = items.first, item.hasPrefix(Self.prefix) else { return false }
+                    let moved = String(item.dropFirst(Self.prefix.count))
+                    guard moved != name else { return false }
+                    store.moveSection(moved, before: name)
+                    return true
+                } isTargeted: { targeted = $0 }
+                .overlay(alignment: .top) {
+                    if targeted { Rectangle().fill(Color.accentColor).frame(height: 2).offset(y: -3) }
+                }
+        } else {
+            content
         }
     }
 }

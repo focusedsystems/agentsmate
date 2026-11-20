@@ -240,6 +240,49 @@ that are attached here, plus those a restore brought back that have not been
 shown yet, and marks the selected one. "Reopen the lanes open at quit" keeps
 its meaning: it decides whether that snapshot is reopened at launch.
 
+## Sections and navigation
+
+Every section header has a + menu listing the registered agents. Choosing one
+asks for a folder, then starts a lane there in that section and selects it;
+cancelling changes nothing. The chooser opens at the selected lane's folder
+when it is in that section, else the section's first lane's.
+`Configuration.chooseFolder` supplies the chooser; the default is an
+`NSOpenPanel` sheet (`AgentLaneStore.chooseFolderWithOpenPanel(startingAt:)`),
+and an app can offer its own recent folders or repositories instead. A folder
+another lane of that agent already uses gets a session of its own
+(`AgentLane.variant`), so the new lane never attaches the old one's
+conversation. The same items are in the header's menu as New Lane in Section,
+and in the Agent menu for the selected lane's section. The first header keeps
+the app's accessory beside its +. Code can do the same with
+`store.newLane(in:backendID:)`.
+
+Every group folds, the lanes in no section included
+(`LaneLayout.unsectionedKey`, `LaneGroup.collapseKey`). Collapse Other
+Sections, in the header's menu, the Sort and Sections menu and the Agent
+menu, folds every group but one (`store.collapseOtherSections(than:)`).
+Rename Section edits the name in the header: Return or clicking away keeps it,
+⎋ puts it back. Drag a header onto another to put that section before it
+(`store.moveSection(_:before:)`); Move Section Up and Down stay in the menu for
+the keyboard.
+
+Search matches a lane's name, folder, summary and recent prompts, and the name
+of its section: a section whose name matches shows all its lanes, opened for
+the search without changing how it was folded.
+
+Beside Active, Running and Needs You, an Idle chip shows the lanes that are
+alive but neither working nor waiting for the person; the chips are also
+toggles under Show Only in the Sort and Sections menu. Chips that would leave
+the list empty turn themselves off: when a lane stops running under Running,
+or when a new chip cannot be combined with the others, in which case the new
+one stays. Only a search that matches nothing leaves the Show All overlay.
+
+`AgentLaneHistoryButtons(store:)` is a Back and Forward pair for the app's
+toolbar, on the same history as the Agent menu's Back and Forward:
+
+```swift
+.toolbar { ToolbarItem(placement: .navigation) { AgentLaneHistoryButtons(store: store) } }
+```
+
 ## Keeping the agent CLIs current
 
 The `AgentsMateUpdates` product finds the Claude Code and Codex command-line
