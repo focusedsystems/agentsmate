@@ -168,8 +168,7 @@ open class AgentTerminalView: LocalProcessTerminalView {
             guard let self else { return event }
             if event.type == .leftMouseDown || event.type == .leftMouseUp {
                 let dropCommand = MainActor.assumeIsolated { () -> Bool in
-                    guard event.window === self.window, !self.isHiddenOrHasHiddenAncestor,
-                          self.bounds.contains(self.convert(event.locationInWindow, from: nil)) else { return false }
+                    guard event.window === self.window else { return false }
                     return self.handleLinkClick(event)
                 }
                 return dropCommand ? Self.withoutCommand(event) ?? event : event
@@ -260,24 +259,28 @@ open class AgentTerminalView: LocalProcessTerminalView {
 
     // MARK: Links
 
+    /// Whether the last left press landed in this view, so its release,
+    /// wherever it happens, belongs to it.
+    private var pressedHere = false
     private var linkClickCell: (column: Int, row: Int)?
 
     /// A ⌘-click opens the link under it here rather than in SwiftTerm,
-    /// which hands every OSC 8 link to NSWorkspace and does not see plain
-    /// URLs. The release goes on without ⌘, so SwiftTerm does not open the
-    /// link again and a program that takes the mouse still hears it.
+    /// which does not see plain URLs. Every release of a press in this view
+    /// goes on without ⌘, wherever it ends, so SwiftTerm does not open the
+    /// link again; a program that takes the mouse still hears it. Any open
+    /// SwiftTerm still asks for goes through `openLink(_:)` as well.
     /// Returns whether the event should go on without ⌘.
     private func handleLinkClick(_ event: NSEvent) -> Bool {
-        guard event.modifierFlags.contains(.command) else {
-            linkClickCell = nil
-            return false
-        }
         if event.type == .leftMouseDown {
-            linkClickCell = event.clickCount == 1 ? cell(at: event) : nil
+            pressedHere = !isHiddenOrHasHiddenAncestor && bounds.contains(convert(event.locationInWindow, from: nil))
+            linkClickCell = pressedHere && event.modifierFlags.contains(.command) && event.clickCount == 1 ? cell(at: event) : nil
             return false
         }
+        guard pressedHere else { return false }
+        pressedHere = false
         let down = linkClickCell
         linkClickCell = nil
+        guard event.modifierFlags.contains(.command) else { return false }
         if let down, let up = cell(at: event), down == up, let url = link(atColumn: up.column, row: up.row) {
             openLink(url)
         }
@@ -288,7 +291,31 @@ open class AgentTerminalView: LocalProcessTerminalView {
     /// leaves it and it is http, https or mailto.
     public func openLink(_ url: URL) {
         if onOpenLink?(url) == true { return }
-        if TerminalLinks.opensInSystem(url) { NSWorkspace.shared.open(url) }
+        if TerminalLinks.opensInSystem(url) { openInSystem(url) }
+    }
+
+    /// Opens a link the app left, after the scheme check. Tests replace it.
+    var openInSystem: (URL) -> Void = { NSWorkspace.shared.open($0) }
+
+    /// Stands in as SwiftTerm's terminal delegate so its own link opener
+    /// (an OSC 8 link on a ⌘-release) comes through `openLink(_:)` rather
+    /// than straight to NSWorkspace. Everything else goes to the view.
+    private lazy var linkDelegate = TerminalLinkDelegate(view: self)
+
+    /// Route SwiftTerm's link requests through `openLink(_:)`. Called from
+    /// the initialisers; safe to call again.
+    func routeSwiftTermLinks() {
+        terminalDelegate = linkDelegate
+    }
+
+    public override init(frame: NSRect) {
+        super.init(frame: frame)
+        routeSwiftTermLinks()
+    }
+
+    public required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        routeSwiftTermLinks()
     }
 
     /// The link at a visible cell: the cell's OSC 8 hyperlink, else a plain
@@ -381,6 +408,33 @@ open class AgentTerminalView: LocalProcessTerminalView {
         } else {
             send(txt: cleaned.replacingOccurrences(of: "\n", with: " "))
         }
+    }
+}
+
+/// SwiftTerm's terminal delegate for an `AgentTerminalView`: the view's own
+/// handling for everything but link requests, which go to `openLink(_:)`.
+/// Bells and other unhandled requests keep SwiftTerm's defaults, as they
+/// did with the view as its own delegate.
+final class TerminalLinkDelegate: TerminalViewDelegate {
+    private unowned let view: AgentTerminalView
+
+    init(view: AgentTerminalView) { self.view = view }
+
+    func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
+        view.sizeChanged(source: source, newCols: newCols, newRows: newRows)
+    }
+    func setTerminalTitle(source: TerminalView, title: String) { view.setTerminalTitle(source: source, title: title) }
+    func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {
+        view.hostCurrentDirectoryUpdate(source: source, directory: directory)
+    }
+    func send(source: TerminalView, data: ArraySlice<UInt8>) { view.send(source: source, data: data) }
+    func scrolled(source: TerminalView, position: Double) { view.scrolled(source: source, position: position) }
+    func rangeChanged(source: TerminalView, startY: Int, endY: Int) { view.rangeChanged(source: source, startY: startY, endY: endY) }
+    func clipboardCopy(source: TerminalView, content: Data) { view.clipboardCopy(source: source, content: content) }
+
+    func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {
+        guard let url = TerminalLinks.url(from: link) else { return }
+        view.openLink(url)
     }
 }
 

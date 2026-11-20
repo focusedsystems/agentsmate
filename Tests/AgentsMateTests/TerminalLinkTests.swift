@@ -1,4 +1,5 @@
 import XCTest
+import SwiftTerm
 @testable import AgentsMate
 
 final class TerminalLinkTests: XCTestCase {
@@ -79,11 +80,46 @@ final class TerminalLinkTests: XCTestCase {
     @MainActor
     func testUnhandledLinksFallBackOnlyForSystemSchemes() {
         let view = AgentTerminalView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
-        var seen: [URL] = []
-        view.onOpenLink = { url in seen.append(url); return true }
-        view.openLink(URL(string: "file:///tmp/x")!)
-        view.openLink(URL(string: "https://example.com")!)
-        XCTAssertEqual(seen.map(\.absoluteString), ["file:///tmp/x", "https://example.com"])
+        var hooked: [String] = [], opened: [String] = []
+        view.openInSystem = { opened.append($0.absoluteString) }
+        view.onOpenLink = { hooked.append($0.absoluteString); return $0.host == "handled.example" }
+        for link in ["file:///tmp/x", "x-custom://open", "https://handled.example/a", "https://example.com/b", "mailto:a@example.com"] {
+            view.openLink(URL(string: link)!)
+        }
+        XCTAssertEqual(hooked.count, 5)
+        XCTAssertEqual(opened, ["https://example.com/b", "mailto:a@example.com"])
+    }
+
+    /// SwiftTerm's own opener (an OSC 8 link on a ⌘-release) asks its
+    /// terminal delegate; it must reach the hook and the scheme check, never
+    /// NSWorkspace directly.
+    @MainActor
+    func testSwiftTermLinkRequestsGoThroughTheSchemeCheck() {
+        let view = AgentTerminalView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
+        var hooked: [String] = [], opened: [String] = []
+        view.openInSystem = { opened.append($0.absoluteString) }
+        view.onOpenLink = { hooked.append($0.absoluteString); return false }
+        guard let delegate = view.terminalDelegate else { return XCTFail("no terminal delegate") }
+        XCTAssertFalse(delegate === view)
+        for link in ["file:///etc/hosts", "x-custom://open", "javascript:alert(1)", "https://example.com/a"] {
+            delegate.requestOpenLink(source: view, link: link, params: [:])
+        }
+        XCTAssertEqual(hooked, ["file:///etc/hosts", "x-custom://open", "javascript:alert(1)", "https://example.com/a"])
+        XCTAssertEqual(opened, ["https://example.com/a"])
+
+        view.onOpenLink = nil
+        opened = []
+        delegate.requestOpenLink(source: view, link: "file:///etc/hosts", params: [:])
+        XCTAssertEqual(opened, [])
+    }
+
+    @MainActor
+    func testTerminalDelegateStillDrivesTheProcess() {
+        let view = AgentTerminalView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
+        let title = TitleRecorder()
+        view.processDelegate = title
+        view.terminalDelegate?.setTerminalTitle(source: view, title: "lane")
+        XCTAssertEqual(title.titles, ["lane"])
     }
 
     @MainActor
@@ -96,4 +132,15 @@ final class TerminalLinkTests: XCTestCase {
         XCTAssertEqual(view.link(atColumn: 2, row: 1)?.absoluteString, "https://example.com/osc")
         XCTAssertNil(view.link(atColumn: 7, row: 1))
     }
+}
+
+@MainActor
+private final class TitleRecorder: LocalProcessTerminalViewDelegate {
+    var titles: [String] = []
+    nonisolated func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
+    nonisolated func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
+        MainActor.assumeIsolated { titles.append(title) }
+    }
+    nonisolated func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
+    nonisolated func processTerminated(source: TerminalView, exitCode: Int32?) {}
 }
