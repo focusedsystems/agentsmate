@@ -172,6 +172,44 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
         return true
     }
 
+    /// Read the agent's input line off the screen, under the cursor. A
+    /// screen scrolled back into its history reads as unknown, since the
+    /// cursor's row is then not the one on show.
+    func readInputLine() -> AgentPromptLine.Reading {
+        guard isAttached else { return .unknown }
+        if view.canScroll, view.scrollPosition < 1 { return .unknown }
+        return AgentPromptLine.read(view.getTerminal())
+    }
+
+    /// A short line the row shows for a while after a rename that did not
+    /// reach the agent, saying why.
+    @Published public internal(set) var renameNotice: String?
+    private var renameNoticeClear: DispatchWorkItem?
+
+    func showRenameNotice(_ text: String?, for seconds: TimeInterval = 8) {
+        renameNoticeClear?.cancel()
+        renameNotice = text
+        guard text != nil else { return }
+        let clear = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated { self?.renameNotice = nil }
+        }
+        renameNoticeClear = clear
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: clear)
+    }
+
+    /// Type `command` into the agent, then Return in a write of its own a
+    /// moment later, since a remote pane drops a Return sent with the text.
+    func typeCommand(_ command: String) {
+        let target = ObjectIdentifier(view)
+        view.send(txt: command)
+        DispatchQueue.main.asyncAfter(deadline: .now() + LaneRename.returnDelay) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.isAttached, ObjectIdentifier(self.view) == target else { return }
+                self.view.send(txt: "\r")
+            }
+        }
+    }
+
     /// Clear the row's unread mark without showing it.
     func markRead() {
         if needsAttention { needsAttention = false }

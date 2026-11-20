@@ -134,7 +134,7 @@ values with a number, title, state and repository once looked up.
 
 A `PullRequestResolver` looks a link up. The package ships
 `GitHubPullRequestResolver`, which runs
-`gh pr view --json title,state,number,isDraft -- <url>` with the person's own
+`gh pr view --json title,state,number,isDraft,headRefName -- <url>` with the person's own
 `gh` sign-in, at background priority with a fifteen-second timeout. Apps add
 others, such as one for Azure DevOps or a GitHub Enterprise host, with
 `Configuration.pullRequestResolvers`; the first whose `canResolve(_:)` accepts
@@ -158,8 +158,40 @@ row's and the inbox's menus have a Pull Requests submenu that opens each one
 through `store.open(_:)`, which uses `store.onOpenPullRequest` like the chips
 do. The pull request `gh` finds for the folder's branch (`showsRowMetadata`)
 still shows for a lane whose agent has not posted it, and is left out when the
-ledger already has it. `store.recordPullRequests(_:for:)` adds links an app
-learns of another way.
+ledger already has it. When the ledger already tracks a pull request whose head
+(`PullRequestDetails.headBranch`) is the folder's branch, in the repository the
+folder's `origin` points at, the row takes it from the ledger and `gh` is not
+asked about the branch at all. `store.recordPullRequests(_:for:)` adds links an
+app learns of another way.
+
+## Renaming the agent's session
+
+Renaming a lane (`store.rename(_:to:)`) also renames the agent's own session
+when its backend has a `renameCommand`: a format with `%@` for the name.
+`CommandLaneBackend` sets `/rename %@` when its `statusAgent` or its command's
+program is `claude` or `codex`, and nil otherwise; set the property to change
+it or turn it off. `ClaudeBackgroundLaneBackend` has none, because its lanes
+attach their session by name.
+
+The command is typed only when it cannot disturb anything:
+
+- the lane is attached here and the agent has the terminal;
+- the agent is not running a turn or asking permission; and
+- the agent's input line reads as empty.
+
+The input line is read from the screen under the cursor
+(`AgentPromptLine`). Claude Code's `❯` between two rules, its older `│ >` box,
+and Codex's `›` are known; dim text after the marker is a placeholder. Text
+after the cursor, a second line of input, a menu, a screen scrolled back, or any
+other layout means nothing is typed, and the row says why for a few seconds
+(`session.renameNotice`). The text goes in first and Return follows 150 ms
+later in a write of its own, because a remote pane drops a Return sent with
+the text. Restoring a workspace and duplicating a lane name the row only.
+
+The person's switch is `AgentsModeKeys.renameAgentSession` ("Rename the agent's
+session too" in `AgentLaneSettingsSection`), on by default and shown when a
+registered backend can rename. `store.renameAgentSession(_:to:)` sends the
+command by itself and returns an `AgentRenameOutcome`.
 
 ## Keeping the agent CLIs current
 

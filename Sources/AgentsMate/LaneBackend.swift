@@ -99,12 +99,17 @@ public protocol LaneBackend: Sendable {
     /// terminal multiplexer would. The agent's conversation is kept, so
     /// opening the lane again resumes it.
     func stop(_ lane: AgentLane)
+    /// The command that renames the agent's own session, typed into its
+    /// input line when the person renames the lane, with `%@` where the new
+    /// name goes, such as `/rename %@`. Nil when the agent has none.
+    var renameCommand: String? { get }
 }
 
 public extension LaneBackend {
     func resumeLaunch(for lane: AgentLane, shell: String) -> TerminalLaunch? { nil }
     var canStop: Bool { false }
     func stop(_ lane: AgentLane) {}
+    var renameCommand: String? { nil }
 }
 
 /// Runs a command without waiting for it, for stopping a lane.
@@ -164,6 +169,12 @@ public struct CommandLaneBackend: LaneBackend {
     /// app knows how the wrapper names it.
     public var variantStatusName: (@Sendable (AgentLane) -> String?)?
 
+    /// The agent's command for renaming its session, with `%@` for the name.
+    /// Set from ``statusAgent`` (or the command's program) to `/rename %@`
+    /// for Claude Code and Codex, and nil for anything else; set it yourself
+    /// to change or turn it off.
+    public var renameCommand: String?
+
     /// Whether the command's program is installed, so a picker can leave
     /// out presets this Mac cannot run.
     public var isInstalled: Bool { LaunchLine.isInstalled(command) }
@@ -181,6 +192,7 @@ public struct CommandLaneBackend: LaneBackend {
         self.returnsToShell = returnsToShell
         self.statusAgent = statusAgent
         self.keepsRunningWhenDetached = keepsRunningWhenDetached
+        self.renameCommand = LaneRename.defaultCommand(statusAgent: statusAgent, command: command)
     }
 
     /// A wrapper that attaches a persistent tmux lane for the folder it is

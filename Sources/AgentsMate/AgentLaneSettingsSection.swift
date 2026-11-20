@@ -2,9 +2,9 @@ import SwiftUI
 
 /// A Settings section for the lanes the person opens: what a new lane runs
 /// (an installed backend or a command of their own), whether one opens at
-/// launch, whether the lanes open at quit come back, and, when the app turned
-/// summaries on, whether each lane gets a one-line summary. Put it in a
-/// grouped `Form`.
+/// launch, whether the lanes open at quit come back, whether renaming a lane
+/// renames its agent's session too, and, when the app turned summaries on,
+/// whether each lane gets a one-line summary. Put it in a grouped `Form`.
 public struct AgentLaneSettingsSection: View {
     @ObservedObject var store: AgentLaneStore
     let title: String
@@ -25,6 +25,9 @@ public struct AgentLaneSettingsSection: View {
 
     private var footer: String {
         var text = "Lanes start in a login shell, so your PATH and tools are there. Reopened lanes resume their last conversation when you first show them."
+        if store.agentRenameAvailable {
+            text += " Renaming a lane types the agent’s rename command only when its input line is empty and it isn’t working."
+        }
         if store.summariesAvailable {
             text += " Summaries are written by each lane's own agent, a short call on your account when a new prompt arrives."
         }
@@ -47,6 +50,10 @@ public struct AgentLaneSettingsSection: View {
             Toggle("Open a lane at launch", isOn: $openAtLaunch)
             Toggle("Reopen the lanes open at quit", isOn: $reopenLast)
                 .disabled(store.configuration.workspaceFile == nil)
+            if store.agentRenameAvailable {
+                Toggle("Rename the agent’s session too", isOn: Binding(get: { store.renamesAgentSession },
+                                                                       set: { store.renamesAgentSession = $0 }))
+            }
             if store.summariesAvailable {
                 Toggle("Summarize sessions", isOn: Binding(get: { store.summariesEnabled },
                                                           set: { store.summariesEnabled = $0 }))

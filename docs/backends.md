@@ -12,6 +12,10 @@ runs a wrapper that attaches a tmux session named after the folder, passing the
 folder as the last argument. Status comes from hooks (see `status-feed.md`).
 This is the default backend for both Claude Code and Codex lanes.
 
+Its `renameCommand` is `/rename %@` for a Claude Code or Codex lane, so renaming
+the lane renames the agent's session too (see the README). Set it to nil for a
+wrapper whose agent should keep its own name.
+
 ## Claude Code background sessions (`ClaudeBackgroundLaneBackend`)
 
 Opt-in. Claude Code 2.1.325 runs sessions in its own daemon:
@@ -25,7 +29,9 @@ Opt-in. Claude Code 2.1.325 runs sessions in its own daemon:
 
 The backend attaches the session named after the lane's folder, starting it
 first when there is none. `ClaudeAgentsStatusSource` reads its state from
-`claude agents --json`; add it to a `LaneStatusFeed`'s `sources`.
+`claude agents --json`; add it to a `LaneStatusFeed`'s `sources`. It has no
+`renameCommand`: the session's name is how every device attaches it, so
+renaming a lane leaves it alone.
 
 ### Could it replace tmux for Claude lanes?
 

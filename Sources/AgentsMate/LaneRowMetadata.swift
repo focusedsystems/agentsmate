@@ -59,6 +59,61 @@ public enum LaneRowMetadataReader {
         }
     }
 
+    /// The GitHub repository (`owner/repo`) the `origin` remote of the
+    /// repository holding `directory` points at, read from its git config.
+    /// A worktree's config is its main repository's. Nil outside a
+    /// repository, with no origin, or for another host.
+    public static func originRepository(in directory: String) -> String? {
+        guard let gitDir = headFile(for: directory)?.deletingLastPathComponent() else { return nil }
+        var common = gitDir
+        if let text = try? String(contentsOf: gitDir.appendingPathComponent("commondir"), encoding: .utf8) {
+            let path = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !path.isEmpty {
+                common = URL(fileURLWithPath: path, relativeTo: URL(fileURLWithPath: gitDir.path, isDirectory: true))
+                    .standardizedFileURL
+            }
+        }
+        let config = try? String(contentsOf: common.appendingPathComponent("config"), encoding: .utf8)
+        return originURL(inConfig: config).flatMap(gitHubRepository(fromRemote:))
+    }
+
+    /// The `url` of `[remote "origin"]` in a git config file.
+    static func originURL(inConfig text: String?) -> String? {
+        guard let text else { return nil }
+        var inOrigin = false
+        for raw in text.split(whereSeparator: \.isNewline) {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("[") {
+                inOrigin = line.replacingOccurrences(of: " ", with: "") == #"[remote"origin"]"#
+                continue
+            }
+            guard inOrigin, line.hasPrefix("url") else { continue }
+            let parts = line.split(separator: "=", maxSplits: 1)
+            guard parts.count == 2, parts[0].trimmingCharacters(in: .whitespaces) == "url" else { continue }
+            return parts[1].trimmingCharacters(in: .whitespaces)
+        }
+        return nil
+    }
+
+    /// `owner/repo` from a github.com remote: `git@github.com:owner/repo.git`,
+    /// `https://github.com/owner/repo` or `ssh://git@github.com/owner/repo`.
+    static func gitHubRepository(fromRemote remote: String) -> String? {
+        var path: Substring
+        if let range = remote.range(of: "github.com:"), !remote.contains("://") {
+            path = remote[range.upperBound...]
+        } else if let url = URL(string: remote), url.host(percentEncoded: true)?.lowercased() == "github.com" {
+            path = Substring(url.path(percentEncoded: false))
+        } else {
+            return nil
+        }
+        while path.hasPrefix("/") { path = path.dropFirst() }
+        while path.hasSuffix("/") { path = path.dropLast() }
+        if path.hasSuffix(".git") { path = path.dropLast(4) }
+        let parts = path.split(separator: "/")
+        guard parts.count == 2 else { return nil }
+        return parts.joined(separator: "/")
+    }
+
     /// The folder a `.git` file's `gitdir:` line names, resolved against the
     /// folder holding the file when it is relative.
     static func gitDir(fromDotGitFile text: String?, in folder: URL) -> URL? {

@@ -218,8 +218,22 @@ enum SummaryProcess {
         return env
     }
 
+    /// How long the pipes are drained after the tool exits. A child that
+    /// left the tool's process group can hold them open; its output is not
+    /// waited for.
+    static let drainGrace: TimeInterval = 2
+    /// How long a tool stopped at its timeout has before it is killed.
+    static let killGrace: TimeInterval = 2
+
+    /// Run the tool and collect its output. It is stopped at `timeout`, and
+    /// the call returns within about `timeout` plus the two graces even if
+    /// the tool ignores the stop or a child holds its pipes. (`Process` puts
+    /// the tool in a process group of its own and the stop reaches the whole
+    /// group.)
+    /// `timerQueue` runs the timeout; tests pass a busier queue than the
+    /// background one, so a loaded machine cannot hold the stop back.
     static func run(_ executable: URL, arguments: [String], input: String, environment: [String: String],
-                    timeout: TimeInterval) throws -> Result {
+                    timeout: TimeInterval, timerQueue: DispatchQueue = .global(qos: .background)) throws -> Result {
         let folder = scratch
         // The prompt goes in as a file, so a tool that exits early can never
         // leave this process writing to a closed pipe.
@@ -246,27 +260,32 @@ enum SummaryProcess {
         }
 
         let timedOut = TimedOutFlag()
+        let pid = process.processIdentifier
         let killer = DispatchWorkItem {
             guard process.isRunning else { return }
             timedOut.set()
             process.terminate()
+            // A tool that ignores the stop is killed a moment later.
+            timerQueue.asyncAfter(deadline: .now() + killGrace) { if process.isRunning { kill(pid, SIGKILL) } }
         }
-        DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + timeout, execute: killer)
+        timerQueue.asyncAfter(deadline: .now() + timeout, execute: killer)
 
-        // Drain stderr alongside stdout, so neither pipe can fill and stall the tool.
-        let errorData = DataBox()
+        // Drain both pipes at once, so neither can fill and stall the tool.
+        let outputData = DataBox(), errorData = DataBox()
         let group = DispatchGroup()
-        group.enter()
-        DispatchQueue.global(qos: .background).async {
-            errorData.set(error.fileHandleForReading.readDataToEndOfFile())
-            group.leave()
+        for (pipe, box) in [(output, outputData), (error, errorData)] {
+            group.enter()
+            DispatchQueue.global(qos: .background).async {
+                let handle = pipe.fileHandleForReading
+                while case let chunk = handle.availableData, !chunk.isEmpty { box.append(chunk) }
+                group.leave()
+            }
         }
-        let outputData = output.fileHandleForReading.readDataToEndOfFile()
-        group.wait()
         process.waitUntilExit()
         killer.cancel()
+        _ = group.wait(timeout: .now() + drainGrace)
         return Result(status: process.terminationStatus,
-                      output: String(decoding: outputData, as: UTF8.self),
+                      output: String(decoding: outputData.get(), as: UTF8.self),
                       error: String(decoding: errorData.get(), as: UTF8.self),
                       timedOut: timedOut.get())
     }
@@ -281,7 +300,7 @@ enum SummaryProcess {
     private final class DataBox: @unchecked Sendable {
         private let lock = NSLock()
         private var value = Data()
-        func set(_ data: Data) { lock.withLock { value = data } }
+        func append(_ data: Data) { lock.withLock { value.append(data) } }
         func get() -> Data { lock.withLock { value } }
     }
 }

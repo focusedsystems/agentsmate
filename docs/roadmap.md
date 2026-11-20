@@ -134,11 +134,18 @@ Landed. The README's Pull request ledger section describes the behaviour.
 
 ## Phase 5: rename reaches the agent
 
-- Renaming a lane whose backend says it can (`LaneBackend.renameCommand`, e.g.
-  `/rename %@` for Claude Code) also sends that command to the agent.
-- It is sent only when the agent's input line is empty. The terminal buffer's
-  cursor row is read for this, so a half-typed prompt is never touched.
-- Add a "Rename the agent's session too" settings key, on by default.
+Landed. The README's Renaming the agent's session section describes the
+behaviour.
+
+- Renaming a lane whose backend says it can (`LaneBackend.renameCommand`,
+  `/rename %@` for Claude Code and Codex) also sends that command to the agent.
+- It is sent only when the lane is attached here, the agent is not running a
+  turn, and its input line reads as empty. The terminal buffer's cursor row is
+  read for this, so a half-typed prompt is never touched; an unknown layout
+  sends nothing and the row says so.
+- A "Rename the agent's session too" settings key, on by default.
+- The branch chip takes a pull request the ledger already tracks for that
+  branch instead of asking `gh` again.
 
 ## Phase 6: lanes that survive anything
 
