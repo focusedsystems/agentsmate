@@ -18,6 +18,22 @@ public struct ClaudeBackgroundLaneBackend: LaneBackend {
     /// The session name for a lane. It must be the same on every device so
     /// they all attach one session; the default is the folder's name.
     public var name: @Sendable (AgentLane) -> String
+    /// List the background sessions running with no row, for the Detached
+    /// section. Interactive sessions are never listed: they are not this
+    /// backend's to attach.
+    public var discoversSessions = true
+    /// Which background sessions count as lanes; nil counts every one.
+    public var isLaneSession: (@Sendable (String) -> Bool)?
+    /// The `claude agents --json` list shared by every app on the Mac, read
+    /// rather than run again while it is fresh.
+    public var agentsListCache: URL = ClaudeBackgroundLaneBackend.defaultAgentsListCache
+
+    public static var defaultAgentsListCache: URL {
+        LaneStatusDirectory.default().url.deletingLastPathComponent().appendingPathComponent("claude-agents.json")
+    }
+
+    /// The `kind` of every session this lists.
+    public static let kind = "claude-bg"
 
     public var keepsRunningWhenDetached: Bool { true }
 
@@ -38,7 +54,7 @@ public struct ClaudeBackgroundLaneBackend: LaneBackend {
 
     public func launch(for lane: AgentLane, shell: String) -> TerminalLaunch {
         let claude = claude.isEmpty ? "claude" : claude
-        let session = ShellQuote.quote(name(lane))
+        let session = ShellQuote.quote(sessionName(for: lane) ?? name(lane))
         let start = ([claude, "--bg", "-n", session] + startArguments.map(ShellQuote.quote)).joined(separator: " ")
         // Attach when the session exists; otherwise start it here, then attach.
         let line = "\(claude) attach \(session) 2>/dev/null || { \(start) >/dev/null && exec \(claude) attach \(session); }"
@@ -46,14 +62,46 @@ public struct ClaudeBackgroundLaneBackend: LaneBackend {
     }
 
     public func statusMatch(for lane: AgentLane) -> LaneStatusMatch {
-        .lane(name(lane))
+        .lane(sessionName(for: lane) ?? name(lane))
+    }
+
+    /// The session found by name, else the one ``name`` gives the lane.
+    public func sessionName(for lane: AgentLane) -> String? {
+        lane.sessionName ?? name(lane)
+    }
+
+    /// The background sessions in `claude agents --json` (interactive ones
+    /// are left out), from the list every app shares, so this usually
+    /// starts no process at all.
+    public func discoverSessions() async -> [DiscoveredSession] {
+        guard discoversSessions else { return [] }
+        let binary: URL? = claude.contains("/") ? URL(fileURLWithPath: claude) : ClaudeBinary.locate()
+        guard let binary else { return [] }
+        let cache = agentsListCache, filter = isLaneSession
+        let records = await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .background).async {
+                LaneRowMetadataReader.processSlots.wait()
+                defer { LaneRowMetadataReader.processSlots.signal() }
+                continuation.resume(returning: ClaudeAgentsList.shared(binary: binary, cache: cache))
+            }
+        }
+        return Self.sessions(from: records, isLaneSession: filter)
+    }
+
+    static func sessions(from records: [LaneStatus], isLaneSession: (@Sendable (String) -> Bool)?) -> [DiscoveredSession] {
+        var seen = Set<String>()
+        return records.compactMap { record in
+            guard let name = record.lane, !name.isEmpty,
+                  isLaneSession?(name) ?? true, seen.insert(name).inserted else { return nil }
+            return DiscoveredSession(kind: kind, name: name, directory: record.directory)
+        }
     }
 
     public var canStop: Bool { true }
 
     /// `claude stop` ends the session and keeps its conversation.
     public func stop(_ lane: AgentLane) {
-        LaneCommand.run([claude.isEmpty ? "claude" : claude, "stop", name(lane)])
+        LaneCommand.run([claude.isEmpty ? "claude" : claude, "stop", sessionName(for: lane) ?? name(lane)])
     }
 }
 

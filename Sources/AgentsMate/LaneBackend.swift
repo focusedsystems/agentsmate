@@ -35,6 +35,11 @@ public struct AgentLane: Identifiable, Hashable, Sendable {
     /// the same folder, such as a duplicate, so it attaches a session of its
     /// own rather than the folder's main one.
     public var variant: String?
+    /// The persistent session this row attaches, by name, when it is known
+    /// exactly: a session the launch sweep found with no row, reattached or
+    /// adopted. A backend that can attach by name does so instead of
+    /// working the session out from the folder.
+    public var sessionName: String?
 
     public init(id: String, title: String, symbol: String = "terminal", tintHex: String? = nil,
                 directory: URL? = nil, backendID: String, isClosable: Bool = false,
@@ -103,6 +108,18 @@ public protocol LaneBackend: Sendable {
     /// input line when the person renames the lane, with `%@` where the new
     /// name goes, such as `/rename %@`. Nil when the agent has none.
     var renameCommand: String? { get }
+    /// Whether ``stop(_:)`` can end this lane's session. Defaults to ``canStop``.
+    func canStop(_ lane: AgentLane) -> Bool
+    /// The name of the session a lane attaches, when the backend knows it,
+    /// so the launch sweep can tell which running sessions already have a
+    /// row. Defaults to ``AgentLane/sessionName``.
+    func sessionName(for lane: AgentLane) -> String?
+    /// The backend's own lane sessions running now, whether or not a row
+    /// attaches them, for the Detached section. Only sessions this backend
+    /// made or would attach belong here, never everything a multiplexer or
+    /// daemon holds. Called at launch and about every ten minutes, off the
+    /// main actor; keep it to one bounded helper process. Empty by default.
+    func discoverSessions() async -> [DiscoveredSession]
 }
 
 public extension LaneBackend {
@@ -110,6 +127,9 @@ public extension LaneBackend {
     var canStop: Bool { false }
     func stop(_ lane: AgentLane) {}
     var renameCommand: String? { nil }
+    func canStop(_ lane: AgentLane) -> Bool { canStop }
+    func sessionName(for lane: AgentLane) -> String? { lane.sessionName }
+    func discoverSessions() async -> [DiscoveredSession] { [] }
 }
 
 /// Runs a command without waiting for it, for stopping a lane.
@@ -175,6 +195,11 @@ public struct CommandLaneBackend: LaneBackend {
     /// to change or turn it off.
     public var renameCommand: String?
 
+    /// How the wrapper names its tmux sessions, for finding lane sessions
+    /// with no row, attaching one by name, stopping it, and lanes on another
+    /// machine (``TmuxLaneSessions/host``). Nil lists nothing.
+    public var tmuxSessions: TmuxLaneSessions?
+
     /// Whether the command's program is installed, so a picker can leave
     /// out presets this Mac cannot run.
     public var isInstalled: Bool { LaunchLine.isInstalled(command) }
@@ -202,12 +227,14 @@ public struct CommandLaneBackend: LaneBackend {
                                 sessionIDFile: (@Sendable (AgentLane) -> URL?)? = nil,
                                 stopCommand: (@Sendable (AgentLane) -> [String])? = nil,
                                 variantFlag: String? = nil,
-                                variantStatusName: (@Sendable (AgentLane) -> String?)? = nil) -> CommandLaneBackend {
+                                variantStatusName: (@Sendable (AgentLane) -> String?)? = nil,
+                                tmuxSessions: TmuxLaneSessions? = nil) -> CommandLaneBackend {
         var backend = CommandLaneBackend(id: id, displayName: displayName, command: command, passesDirectory: true,
                                          returnsToShell: false, statusAgent: statusAgent, keepsRunningWhenDetached: true,
                                          sessionIDFile: sessionIDFile, stopCommand: stopCommand)
         backend.variantFlag = variantFlag
         backend.variantStatusName = variantStatusName
+        backend.tmuxSessions = tmuxSessions
         return backend
     }
 
@@ -226,11 +253,59 @@ public struct CommandLaneBackend: LaneBackend {
             if let variant = lane.variant, let variantFlag { line += " " + variantFlag + " " + ShellQuote.quote(variant) }
             line += " " + ShellQuote.quote(directory)
         }
+        if let tmux = tmuxSessions {
+            if tmux.host != nil {
+                return remoteLaunch(tmux, lane: lane, wrapper: line, shell: shell)
+            }
+            if let name = lane.sessionName, TmuxLaneSessions.isValidSessionName(name) {
+                // A session found running: attach exactly that one, and fall
+                // back to the wrapper if it has ended since.
+                let attach = tmux.localAttachLine(session: name, fallback: line)
+                return TerminalLaunch(executable: shell, arguments: ["-l", "-i", "-c", attach], directory: directory)
+            }
+        }
         if returnsToShell { line += "; exec " + ShellQuote.quote(shell) + " -l" }
         return TerminalLaunch(executable: shell, arguments: ["-l", "-i", "-c", line], directory: directory)
     }
 
-    public var canStop: Bool { stopCommand != nil }
+    /// A lane on ``TmuxLaneSessions/host``: attach its session there by
+    /// name when it is known, else run the wrapper there.
+    private func remoteLaunch(_ tmux: TmuxLaneSessions, lane: AgentLane, wrapper: String, shell: String) -> TerminalLaunch {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let line: String
+        if let name = sessionName(for: lane), let attach = tmux.remoteAttachLine(session: name) {
+            line = attach
+        } else if let run = tmux.sshLine(remote: wrapper) {
+            line = run
+        } else {
+            let message = "The lane host \(tmux.host ?? "") is not an ssh destination AgentsMate can use."
+            line = "printf '%s\\n' " + ShellQuote.quote(message) + "; exec " + ShellQuote.quote(shell) + " -l"
+        }
+        // The lane's folder is on the host, so the local terminal starts at home.
+        return TerminalLaunch(executable: shell, arguments: ["-l", "-i", "-c", line], directory: home)
+    }
+
+    public var canStop: Bool { stopCommand != nil || tmuxSessions != nil }
+
+    public func canStop(_ lane: AgentLane) -> Bool {
+        if tmuxSessions != nil, sessionName(for: lane) != nil { return true }
+        return tmuxSessions?.host == nil && stopCommand != nil
+    }
+
+    /// The lane's tmux session: the one it was found by, else what
+    /// ``TmuxLaneSessions/sessionName`` or ``variantStatusName`` says.
+    public func sessionName(for lane: AgentLane) -> String? {
+        if let name = lane.sessionName { return name }
+        if let name = tmuxSessions?.sessionName?(lane) { return name }
+        if lane.variant != nil, let name = variantStatusName?(lane) { return name }
+        return nil
+    }
+
+    /// The tmux sessions ``tmuxSessions`` counts as lanes, on this Mac or
+    /// its host. Empty without it.
+    public func discoverSessions() async -> [DiscoveredSession] {
+        await tmuxSessions?.discover() ?? []
+    }
 
     /// `claude --continue` / `codex resume --last`, falling back to the fresh
     /// command. Wrappers that keep their own sessions are not rewritten.
@@ -246,13 +321,21 @@ public struct CommandLaneBackend: LaneBackend {
         return copy.launch(for: lane, shell: shell)
     }
 
+    /// A session found by name, or any lane on a host, is ended by name with
+    /// `tmux kill-session`; otherwise the app's ``stopCommand`` runs.
     public func stop(_ lane: AgentLane) {
+        if let tmux = tmuxSessions, lane.sessionName != nil || tmux.host != nil || stopCommand == nil {
+            if let name = sessionName(for: lane), let command = tmux.stopCommand(session: name) { LaneCommand.run(command) }
+            return
+        }
         guard let stopCommand else { return }
         LaneCommand.run(stopCommand(lane))
     }
 
     public func statusMatch(for lane: AgentLane) -> LaneStatusMatch {
         guard let statusAgent else { return .none }
+        // A session found by name reports status under that name.
+        if let name = lane.sessionName { return .lane(name) }
         // A variant shares the folder with the main lane, so only its own
         // session name tells them apart.
         if lane.variant != nil, let name = variantStatusName?(lane) {

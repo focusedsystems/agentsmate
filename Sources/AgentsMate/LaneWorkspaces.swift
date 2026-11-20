@@ -9,9 +9,19 @@ public struct LaneWorkspace: Codable, Equatable, Sendable, Identifiable {
         public var backendID: String
         public var section: String?
         public var pinned: Bool?
+        /// A second (third, …) lane in the same folder; see ``AgentLane/variant``.
+        public var variant: String?
+        /// The session the lane attaches by name; see ``AgentLane/sessionName``.
+        public var sessionName: String?
+        /// The lane that was selected, in the restore snapshot.
+        public var selected: Bool?
 
         public init(title: String? = nil, directory: String? = nil, backendID: String,
-                    section: String? = nil, pinned: Bool? = nil) {
+                    section: String? = nil, pinned: Bool? = nil, variant: String? = nil,
+                    sessionName: String? = nil, selected: Bool? = nil) {
+            self.variant = variant
+            self.sessionName = sessionName
+            self.selected = selected
             self.title = title
             self.directory = directory
             self.backendID = backendID

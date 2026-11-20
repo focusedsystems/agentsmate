@@ -71,6 +71,63 @@ their attached-client counts) to the status feed, and turn on
 anywhere is drawn as an orphan, so a stray can be reattached or stopped.
 Leave it off where lanes are kept running on purpose.
 
+## Finding lane sessions with no row
+
+`LaneBackend.discoverSessions()` returns the backend's own lane sessions
+running now, for the store's Detached section (see the README). It returns
+nothing by default, and a backend must never list sessions that are not its
+lanes. The store calls it at launch and about every ten minutes (stretched
+fourfold while the app is in the background, in Low Power Mode or hot), one
+backend at a time, skipping a sweep while the last is still going.
+
+Give a tmux lane backend its naming so it can list and attach by name:
+
+```swift
+CommandLaneBackend.tmuxLane(id: "claude", displayName: "Claude", command: "my-lane-wrapper",
+                            statusAgent: "claude",
+                            tmuxSessions: TmuxLaneSessions(prefixes: ["lane-"],
+                                                           sessionName: { "lane-" + $0.title }))
+```
+
+`prefixes` (or `matches`) decides which sessions are lanes. With neither,
+nothing is listed. `sessionName`, when the app knows how its wrapper names a
+lane's session, makes rows and sessions match by name instead of by folder.
+Listing is one `tmux list-sessions` at background priority with a five-second
+timeout, through the package's two shared helper slots.
+
+A lane found this way carries `sessionName`. Its terminal runs
+`tmux attach-session -t =<name>` (an exact match), falling back to the
+wrapper when the session has ended, and Stop runs `tmux kill-session -t =<name>`.
+
+## Lanes on another machine (untested)
+
+`TmuxLaneSessions.host`, off by default, puts a tmux backend's lanes on
+another machine reached over ssh. It has not been tried on real machines yet;
+treat it as a starting point.
+
+```swift
+TmuxLaneSessions(prefixes: ["lane-"], host: "user@build-host", remoteTmux: "/opt/homebrew/bin/tmux")
+```
+
+- A lane whose session name is known runs
+  `ssh -t -o ConnectTimeout=5 -- <host> '<tmux> attach-session -t =<name>'`.
+  Any other lane runs its wrapper command on the host the same way, so the
+  wrapper must be on the host's PATH for an ssh command.
+- The host is passed after `--`, and must look like a host name, `user@host`
+  or an address: a leading dash, spaces, quotes or shell characters are
+  refused, and the lane prints why instead of connecting. The remote command
+  is quoted once for the host's shell and again for the local one.
+- `remoteTmux` is the tmux on the host. An ssh command does not read the
+  login shell's PATH there, so a full path is often needed.
+- Discovery over ssh happens only when the host is set: the same
+  `list-sessions` in `BatchMode`, so it never prompts, at the same slow
+  cadence with a timeout of the connect timeout plus ten seconds. It needs an
+  ssh agent the app can reach without a shell, such as the system one.
+- Stop runs `tmux kill-session` on the host by name. The app's own
+  `stopCommand` runs locally, so it is not used for host lanes.
+- Status hooks run on the host and write its status folder, not this Mac's,
+  so host lanes show no status unless the app brings those records over.
+
 ## Room for more
 
 A backend that serves models from elsewhere (local models on other machines,

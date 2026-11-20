@@ -33,8 +33,12 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
 
     /// Replaced on reattach, so a fresh process gets a fresh screen.
     @Published public private(set) var view: AgentTerminalView
-    @Published public private(set) var isStarted = false
-    @Published public private(set) var hasExited = false
+    @Published public private(set) var isStarted = false {
+        didSet { if isStarted != oldValue { onAttachmentChange?(self) } }
+    }
+    @Published public private(set) var hasExited = false {
+        didSet { if hasExited != oldValue { onAttachmentChange?(self) } }
+    }
     /// What the program calls itself: Claude's session name, or the shell's title.
     @Published public private(set) var programTitle: String?
     /// The shell's working directory, followed as it changes.
@@ -136,6 +140,8 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
     private(set) var directoryFromShell = false
     /// Called when the working directory changes, however it was learned.
     var onDirectoryChange: ((AgentLaneSession) -> Void)?
+    /// Called when the lane's terminal starts or ends.
+    var onAttachmentChange: ((AgentLaneSession) -> Void)?
 
     init(lane: AgentLane, backend: any LaneBackend) {
         self.lane = lane

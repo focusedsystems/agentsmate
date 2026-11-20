@@ -271,7 +271,10 @@ public struct AgentLaneSidebar<Accessory: View>: View {
             if group.id == store.groups.first?.id { accessory }
         }
         .contextMenu {
-            if let name = group.section, !group.isPinned {
+            if group.isDetached {
+                Button("Look for Detached Sessions Again") { store.sweepForDetachedSessions() }
+                Divider()
+            } else if let name = group.section, !group.isPinned {
                 Button("Rename Section…") { sectionName = name; renaming = name }
                 Button("Move Section Up") { store.moveSection(name, by: -1) }
                 Button("Move Section Down") { store.moveSection(name, by: 1) }
@@ -297,8 +300,45 @@ public struct AgentLaneSidebar<Accessory: View>: View {
                 })
     }
 
+    /// A session found running with no row: reattach it here, adopt it
+    /// into a section, or end it.
+    @ViewBuilder
+    private func detachedRowMenu(_ session: AgentLaneSession) -> some View {
+        let lane = session.lane
+        Button("Reattach") { store.reattach(lane.id) }
+            .help("Attach this session here; the row stays in Detached")
+        DetachedAdoptMenu(store: store, id: lane.id)
+        Divider()
+        Button("Stop Session") { store.stop(lane.id) }
+            .disabled(!store.canStop(lane.id))
+            .help("End the session; its row goes with it")
+        Divider()
+        if lane.directory != nil {
+            Button("Copy Path") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(session.currentDirectory, forType: .string)
+            }
+            Button("Show in Finder") {
+                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: session.currentDirectory)])
+            }
+        }
+        Button("Copy Session Name") {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(lane.sessionName ?? lane.title, forType: .string)
+        }
+    }
+
     @ViewBuilder
     private func rowMenu(_ session: AgentLaneSession) -> some View {
+        if store.isDetached(session.id) {
+            detachedRowMenu(session)
+        } else {
+            laneRowMenu(session)
+        }
+    }
+
+    @ViewBuilder
+    private func laneRowMenu(_ session: AgentLaneSession) -> some View {
         let lane = session.lane
         Button("Open \(session.title)") { store.open(lane.id) }
         Button("Reattach") { store.reattach(lane.id) }
@@ -359,7 +399,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
             Button("New Section…") { sectionName = ""; showingNewSection = true }
         }
         Divider()
-        if session.backend.canStop {
+        if store.canStop(lane.id) {
             Button("Stop Lane") { store.stop(lane.id) }
                 .help("End the session; its conversation resumes when the lane is opened again")
         }
@@ -613,6 +653,26 @@ struct LaneTerminalPane: View {
 }
 
 private struct IconRequest: Identifiable { let id: AgentLane.ID }
+
+/// Adopt ▸ No Section, then each section: the same submenu on a Detached
+/// row and in the menu bar.
+struct DetachedAdoptMenu: View {
+    @ObservedObject var store: AgentLaneStore
+    let id: AgentLane.ID?
+    var title = "Adopt Into Section"
+
+    var body: some View {
+        Menu(title) {
+            Button("No Section") { if let id { store.adopt(id, into: nil) } }
+            if !store.sectionNames.isEmpty { Divider() }
+            ForEach(store.sectionNames, id: \.self) { name in
+                Button(name) { if let id { store.adopt(id, into: name) } }
+            }
+        }
+        .disabled(id.map { !store.isDetached($0) } ?? true)
+        .help("Keep this session as a lane of your own, in a section")
+    }
+}
 
 struct LaneRow: View {
     @ObservedObject var session: AgentLaneSession
