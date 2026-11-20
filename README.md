@@ -234,9 +234,31 @@ everything a tmux server or daemon holds:
   the `claude agents --json` list every app shares, never interactive ones.
   `isLaneSession` narrows it; `discoversSessions = false` turns it off.
 
+Where a lane's name carries no mark of its own, its folder says whose it is.
+Both backends take an `isRelevant` rule that sees the whole
+`DiscoveredSession`, its name and its folder, in place of the name rule, and
+`DiscoveredSession.isInside(anyOf:)` keeps the sessions working in the app's
+folders or anywhere below them. The rule runs off the main actor, so the app
+hands it folders it can read from any thread, here `appFolders()`:
+
+```swift
+TmuxLaneSessions(isRelevant: { $0.isInside(anyOf: appFolders()) })
+```
+
 A row claims a session by the name its backend knows it by
 (`LaneBackend.sessionName(for:)`, `TmuxLaneSessions.sessionName`), else by the
-name its status matches, else by folder.
+name its status matches, else by folder. A row on a backend that did not list
+the session claims it by name only, so a wrapper lane that attaches a tmux
+session or a Claude Code background session of the same name keeps it out of
+Detached, while a Codex lane in the same folder as a Claude one does not.
+
+### Closing a row leaves its session running
+
+Closing a row ends its terminal here and nothing else: the session it attached
+keeps running, shows in the Detached section, and is the same conversation
+when it is opened again. Stop Session (or Stop Lane) is what ends it.
+`Configuration.closeStopsLane` turns on stopping at close for an app that wants
+closing to work like closing a tmux workspace; it is off by default.
 
 A Detached row's menu, and the Agent menu for the selected one:
 

@@ -26,7 +26,10 @@ public final class AgentLaneStore: ObservableObject {
         /// Off for an app whose lanes are kept running on purpose.
         public var highlightsOrphans: Bool
         /// Closing a lane the person opened also stops its session, as
-        /// closing a workspace in a terminal multiplexer does.
+        /// closing a workspace in a terminal multiplexer does. Off by
+        /// default: a lane attaches a session that outlives the app, so
+        /// closing its row only ends the terminal here, the session shows
+        /// in the Detached section, and Stop is what ends it.
         public var closeStopsLane: Bool
         /// Where each lane's `$AGENTSMATE_SESSION` file lives, for agents to
         /// label their row. Nil turns the files off.
@@ -99,7 +102,7 @@ public final class AgentLaneStore: ObservableObject {
                     baseFontSize: CGFloat = NSFont.systemFontSize,
                     scrollback: Int = 20_000, shortcuts: TerminalShortcut.Set = .fixedLanes,
                     defaultsPrefix: String = "agentsmate.", highlightsOrphans: Bool = false,
-                    closeStopsLane: Bool = true,
+                    closeStopsLane: Bool = false,
                     sessionFileDirectory: URL? = FileManager.default.temporaryDirectory
                         .appendingPathComponent("agentsmate-sessions", isDirectory: true),
                     cycleSkipsUnstarted: Bool = false, workspaceFile: URL? = nil,
@@ -1337,8 +1340,8 @@ public final class AgentLaneStore: ObservableObject {
         return session.backend.canStop(session.lane)
     }
 
-    /// End and remove a lane the person opened, stopping its session too
-    /// when ``Configuration/closeStopsLane`` is on.
+    /// End and remove a lane the person opened. Its session keeps running
+    /// unless ``Configuration/closeStopsLane`` is on.
     public func close(_ id: AgentLane.ID) {
         guard let index = lanes.firstIndex(where: { $0.id == id }), lanes[index].isClosable else { return }
         if configuration.closeStopsLane, let session = sessions[id], session.backend.canStop(session.lane) {

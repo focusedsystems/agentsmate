@@ -62,8 +62,12 @@ its Claude lanes' `backendID` to it.
 A backend that can end its session sets `canStop` and implements `stop`:
 `ClaudeBackgroundLaneBackend` runs `claude stop`, and a `CommandLaneBackend`
 runs its `stopCommand` (killing the tmux session, say). The lane's menu gains
-Stop Lane, and closing a lane the person opened stops it when
-`closeStopsLane` is on. The conversation is kept, so opening the lane resumes it.
+Stop Lane. The conversation is kept, so opening the lane resumes it.
+
+Closing a row never stops its session unless the app turns on
+`closeStopsLane`, which is off by default: the session outlives the row as it
+outlives the app, and shows in the Detached section until it is attached
+again or stopped.
 
 Add a `LanePresenceSource` (`TmuxPresenceSource` lists tmux sessions with
 their attached-client counts) to the status feed, and turn on
@@ -90,7 +94,13 @@ CommandLaneBackend.tmuxLane(id: "claude", displayName: "Claude", command: "my-la
 ```
 
 `prefixes` (or `matches`) decides which sessions are lanes. With neither,
-nothing is listed. `sessionName`, when the app knows how its wrapper names a
+nothing is listed. `isRelevant`, in place of both, decides from the whole
+`DiscoveredSession`: its name and the folder its active pane is in
+(`#{pane_current_path}`). It is for wrappers whose session names carry no
+prefix, where only the folder tells the app's lanes from everything else on the
+tmux server. `ClaudeBackgroundLaneBackend.isRelevant` does the same for
+background sessions, whose folder is the `cwd` in `claude agents --json`.
+Neither rule starts a process; the folder comes with the listing. `sessionName`, when the app knows how its wrapper names a
 lane's session, makes rows and sessions match by name instead of by folder.
 Listing is one `tmux list-sessions` at background priority with a five-second
 timeout, through the package's two shared helper slots.
