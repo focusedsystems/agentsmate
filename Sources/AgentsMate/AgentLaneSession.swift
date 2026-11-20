@@ -122,6 +122,7 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
 
     var onShortcut: ((TerminalShortcut) -> Bool)?
     var shortcutResolver: ((NSEvent) -> TerminalShortcut?)?
+    var onOpenLink: ((URL) -> Bool)?
     private var poll: CadenceTimer?
 
     /// Whether the row is on screen.
@@ -334,6 +335,7 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
         view.registerForDraggedTypes(AgentTerminalView.droppedTypes)
         view.onShortcut = { [weak self] shortcut in self?.onShortcut?(shortcut) ?? false }
         view.shortcutResolver = { [weak self] event in self?.shortcutResolver?(event) }
+        view.onOpenLink = { [weak self] url in self?.onOpenLink?(url) ?? false }
         view.onOutput = { [weak self] in
             MainActor.assumeIsolated {
                 guard let self else { return }

@@ -164,6 +164,30 @@ folder's `origin` points at, the row takes it from the ledger and `gh` is not
 asked about the branch at all. `store.recordPullRequests(_:for:)` adds links an
 app learns of another way.
 
+## Links in the terminal
+
+⌘-click a link in a lane's terminal to open it: an OSC 8 hyperlink, or a plain
+`http://` or `https://` URL printed in the output. A plain URL is found on the
+row that was clicked only, ends at whitespace, quotes or angle brackets, and
+drops trailing punctuation and closing brackets it did not open. Holding ⌘
+shows an OSC 8 link's target before the click.
+
+Set `store.onOpenLink` to route links yourself. It gets the URL and the lane
+it was clicked in, and returns whether the app handled it:
+
+```swift
+store.onOpenLink = { url, laneID in
+    guard url.host == "code.example.com" else { return false }
+    showInApp(url, from: laneID)
+    return true
+}
+```
+
+When it returns false or is nil, `http`, `https` and `mailto` links open in the
+default app. Any other scheme, `file:` included, reaches the hook and nothing
+else. `TerminalLinks` has the parsing and scheme rules for an app that wants
+them.
+
 ## Renaming the agent's session
 
 Renaming a lane (`store.rename(_:to:)`) also renames the agent's own session

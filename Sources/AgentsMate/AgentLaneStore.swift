@@ -353,6 +353,12 @@ public final class AgentLaneStore: ObservableObject {
     /// Opens a pull request link from the inbox. Nil opens it in the
     /// default browser.
     public var onOpenPullRequest: ((URL) -> Void)?
+    /// Answers a link ⌘-clicked in a lane's terminal (an OSC 8 hyperlink
+    /// or a plain http or https URL), with the lane it was clicked in.
+    /// Returns whether the app handled it; when it returns false or is nil,
+    /// http, https and mailto links open in the default app and other
+    /// schemes, `file:` among them, are dropped.
+    public var onOpenLink: ((URL, AgentLane.ID) -> Bool)?
 
     private var notifier: LaneNotifier?
     /// The agents' usage limits, when the app gave usage sources.
@@ -1216,6 +1222,7 @@ public final class AgentLaneStore: ObservableObject {
         session.customTitle = layout.names[id]
         session.onShortcut = { [weak self] shortcut in self?.handle(shortcut, from: id) ?? false }
         session.shortcutResolver = { [weak self] event in self?.shortcuts.terminalShortcut(for: event) }
+        session.onOpenLink = { [weak self] url in self?.onOpenLink?(url, id) ?? false }
         session.onSectionFromAgent = { [weak self] section in
             guard let self, self.layout.assignments[id] == nil, self.layout.section(of: lane) != section else { return }
             self.layout.move(id, to: section)
