@@ -358,6 +358,46 @@ toolbar, on the same history as the Agent menu's Back and Forward:
 .toolbar { ToolbarItem(placement: .navigation) { AgentLaneHistoryButtons(store: store) } }
 ```
 
+## Reopen As
+
+Reopen As restarts the selected lane on another agent. Each choice the app
+offers has a kind, and each kind has the same rebindable shortcut in every
+app:
+
+| Kind            | Default |
+| --------------- | ------- |
+| Same Agent      | ⌥⌘R     |
+| Claude (remote) | ⇧⌘C     |
+| Codex (remote)  | ⇧⌘X     |
+| Claude (direct) | ⌥⇧⌘C    |
+| Codex (direct)  | ⌥⇧⌘X    |
+
+An app maps its own backends onto the kinds. `.sameAgent()` starts the lane's
+current agent again in a fresh terminal:
+
+```swift
+reopenChoices: [
+    .sameAgent(),
+    LaneReopenChoice("Claude (remote)", backendID: "claude-remote", kind: .claudeRemote),
+    LaneReopenChoice("Codex (direct)", backendID: "codex", kind: .codexDirect),
+]
+```
+
+The keys belong to the lanes only while a lane's terminal or the lane list
+has the keyboard (`store.lanesHaveKeyboard`). Then they win over the app's
+own uses of the same keys; anywhere else the app keeps them, and the menu
+items show no shortcut. The Agent menu carries the items, disabled while no
+lane is selected. An app with a menu of its own puts `LaneReopenMenu(store:)`
+there. A store takes the keys when its `Configuration.shortcuts` contains
+`.reopen`, which `.fixedLanes` and `.all` both do.
+
+## Copy and Paste in the terminal
+
+While a terminal has the keyboard, ⌘C copies its selection and ⌘V pastes
+before the menu bar or any view sees the keys, so an app's own menus and
+shortcuts cannot swallow them. Edit › Copy and Paste reach the terminal too.
+Shift-drag selects text when the program has the mouse.
+
 ## Keeping the agent CLIs current
 
 The `AgentsMateUpdates` product finds the Claude Code and Codex command-line

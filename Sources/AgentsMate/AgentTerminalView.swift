@@ -21,6 +21,9 @@ open class AgentTerminalView: LocalProcessTerminalView {
     /// an unhandled http, https or mailto link opens in the default app,
     /// and any other scheme is dropped.
     public var onOpenLink: ((URL) -> Bool)?
+    /// Where Copy, Paste and a program's clipboard writes go. Tests use a
+    /// pasteboard of their own.
+    public var pasteboard: NSPasteboard = .general
 
     private var colorRequests = TerminalColorSchemeRequests()
     private var clipboardRequests = ClipboardRequests()
@@ -33,8 +36,8 @@ open class AgentTerminalView: LocalProcessTerminalView {
     open override func dataReceived(slice: ArraySlice<UInt8>) {
         let requests = colorRequests.scan(slice)
         for text in clipboardRequests.scan(slice) {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(text, forType: .string)
+            pasteboard.clearContents()
+            pasteboard.setString(text, forType: .string)
         }
         // The caret stays out of sight while output streams and comes back
         // once it settles: an agent redraws many times a second, hiding and
@@ -211,8 +214,29 @@ open class AgentTerminalView: LocalProcessTerminalView {
         inputMonitor = nil
     }
 
-    private func handleKeyDown(_ event: NSEvent) -> Bool {
+    /// Keys the terminal answers before the menu bar or any SwiftUI view
+    /// sees them, while it has focus.
+    func handleKeyDown(_ event: NSEvent) -> Bool {
         let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        // ⌘C and ⌘V act here rather than waiting for Edit › Copy and Paste
+        // to reach the terminal through the menus, which an app's own menus
+        // or views can intercept. Without a selection ⌘C goes on as before.
+        if flags == .command {
+            switch event.charactersIgnoringModifiers?.lowercased() {
+            case "c" where hasSelection:
+                copy(self)
+                return true
+            case "v":
+                paste(self)
+                return true
+            default: break
+            }
+        }
+        // Reopen As keys win over the app's own uses of them while the
+        // terminal has focus.
+        if let shortcut = shortcutResolver?(event), case .reopen = shortcut, onShortcut?(shortcut) == true {
+            return true
+        }
         if flags == .command, event.keyCode == 51 {
             send([0x15]) // ⌘⌫ deletes to the start of the line, as in Terminal.
             return true
@@ -376,6 +400,34 @@ open class AgentTerminalView: LocalProcessTerminalView {
         return super.performKeyEquivalent(with: event)
     }
 
+    /// Whether some of the terminal's text is selected.
+    public var hasSelection: Bool { getSelection()?.isEmpty == false }
+
+    /// Edit › Copy: the selected text, onto ``pasteboard``.
+    open override func copy(_ sender: Any) {
+        guard let text = getSelection(), !text.isEmpty else { return }
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+    }
+
+    /// Edit › Paste: the text on ``pasteboard``, typed in as a paste.
+    open override func paste(_ sender: Any) {
+        guard let text = pasteboard.string(forType: .string), !text.isEmpty else { return }
+        if getTerminal().bracketedPasteMode {
+            pasteText(text)
+        } else {
+            // A shell takes a paste line by line, as in Terminal.
+            send(txt: text)
+        }
+    }
+
+    /// A clipboard write a program asked for (OSC 52), onto ``pasteboard``.
+    func writeClipboard(_ content: Data) {
+        guard let text = String(data: content, encoding: .utf8) else { return }
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+    }
+
     /// Clear the screen and scrollback, then ask the program to redraw.
     public func clearScreen() {
         feed(text: "\u{1b}[2J\u{1b}[3J\u{1b}[H")
@@ -448,7 +500,7 @@ final class TerminalLinkDelegate: TerminalViewDelegate {
     func send(source: TerminalView, data: ArraySlice<UInt8>) { view.send(source: source, data: data) }
     func scrolled(source: TerminalView, position: Double) { view.scrolled(source: source, position: position) }
     func rangeChanged(source: TerminalView, startY: Int, endY: Int) { view.rangeChanged(source: source, startY: startY, endY: endY) }
-    func clipboardCopy(source: TerminalView, content: Data) { view.clipboardCopy(source: source, content: content) }
+    func clipboardCopy(source: TerminalView, content: Data) { view.writeClipboard(content) }
 
     func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {
         guard let url = TerminalLinks.url(from: link) else { return }

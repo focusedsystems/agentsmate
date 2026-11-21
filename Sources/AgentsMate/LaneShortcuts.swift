@@ -5,21 +5,18 @@ import AppKit
 public enum LaneShortcutAction: String, CaseIterable, Codable, Sendable, Identifiable {
     case next, previous, clear, newLane, closeLane, split, maximize, togglePanel
     case biggerFont, smallerFont, resetFont, jumpToUnread, goToLane, messageAgent, back, forward, reattach
-    case reopenAs1, reopenAs2, reopenAs3, reopenAs4
+    case reopenSameAgent, reopenClaudeRemote, reopenCodexRemote, reopenClaudeDirect, reopenCodexDirect
 
-    /// The Reopen As choice this action picks, zero-based.
-    public var reopenChoice: Int? {
+    /// The kind of Reopen As choice this action picks.
+    public var reopenKind: LaneReopenChoice.Kind? {
         switch self {
-        case .reopenAs1: 0
-        case .reopenAs2: 1
-        case .reopenAs3: 2
-        case .reopenAs4: 3
+        case .reopenSameAgent: .sameAgent
+        case .reopenClaudeRemote: .claudeRemote
+        case .reopenCodexRemote: .codexRemote
+        case .reopenClaudeDirect: .claudeDirect
+        case .reopenCodexDirect: .codexDirect
         default: nil
         }
-    }
-
-    public static func reopenAs(choice index: Int) -> LaneShortcutAction? {
-        allCases.first { $0.reopenChoice == index }
     }
 
     public var id: String { rawValue }
@@ -43,10 +40,11 @@ public enum LaneShortcutAction: String, CaseIterable, Codable, Sendable, Identif
         case .back: "Back"
         case .forward: "Forward"
         case .reattach: "Reattach"
-        case .reopenAs1: "Reopen As, First Choice"
-        case .reopenAs2: "Reopen As, Second Choice"
-        case .reopenAs3: "Reopen As, Third Choice"
-        case .reopenAs4: "Reopen As, Fourth Choice"
+        case .reopenSameAgent: "Reopen As Same Agent"
+        case .reopenClaudeRemote: "Reopen As Claude (remote)"
+        case .reopenCodexRemote: "Reopen As Codex (remote)"
+        case .reopenClaudeDirect: "Reopen As Claude (direct)"
+        case .reopenCodexDirect: "Reopen As Codex (direct)"
         }
     }
 
@@ -64,7 +62,7 @@ public enum LaneShortcutAction: String, CaseIterable, Codable, Sendable, Identif
         case .biggerFont: .biggerFont
         case .smallerFont: .smallerFont
         case .resetFont: .resetFont
-        default: nil
+        default: reopenKind.map { .reopen($0) }
         }
     }
 }
@@ -181,11 +179,35 @@ public struct LaneShortcutBindings: Codable, Equatable, Sendable {
         .back: .init("[", command: true),
         .forward: .init("]", command: true),
         .reattach: .init("r", command: true, shift: true),
-        .reopenAs1: .init("1", option: true, control: true),
-        .reopenAs2: .init("2", option: true, control: true),
-        .reopenAs3: .init("3", option: true, control: true),
-        .reopenAs4: .init("4", option: true, control: true),
+        .reopenSameAgent: .init("r", command: true, option: true),
+        .reopenClaudeRemote: .init("c", command: true, shift: true),
+        .reopenCodexRemote: .init("x", command: true, shift: true),
+        .reopenClaudeDirect: .init("c", command: true, shift: true, option: true),
+        .reopenCodexDirect: .init("x", command: true, shift: true, option: true),
     ]
+
+    private enum CodingKeys: String, CodingKey { case overrides }
+
+    /// Saved bindings, leaving out any action this version no longer has, so
+    /// a removed or renamed action never discards the person's other keys.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        guard container.contains(.overrides) else { return }
+        // A dictionary keyed by an enum encodes as alternating keys and values.
+        var list = try container.nestedUnkeyedContainer(forKey: .overrides)
+        while !list.isAtEnd {
+            let raw = try list.decode(String.self)
+            let value: LaneKeyBinding? = try list.decodeNil() ? nil : list.decode(LaneKeyBinding.self)
+            if let action = LaneShortcutAction(rawValue: raw) { overrides[action] = .some(value) }
+        }
+    }
+
+    /// The reopen kind a key press picks under these bindings, if any.
+    public func reopenKind(for event: NSEvent) -> LaneReopenChoice.Kind? {
+        LaneShortcutAction.allCases.first { action in
+            action.reopenKind != nil && binding(for: action)?.matches(event) == true
+        }?.reopenKind
+    }
 
     public func binding(for action: LaneShortcutAction) -> LaneKeyBinding? {
         if let override = overrides[action] { return override }

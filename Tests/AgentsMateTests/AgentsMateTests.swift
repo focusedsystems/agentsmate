@@ -149,7 +149,7 @@ final class ReopenAsTests: XCTestCase {
         let again = makeStore()
         again.sync(lanes: [AgentLane(id: "a", title: "A", backendID: "claude")])
         XCTAssertEqual(again.lanes.first?.backendID, "codex")
-        XCTAssertEqual(LaneShortcutBindings().binding(for: .reopenAs2)?.display, "⌃⌥2")
+        XCTAssertEqual(LaneShortcutBindings().binding(for: .reopenCodexRemote)?.display, "⇧⌘X")
     }
 }
 
