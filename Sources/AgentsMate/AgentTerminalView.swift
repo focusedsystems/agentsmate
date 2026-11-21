@@ -410,14 +410,29 @@ open class AgentTerminalView: LocalProcessTerminalView {
         pasteboard.setString(text, forType: .string)
     }
 
-    /// Edit › Paste: the text on ``pasteboard``, typed in as a paste.
+    /// Edit › Paste: what ``pasteboard`` holds, typed in the way Terminal
+    /// does it. See ``PasteContent`` for the order.
     open override func paste(_ sender: Any) {
-        guard let text = pasteboard.string(forType: .string), !text.isEmpty else { return }
-        if getTerminal().bracketedPasteMode {
-            pasteText(text)
-        } else {
-            // A shell takes a paste line by line, as in Terminal.
-            send(txt: text)
+        guard let bytes = pasteInput() else { return }
+        send(bytes)
+    }
+
+    /// The bytes ⌘V sends for what ``pasteboard`` holds now, or nil when
+    /// there is nothing to send.
+    func pasteInput() -> [UInt8]? {
+        let bracketed = getTerminal().bracketedPasteMode
+        switch PasteContent(pasteboard) {
+        case .files(let paths):
+            return Array(pasteInputText(paths.map(ShellQuote.quote).joined(separator: " ") + " ", bracketed: bracketed).utf8)
+        case .text(let text):
+            // A shell without bracketed paste takes a paste line by line, as in Terminal.
+            return Array((bracketed ? pasteInputText(text, bracketed: true) : text).utf8)
+        case .image:
+            // Claude Code and Codex read an image off the clipboard
+            // themselves when they see Ctrl+V.
+            return [0x16]
+        case .none:
+            return nil
         }
     }
 
@@ -472,12 +487,12 @@ open class AgentTerminalView: LocalProcessTerminalView {
     public var acceptsBracketedPaste: Bool { getTerminal().bracketedPasteMode }
 
     public func pasteText(_ text: String) {
+        send(txt: pasteInputText(text, bracketed: getTerminal().bracketedPasteMode))
+    }
+
+    private func pasteInputText(_ text: String, bracketed: Bool) -> String {
         let cleaned = pasteSanitizer(text)
-        if getTerminal().bracketedPasteMode {
-            send(txt: "\u{1b}[200~" + cleaned + "\u{1b}[201~")
-        } else {
-            send(txt: cleaned.replacingOccurrences(of: "\n", with: " "))
-        }
+        return bracketed ? "\u{1b}[200~" + cleaned + "\u{1b}[201~" : cleaned.replacingOccurrences(of: "\n", with: " ")
     }
 }
 
@@ -505,6 +520,29 @@ final class TerminalLinkDelegate: TerminalViewDelegate {
     func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {
         guard let url = TerminalLinks.url(from: link) else { return }
         view.openLink(url)
+    }
+}
+
+/// What ⌘V pastes, in the order a Mac terminal looks: copied files
+/// become their quoted paths (Finder also puts the file names and icons
+/// on the pasteboard, which would otherwise win), then text, then an image
+/// alone, which the agent reads from the clipboard itself on Ctrl+V.
+enum PasteContent: Equatable {
+    case files([String])
+    case text(String)
+    case image
+    case none
+
+    init(_ pasteboard: NSPasteboard) {
+        if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL], !urls.isEmpty {
+            self = .files(urls.map(\.path))
+        } else if let text = pasteboard.string(forType: .string), !text.isEmpty {
+            self = .text(text)
+        } else if pasteboard.canReadObject(forClasses: [NSImage.self], options: nil) {
+            self = .image
+        } else {
+            self = .none
+        }
     }
 }
 
