@@ -55,6 +55,13 @@ final class SectionLayoutTests: XCTestCase {
 }
 
 final class StatusFilterTests: XCTestCase {
+    func testOnlyBlockedLanesWantYou() {
+        let all: [LaneDisplayStatus] = [.notOpened, .attached, .running, .waitingForInput, .permissionRequested, .done, .idle, .detached]
+        XCTAssertEqual(all.filter(LaneStatusFilter.wantsYou), [.waitingForInput, .permissionRequested])
+        let lanes: [LaneDisplayStatus] = [.done, .done, .attached, .idle, .running, .permissionRequested]
+        XCTAssertEqual(lanes.filter { LaneStatusFilter.needsYou.admits(isActive: true, status: $0) }.count, 1)
+    }
+
     func testIdleIsAliveButNotWorkingOrWaiting() {
         XCTAssertTrue(LaneStatusFilter.idle.admits(isActive: true, status: .done))
         XCTAssertTrue(LaneStatusFilter.idle.admits(isActive: true, status: .attached))

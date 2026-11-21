@@ -64,7 +64,7 @@ public struct LaneStatusDirectory: Sendable {
                 try? FileManager.default.removeItem(at: file)
                 continue
             }
-            out.append(status)
+            out.append(status.normalized)
         }
         return out.sorted { $0.updatedAt > $1.updatedAt }
     }

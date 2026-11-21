@@ -41,7 +41,9 @@ public enum StatusEvents {
                 } else if message?.localizedCaseInsensitiveContains("waiting for your input") == true {
                     return nil
                 } else {
-                    state = .waitingForInput
+                    // Anything else is a reminder or an announcement, not a
+                    // block on the person.
+                    return nil
                 }
             }
         case "Stop":
@@ -49,7 +51,9 @@ public enum StatusEvents {
             state = end.state
             message = end.message
         case "SessionStart":
-            state = .waitingForInput
+            // A session that just started sits idle at its prompt. Nobody
+            // is blocking on a person, so it is not waiting for input.
+            state = .done
         case "SessionEnd":
             state = .ended
         default:

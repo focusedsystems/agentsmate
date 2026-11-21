@@ -801,21 +801,25 @@ struct LaneRow: View {
                             .font(.caption.weight(.semibold))
                             .lineLimit(1)
                             .layoutPriority(1)
+                        if !subtitle.isEmpty {
+                            Text(subtitle)
+                                .font(.caption)
+                                .foregroundStyle(isActive ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                                .lineLimit(1)
+                                .truncationMode(.head)
+                        }
+                    }
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(session.title).lineLimit(1)
+                    if !subtitle.isEmpty {
                         Text(subtitle)
                             .font(.caption)
                             .foregroundStyle(isActive ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
                             .lineLimit(1)
                             .truncationMode(.head)
                     }
-                }
-            } else {
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(session.title).lineLimit(1)
-                    Text(subtitle)
-                        .font(.caption)
-                        .foregroundStyle(isActive ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
-                        .lineLimit(1)
-                        .truncationMode(.head)
                 }
             }
             Spacer(minLength: 2)
@@ -894,7 +898,7 @@ struct LaneRow: View {
         if let notice = session.renameNotice { return notice }
         let base = statusSubtitle
         guard let branch = session.rowMetadata.branch else { return base }
-        return base + " · " + branch
+        return base.isEmpty ? branch : base + " · " + branch
     }
 
     private var statusSubtitle: String {
@@ -906,7 +910,10 @@ struct LaneRow: View {
         if session.lane.isClosable, session.status == .attached || session.status == .detached {
             return session.shortDirectory
         }
-        return isSplit ? "\(session.status.title) · split" : session.status.title
+        // A lane that needs the person shows its dot, not words.
+        let title = LaneStatusFilter.wantsYou(session.status) ? "" : session.status.title
+        if isSplit { return title.isEmpty ? "split" : title + " · split" }
+        return title
     }
 
     static func color(for state: LaneRowMetadata.PullRequest.State) -> Color {
