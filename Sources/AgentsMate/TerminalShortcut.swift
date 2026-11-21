@@ -9,6 +9,10 @@ public enum TerminalShortcut: Hashable, Sendable {
     case togglePanel
     /// ⌘+ / ⌘- / ⌘0 — the terminals' text size.
     case biggerFont, smallerFont, resetFont
+    /// Reopen the lane as a kind of Reopen As choice (⌥⌘R, ⇧⌘C, ⇧⌘X, ⌥⇧⌘C,
+    /// ⌥⇧⌘X by default). Taken ahead of the app's own keys while the
+    /// terminal has focus.
+    case reopen(LaneReopenChoice.Kind)
 
     /// Which shortcuts a store takes from a focused terminal.
     public struct Set: OptionSet, Sendable {
@@ -26,11 +30,12 @@ public enum TerminalShortcut: Hashable, Sendable {
         public static let maximize = Set(rawValue: 1 << 6)
         public static let togglePanel = Set(rawValue: 1 << 7)
         public static let fontSize = Set(rawValue: 1 << 8)
+        public static let reopen = Set(rawValue: 1 << 9)
 
         /// A fixed list of lanes, as in a window that is all lanes.
-        public static let fixedLanes: Set = [.clear, .cycle, .numbers, .fontSize]
+        public static let fixedLanes: Set = [.clear, .cycle, .numbers, .fontSize, .reopen]
         /// Lanes the person opens and closes, in a panel.
-        public static let all: Set = [.newLane, .closeLane, .split, .clear, .cycle, .numbers, .maximize, .togglePanel, .fontSize]
+        public static let all: Set = [.newLane, .closeLane, .split, .clear, .cycle, .numbers, .maximize, .togglePanel, .fontSize, .reopen]
     }
 
     public var member: Set {
@@ -44,6 +49,7 @@ public enum TerminalShortcut: Hashable, Sendable {
         case .maximize: .maximize
         case .togglePanel: .togglePanel
         case .biggerFont, .smallerFont, .resetFont: .fontSize
+        case .reopen: .reopen
         }
     }
 

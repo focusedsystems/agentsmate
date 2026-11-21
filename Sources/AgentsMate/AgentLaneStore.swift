@@ -67,8 +67,8 @@ public final class AgentLaneStore: ObservableObject {
         /// Where to read the agents' usage limits; the lane sidebar shows a
         /// meter at its foot when there are any.
         public var usageSources: [any AgentUsageSource]
-        /// What Reopen As offers, in order; the first four get ⌃⌥1–⌃⌥4.
-        /// Each names a registered backend.
+        /// What Reopen As offers, in order. Each names a registered backend;
+        /// a choice's ``LaneReopenChoice/kind`` gives it that kind's shortcut.
         public var reopenChoices: [LaneReopenChoice]
         /// The id of the app's inbox window scene (a `Window` holding
         /// ``AgentInboxView``). Set, the sidebar's foot gets an inbox button
@@ -171,6 +171,11 @@ public final class AgentLaneStore: ObservableObject {
             if splitID != oldValue { rowMetadataSelectionChanged() }
         }
     }
+    /// Whether a lane's terminal or the lane list has the keyboard. The
+    /// Reopen As keys are the lanes' only then.
+    @Published public internal(set) var lanesHaveKeyboard = false
+    let keyboard = LaneKeyboardTracker()
+
     /// Whether the lanes are on screen; set by the view that shows them.
     public var isShowing = false {
         didSet {
@@ -253,6 +258,7 @@ public final class AgentLaneStore: ObservableObject {
         self.defaults = defaults
         for backend in backends { self.backends[backend.id] = backend }
         self.selectedID = defaults.string(forKey: keys.selectedLane)
+        keyboard.onChange = { [weak self] in self?.updateLanesHaveKeyboard() }
         self.fontOffset = CGFloat(defaults.double(forKey: keys.fontOffset))
         if let data = defaults.data(forKey: keys.shortcuts),
            let saved = try? JSONDecoder().decode(LaneShortcutBindings.self, from: data) {
@@ -1277,7 +1283,35 @@ public final class AgentLaneStore: ObservableObject {
     /// Reopen the selected lane as the `index`th choice (zero-based).
     public func reopenSelected(choice index: Int) {
         guard let id = selectedID, configuration.reopenChoices.indices.contains(index) else { return }
-        reopen(id, as: configuration.reopenChoices[index].backendID)
+        reopen(id, choice: configuration.reopenChoices[index])
+    }
+
+    /// Reopen a lane as `choice`: on its backend, or for
+    /// ``LaneReopenChoice/Kind/sameAgent`` on the backend it has now, in a
+    /// fresh terminal.
+    public func reopen(_ id: AgentLane.ID, choice: LaneReopenChoice) {
+        if choice.kind == .sameAgent { reattach(id) } else { reopen(id, as: choice.backendID) }
+    }
+
+    /// The first Reopen As choice of `kind`, if the app offers one.
+    public func reopenChoice(_ kind: LaneReopenChoice.Kind) -> LaneReopenChoice? {
+        configuration.reopenChoices.first { $0.kind == kind }
+    }
+
+    /// Reopen a lane as the app's choice of `kind`. False when the app
+    /// offers none, or there is no such lane.
+    @discardableResult
+    public func reopen(_ id: AgentLane.ID, kind: LaneReopenChoice.Kind) -> Bool {
+        guard sessions[id] != nil, let choice = reopenChoice(kind) else { return false }
+        reopen(id, choice: choice)
+        return true
+    }
+
+    /// Reopen the selected lane as the app's choice of `kind`.
+    @discardableResult
+    public func reopenSelected(kind: LaneReopenChoice.Kind) -> Bool {
+        guard let id = selectedID else { return false }
+        return reopen(id, kind: kind)
     }
 
     public func switchBackend(_ id: AgentLane.ID, to backendID: String) {
@@ -1592,6 +1626,7 @@ public final class AgentLaneStore: ObservableObject {
         case .biggerFont: adjustFont(by: 1)
         case .smallerFont: adjustFont(by: -1)
         case .resetFont: resetFont()
+        case .reopen(let kind): return reopen(id, kind: kind)
         }
         return true
     }

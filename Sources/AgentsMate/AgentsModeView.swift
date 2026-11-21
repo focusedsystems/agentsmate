@@ -95,6 +95,9 @@ public struct AgentLaneSidebar<Accessory: View>: View {
             }
         }
         .listStyle(.sidebar)
+        // The Reopen As keys act on the selected lane while the list has
+        // the keyboard, ahead of any app shortcut on the same keys.
+        .background(LaneListKeys(store: store))
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if let usage = store.usage {
                 VStack(spacing: 0) {
@@ -387,8 +390,8 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         if !store.configuration.reopenChoices.isEmpty {
             Menu("Reopen As") {
                 ForEach(store.configuration.reopenChoices, id: \.self) { choice in
-                    Button(choice.title) { store.reopen(lane.id, as: choice.backendID) }
-                        .disabled(choice.backendID == lane.backendID && session.isAttached)
+                    Button(choice.title) { store.reopen(lane.id, choice: choice) }
+                        .disabled(choice.kind != .sameAgent && choice.backendID == lane.backendID && session.isAttached)
                 }
             }
         }
@@ -729,7 +732,7 @@ struct LaneTerminalPane: View {
     var body: some View {
         VStack(spacing: 0) {
             if session.isStarted {
-                TerminalHost(session: session)
+                TerminalHost(session: session, store: store)
                     .id("\(session.id)#\(session.generation)")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -1112,13 +1115,66 @@ struct LaneFilterToggle: View {
     }
 }
 
+/// Takes the Reopen As keys while the lane list has the keyboard. It sits
+/// behind the list, filling the same frame, and answers a key press only when
+/// the focused view is a table inside that frame — the list itself, not its
+/// search field or the window's other content.
+struct LaneListKeys: NSViewRepresentable {
+    let store: AgentLaneStore
+
+    func makeNSView(context: Context) -> LaneListKeysView {
+        let view = LaneListKeysView()
+        view.store = store
+        return view
+    }
+
+    func updateNSView(_ view: LaneListKeysView, context: Context) { view.store = store }
+}
+
+final class LaneListKeysView: NSView {
+    weak var store: AgentLaneStore?
+    private var monitor: Any?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+        guard window != nil else { return }
+        store?.keyboard.register(self)
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            let handled = MainActor.assumeIsolated { self?.handle(event) ?? false }
+            return handled ? nil : event
+        }
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    /// Whether the window's focused view is the list this view sits behind.
+    var listHasKeyboard: Bool {
+        guard let window, !isHiddenOrHasHiddenAncestor,
+              let focused = window.firstResponder as? NSTableView else { return false }
+        let list = (focused.enclosingScrollView ?? focused).convert((focused.enclosingScrollView ?? focused).bounds, to: nil)
+        let mine = convert(bounds, to: nil)
+        return mine.insetBy(dx: -2, dy: -2).contains(list) || list.insetBy(dx: -2, dy: -2).contains(mine)
+    }
+
+    private func handle(_ event: NSEvent) -> Bool {
+        guard let store, event.window === window, listHasKeyboard,
+              let kind = store.shortcuts.reopenKind(for: event),
+              store.configuration.shortcuts.contains(.reopen) else { return false }
+        return store.reopenSelected(kind: kind)
+    }
+}
+
 /// Hosts a session's terminal and hands it keyboard focus once it is
 /// actually in a window — focus asked for before then is silently dropped.
 final class TerminalContainer: NSView {
     var session: AgentLaneSession?
+    weak var store: AgentLaneStore?
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        store?.keyboard.watch(window)
         focusIfWanted()
     }
 
@@ -1128,6 +1184,7 @@ final class TerminalContainer: NSView {
         DispatchQueue.main.async {
             session.wantsFocus = false
             window.makeFirstResponder(session.view)
+            self.store?.updateLanesHaveKeyboard()
         }
     }
 }
@@ -1136,9 +1193,11 @@ final class TerminalContainer: NSView {
 /// view, so the same NSView is re-hosted when the pane reappears.
 struct TerminalHost: NSViewRepresentable {
     @ObservedObject var session: AgentLaneSession
+    let store: AgentLaneStore
 
     func makeNSView(context: Context) -> TerminalContainer {
         let container = TerminalContainer()
+        container.store = store
         attach(to: container)
         return container
     }
