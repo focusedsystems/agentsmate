@@ -19,6 +19,51 @@ final class UsageTests: XCTestCase {
         XCTAssertEqual(usage?.fullest?.label, "Week")
         XCTAssertNil(KeyValueUsageFileSource.parse("nothing", agent: "Claude"))
     }
+
+    /// A Mac whose agents all run elsewhere: its status line last wrote the
+    /// file days ago, and the session it describes has reset since.
+    func testOldFileAfterItsResetIsUnknown() throws {
+        let text = "UTILIZATION=84\nRESETS_AT=2026-11-19T13:00:00Z\nTIMESTAMP=1794985738\n"
+        let now = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-11-20T18:00:00Z"))
+        let usage = try XCTUnwrap(KeyValueUsageFileSource.usage(from: text, agent: "Claude", now: now, maxAge: nil))
+        XCTAssertTrue(usage.windows.isEmpty, "the reset has passed, so 84% is not today's figure")
+        XCTAssertTrue(usage.isUnknown)
+        XCTAssertNil(usage.fullest)
+
+        let fresh = "UTILIZATION=84\nRESETS_AT=2026-11-21T13:00:00Z\nTIMESTAMP=\(Int(now.timeIntervalSince1970) - 60)\n"
+        XCTAssertEqual(KeyValueUsageFileSource.usage(from: fresh, agent: "Claude", now: now)?.fullest?.percent, 84)
+    }
+
+    func testFileOlderThanMaxAgeIsUnknown() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let text = { (age: Int) in "UTILIZATION=40\nRESETS_AT=2027-06-01T00:00:00Z\nWEEKLY_UTILIZATION=20\nTIMESTAMP=\(1_800_000_000 - age)\n" }
+        XCTAssertEqual(KeyValueUsageFileSource.usage(from: text(600), agent: "Claude", now: now)?.windows.count, 2)
+        let old = try XCTUnwrap(KeyValueUsageFileSource.usage(from: text(7200), agent: "Claude", now: now))
+        XCTAssertTrue(old.isUnknown, "two hours old is past the default hour")
+        XCTAssertEqual(KeyValueUsageFileSource.usage(from: text(7200), agent: "Claude", now: now, maxAge: nil)?.windows.count, 2)
+    }
+
+    func testCurrentKeepsWindowsThatHaveNotReset() {
+        let now = Date(timeIntervalSince1970: 1_000)
+        let usage = AgentUsage(agent: "Claude", windows: [.init(label: "Session", percent: 90, resetsAt: now.addingTimeInterval(-1)),
+                                                          .init(label: "Week", percent: 30, resetsAt: now.addingTimeInterval(3600)),
+                                                          .init(label: "Day", percent: 10)],
+                               note: "Note", readAt: now)
+        let current = usage.current(at: now)
+        XCTAssertEqual(current.windows.map(\.label), ["Week", "Day"])
+        XCTAssertEqual(current.fullest?.percent, 30, "the spent session no longer leads")
+        XCTAssertEqual(current.note, "Note")
+        XCTAssertFalse(current.isUnknown)
+        XCTAssertEqual(usage.current(at: now.addingTimeInterval(-10)), usage, "nothing has reset yet")
+    }
+
+    func testFileSourceReadsStaleFileAsUnknown() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("usage-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try "UTILIZATION=84\nRESETS_AT=2020-01-01T00:00:00Z\nTIMESTAMP=1577800000\n".write(to: url, atomically: true, encoding: .utf8)
+        XCTAssertEqual(KeyValueUsageFileSource(url: url, agent: "Claude").read()?.isUnknown, true)
+        XCTAssertNil(KeyValueUsageFileSource(url: url, agent: "Claude", signedIn: { false }).read())
+    }
 }
 
 final class LaneNoteTests: XCTestCase {

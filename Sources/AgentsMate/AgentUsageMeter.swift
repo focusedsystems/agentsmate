@@ -20,12 +20,103 @@ public final class AgentUsageModel: ObservableObject {
         timer = CadenceTimer(interval: 60) { [weak self] in self?.refresh() }
     }
 
+    private var refreshing = false
+
+    /// Read every source once, skipped while the last read is still going.
+    /// A window whose reset has passed is dropped whichever source gave it,
+    /// so a figure for a period that is over is never shown.
     public func refresh() {
+        guard !refreshing else { return }
+        refreshing = true
         let sources = sources
-        Task.detached(priority: .background) {
-            let read = sources.compactMap { $0.read() }
-            await MainActor.run { [weak self] in if self?.usages != read { self?.usages = read } }
+        // A source may run a helper and wait for it, so the reads go on a
+        // background queue rather than Swift's concurrency pool.
+        DispatchQueue.global(qos: .background).async {
+            let now = Date()
+            let read = sources.compactMap { $0.read()?.current(at: now) }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.refreshing = false
+                if self.usages != read { self.usages = read }
+            }
         }
+    }
+}
+
+/// Usage in the `KEY=VALUE` form ``KeyValueUsageFileSource`` reads, from
+/// the output of a command, such as `ssh` to the Mac whose status line
+/// writes the file when this one runs no agent of its own. The app supplies
+/// the command; nothing here knows any host.
+///
+/// The command runs at most once per ``interval``, at background QoS
+/// through the shared helper slots, with a timeout. A run that fails or
+/// gives nothing doubles the wait, up to ``maxInterval``; the next good one
+/// resets it. Between runs the last text is read again, so a reset that
+/// passes still takes its window away.
+public final class KeyValueUsageCommandSource: AgentUsageSource, @unchecked Sendable {
+    public let agent: String
+    public let command: [String]
+    public let interval: TimeInterval
+    public let maxInterval: TimeInterval
+    public let timeout: TimeInterval
+    public let maxAge: TimeInterval?
+    let runner: @Sendable ([String], TimeInterval) -> String
+    let clock: @Sendable () -> Date
+
+    private let lock = NSLock()
+    private var text: String?
+    private var nextRun = Date.distantPast
+    private var wait: TimeInterval
+
+    /// `command` is `argv`: an absolute executable, then its arguments.
+    public convenience init(agent: String, command: [String], interval: TimeInterval = 300,
+                            maxInterval: TimeInterval = 3600, timeout: TimeInterval = 15,
+                            maxAge: TimeInterval? = KeyValueUsageFileSource.defaultMaxAge) {
+        self.init(agent: agent, command: command, interval: interval, maxInterval: maxInterval, timeout: timeout,
+                  maxAge: maxAge, runner: { argv, timeout in
+                      LaneRowMetadataReader.run(argv[0], Array(argv.dropFirst()), timeout: timeout)
+                  }, clock: { Date() })
+    }
+
+    init(agent: String, command: [String], interval: TimeInterval, maxInterval: TimeInterval, timeout: TimeInterval,
+         maxAge: TimeInterval?, runner: @escaping @Sendable ([String], TimeInterval) -> String,
+         clock: @escaping @Sendable () -> Date) {
+        self.agent = agent
+        self.command = command
+        self.interval = interval
+        self.maxInterval = max(maxInterval, interval)
+        self.timeout = timeout
+        self.maxAge = maxAge
+        self.runner = runner
+        self.clock = clock
+        self.wait = interval
+    }
+
+    /// Blocks while the command runs; call it off the main thread.
+    public func read() -> AgentUsage? {
+        guard let executable = command.first, executable.hasPrefix("/") else { return nil }
+        let now = clock()
+        lock.lock()
+        let due = now >= nextRun
+        if due { nextRun = now.addingTimeInterval(wait) }
+        lock.unlock()
+        if due {
+            let output = runner(command, timeout)
+            let good = KeyValueUsageFileSource.usage(from: output, agent: agent, now: now, maxAge: nil) != nil
+            lock.lock()
+            if good {
+                text = output
+                wait = interval
+            } else {
+                wait = min(wait * 2, maxInterval)
+            }
+            nextRun = now.addingTimeInterval(good ? interval : wait)
+            lock.unlock()
+        }
+        lock.lock()
+        let last = text
+        lock.unlock()
+        return last.flatMap { KeyValueUsageFileSource.usage(from: $0, agent: agent, now: now, maxAge: maxAge) }
     }
 }
 

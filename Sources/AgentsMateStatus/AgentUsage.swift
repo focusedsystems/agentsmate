@@ -31,6 +31,25 @@ public struct AgentUsage: Equatable, Sendable {
 
     /// The fullest window, which is the one that stops work first.
     public var fullest: Window? { windows.max { $0.percent < $1.percent } }
+
+    /// The note an agent gets when nothing it last reported still holds.
+    public static let unknownNote = "Usage unknown"
+
+    /// Whether nothing current is known: no window, only ``unknownNote``.
+    public var isUnknown: Bool { windows.isEmpty && note == Self.unknownNote }
+
+    /// What still holds at `now`. A window whose reset has passed is left
+    /// out, since its figure belongs to a period that is over; a reading
+    /// older than `maxAge` keeps nothing. With no window left the agent is
+    /// unknown: ``unknownNote``, never the old figures.
+    public func current(at now: Date = Date(), maxAge: TimeInterval? = nil) -> AgentUsage {
+        if let maxAge, now.timeIntervalSince(readAt) > maxAge {
+            return AgentUsage(agent: agent, windows: [], note: Self.unknownNote, readAt: readAt)
+        }
+        let kept = windows.filter { window in window.resetsAt.map { $0 > now } ?? true }
+        guard kept.count != windows.count else { return self }
+        return AgentUsage(agent: agent, windows: kept, note: kept.isEmpty ? Self.unknownNote : note, readAt: readAt)
+    }
 }
 
 /// Somewhere usage can be read from without a network call.
@@ -136,28 +155,50 @@ public struct CodexSessionUsageSource: AgentUsageSource {
 }
 
 /// Usage from a `KEY=VALUE` file a status-line helper writes, with
-/// `UTILIZATION` and `RESETS_AT` for the session window and
+/// `UTILIZATION` and `RESETS_AT` for the session window,
 /// `WEEKLY_UTILIZATION` and `WEEKLY_RESETS_AT` for the week (ISO 8601
-/// dates). The app names the file and the agent it describes.
+/// dates), and `TIMESTAMP` (seconds since 1970) for when it was written. The
+/// app names the file and the agent it describes.
+///
+/// The file is only as current as the helper that writes it: on a Mac where
+/// no agent has run for a while it holds old figures. A window whose reset
+/// has passed is left out, and a file older than ``maxAge`` counts for
+/// nothing, so the meter says the agent is unknown rather than showing
+/// them.
 public struct KeyValueUsageFileSource: AgentUsageSource {
     public let url: URL
     public let agent: String
+    /// How old a reading may be and still count; nil, any age.
+    public let maxAge: TimeInterval?
     let signedIn: @Sendable () -> Bool
+
+    /// An hour: a status line rewrites the file every few minutes while an
+    /// agent runs, so an older one was written by a Mac that is not in use.
+    public static let defaultMaxAge: TimeInterval = 3600
 
     /// `signedIn` says whether the agent is set up; while it is false the
     /// source reads nothing, so a stale file does not show a signed-out agent.
-    public init(url: URL, agent: String, signedIn: @escaping @Sendable () -> Bool = { true }) {
+    public init(url: URL, agent: String, maxAge: TimeInterval? = KeyValueUsageFileSource.defaultMaxAge,
+                signedIn: @escaping @Sendable () -> Bool = { true }) {
         self.url = url
         self.agent = agent
+        self.maxAge = maxAge
         self.signedIn = signedIn
     }
 
     public func read() -> AgentUsage? {
         guard signedIn(), let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
-        return Self.parse(text, agent: agent)
+        return Self.usage(from: text, agent: agent, maxAge: maxAge)
     }
 
-    static func parse(_ text: String, agent: String) -> AgentUsage? {
+    /// The usage in a file's text as it stands at `now`; see
+    /// ``AgentUsage/current(at:maxAge:)``. Nil when the text holds none.
+    public static func usage(from text: String, agent: String, now: Date = Date(),
+                             maxAge: TimeInterval? = defaultMaxAge) -> AgentUsage? {
+        parse(text, agent: agent, now: now)?.current(at: now, maxAge: maxAge)
+    }
+
+    static func parse(_ text: String, agent: String, now: Date = Date()) -> AgentUsage? {
         var values: [String: String] = [:]
         for line in text.split(separator: "\n") {
             let parts = line.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
@@ -172,7 +213,7 @@ public struct KeyValueUsageFileSource: AgentUsageSource {
             windows.append(.init(label: "Week", percent: used, resetsAt: values["WEEKLY_RESETS_AT"].flatMap(iso.date(from:))))
         }
         guard !windows.isEmpty else { return nil }
-        let read = values["TIMESTAMP"].flatMap(Double.init).map(Date.init(timeIntervalSince1970:)) ?? Date()
+        let read = values["TIMESTAMP"].flatMap(Double.init).map(Date.init(timeIntervalSince1970:)) ?? now
         return AgentUsage(agent: agent, windows: windows, readAt: read)
     }
 }

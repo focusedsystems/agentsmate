@@ -16,6 +16,23 @@ private struct FakeDiscoveringBackend: LaneBackend {
     func discoverSessions() async -> [DiscoveredSession] { found }
 }
 
+/// A row backend that knows its session's id from a file, the way a lane
+/// wrapper records the session it attaches.
+private struct FakeIDBackend: LaneBackend {
+    var id = "row"
+    var displayName = "Row"
+    var idFile: URL
+    var keepsRunningWhenDetached: Bool { true }
+    func launch(for lane: AgentLane, shell: String) -> TerminalLaunch {
+        TerminalLaunch(executable: "/bin/sh", arguments: ["-c", "sleep 30"], directory: "/tmp")
+    }
+    func statusMatch(for lane: AgentLane) -> LaneStatusMatch {
+        guard let id = try? String(contentsOf: idFile, encoding: .utf8), !id.isEmpty else { return .none }
+        return .session(id.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+    func sessionName(for lane: AgentLane) -> String? { lane.title.lowercased() }
+}
+
 final class TmuxLaneSessionsTests: XCTestCase {
     private let listing = "lane-alpha\t0\t/tmp/alpha\nlane-beta\t2\t/tmp/beta\nscratch\t1\t/tmp\n"
 
@@ -225,6 +242,59 @@ final class DetachedMatchingTests: XCTestCase {
         let left = DetachedSessions.unclaimed(found, lanes: lanes, backends: backends)
         XCTAssertEqual(left.map(\.session.name), ["two"], "another backend's row claims by name, never by folder alone")
     }
+
+    func testRowsHoldSessionsByIDWhateverTheirNames() {
+        let wrapper = CommandLaneBackend.tmuxLane(id: "w", displayName: "W", command: "w", statusAgent: "claude",
+                                                  tmuxSessions: TmuxLaneSessions(sessionName: { $0.title.lowercased() }))
+        let background = ClaudeBackgroundLaneBackend(id: "bg")
+        let backends: [String: any LaneBackend] = ["w": wrapper, "bg": background]
+        let found: [DetachedSessions.Found] = [
+            .init(backendID: "bg", session: DiscoveredSession(kind: ClaudeBackgroundLaneBackend.kind, name: "Work - Business",
+                                                              directory: "/tmp/business", sessionID: "7724e818-1111-2222")),
+            .init(backendID: "bg", session: DiscoveredSession(kind: ClaudeBackgroundLaneBackend.kind, name: "Work - Other",
+                                                              directory: "/tmp/other", sessionID: "aaaa0000-1111-2222")),
+        ]
+        let row = AgentLane(id: "business", title: "Business", directory: URL(fileURLWithPath: "/tmp/elsewhere"), backendID: "w")
+        XCTAssertEqual(DetachedSessions.unclaimed(found, lanes: [row], backends: backends).count, 2,
+                       "the row's name is not the session's, and its folder is not either")
+        let left = DetachedSessions.unclaimed(found, lanes: [row], backends: backends, heldSessionIDs: ["business": ["7724e818"]])
+        XCTAssertEqual(left.map(\.session.name), ["Work - Other"], "the start of the id the wrapper recorded is enough")
+        XCTAssertEqual(DetachedSessions.heldSessionIDs(match: .firstOf([.session("abc"), .lane("x")]),
+                                                      record: LaneStatus(agent: "claude", state: .running, sessionID: "def", event: "e")),
+                       ["abc", "def"])
+        XCTAssertTrue(DetachedSessions.sameSession("7724e818-1111", "7724e818"))
+        XCTAssertFalse(DetachedSessions.sameSession("", "7724e818"))
+        XCTAssertFalse(DetachedSessions.sameSession("7724e819", "7724e818"))
+    }
+
+    func testClaudeRowHoldsTheOneBackgroundSessionInItsFolder() {
+        let wrapper = CommandLaneBackend.tmuxLane(id: "w", displayName: "W", command: "w", statusAgent: "claude",
+                                                  tmuxSessions: TmuxLaneSessions(sessionName: { $0.title.lowercased() }))
+        let codex = CommandLaneBackend.tmuxLane(id: "c", displayName: "C", command: "c", statusAgent: "codex")
+        let background = ClaudeBackgroundLaneBackend(id: "bg")
+        let backends: [String: any LaneBackend] = ["w": wrapper, "c": codex, "bg": background]
+        let s = { (name: String, dir: String) in
+            DetachedSessions.Found(backendID: "bg", session: DiscoveredSession(kind: ClaudeBackgroundLaneBackend.kind, name: name, directory: dir))
+        }
+        let found = [s("Work - Business", "/tmp/business/"), s("Work - Fitness", "/tmp/fitness"), s("notes", "/tmp/fitness")]
+        let rows = [
+            AgentLane(id: "b", title: "Business", directory: URL(fileURLWithPath: "/tmp/business"), backendID: "w"),
+            AgentLane(id: "f", title: "Fitness", directory: URL(fileURLWithPath: "/tmp/fitness"), backendID: "w"),
+        ]
+        XCTAssertEqual(DetachedSessions.unclaimed(found, lanes: rows, backends: backends).map(\.session.name),
+                       ["Work - Fitness", "notes"], "the only session in a Claude row's folder is the row's; two are not")
+        let codexRow = AgentLane(id: "x", title: "Business", directory: URL(fileURLWithPath: "/tmp/business"), backendID: "c")
+        XCTAssertEqual(DetachedSessions.unclaimed([found[0]], lanes: [codexRow], backends: backends).count, 1,
+                       "a Codex row in the folder holds no Claude session")
+        XCTAssertEqual(DetachedSessions.unclaimed([found[0]], lanes: [rows[0]], backends: backends, heldSessionIDs: ["b": ["ffff"]]).count, 1,
+                       "a row that knows its session id is matched by it, not by folder")
+    }
+
+    func testBackgroundSessionsCarryTheirIDs() {
+        let records = [LaneStatus(agent: "claude", state: .running, lane: "Work - Business", directory: "/tmp/b",
+                                  sessionID: "7724e818-1111", event: ClaudeAgentsList.event)]
+        XCTAssertEqual(ClaudeBackgroundLaneBackend.sessions(from: records, isLaneSession: nil).first?.sessionID, "7724e818-1111")
+    }
 }
 
 @MainActor
@@ -287,6 +357,30 @@ final class DetachedStoreTests: XCTestCase {
         store.sweepForDetachedSessions()
         await waitFor { store.detachedIDs.isEmpty }
         XCTAssertEqual(store.lanes.map(\.id), ["a"], "a session that ended takes its row with it")
+    }
+
+    func testRowThatAttachesASessionTakesItOutOfDetachedAtOnce() async throws {
+        let idFile = FileManager.default.temporaryDirectory.appendingPathComponent("lane-id-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: idFile) }
+        let session = DiscoveredSession(kind: ClaudeBackgroundLaneBackend.kind, name: "Work - Business",
+                                        directory: "/tmp/business", sessionID: "7724e818-1111-2222")
+        let store = AgentLaneStore(configuration: .init(termProgram: "T", sessionFileDirectory: nil),
+                                   backends: [FakeIDBackend(idFile: idFile), FakeDiscoveringBackend(id: "bg", found: [session])],
+                                   statusFeed: nil,
+                                   defaults: UserDefaults(suiteName: "agentsmate-detached-\(UUID().uuidString)")!)
+        store.sync(lanes: [AgentLane(id: "business", title: "Business", directory: URL(fileURLWithPath: "/tmp/elsewhere"), backendID: "row")])
+        store.sweepForDetachedSessions()
+        await waitFor { !store.detachedIDs.isEmpty }
+        XCTAssertEqual(store.detachedIDs.count, 1, "a row that knows no session yet holds none")
+
+        // The row attaches, and its wrapper records the session it picked up.
+        try "7724e818\n".write(to: idFile, atomically: true, encoding: .utf8)
+        store.open("business", focus: false)
+        XCTAssertTrue(store.detachedIDs.isEmpty, "gone as the row attaches, not at the next sweep")
+        store.sweepForDetachedSessions()
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertTrue(store.detachedIDs.isEmpty, "and not listed again")
+        store.close("business")
     }
 
     func testAdoptKeepsTheSession() async throws {
