@@ -19,13 +19,19 @@ public struct DiscoveredSession: Hashable, Sendable {
     public var attachedClients: Int?
     /// The machine it runs on; nil is this Mac.
     public var host: String?
+    /// The agent's own id for the session, such as a Claude Code session
+    /// id, when the backend knows it. A row that knows the same id holds
+    /// the session whatever either is named.
+    public var sessionID: String?
 
-    public init(kind: String, name: String, directory: String? = nil, attachedClients: Int? = nil, host: String? = nil) {
+    public init(kind: String, name: String, directory: String? = nil, attachedClients: Int? = nil, host: String? = nil,
+                sessionID: String? = nil) {
         self.kind = kind
         self.name = name
         self.directory = directory
         self.attachedClients = attachedClients
         self.host = host
+        self.sessionID = sessionID
     }
 
     /// The same for one session whichever backend reports it.
@@ -277,28 +283,83 @@ enum DetachedSessions {
     }
 
     /// The sessions no row attaches, one per session however many backends
-    /// listed it. A row on any backend that listed a session claims it by
-    /// name or folder; a row on another backend claims it only by name, as a
-    /// wrapper does that attaches a tmux lane or a Claude Code background
-    /// session of the same name. Folders alone are not enough across
-    /// backends: a Codex lane and a Claude lane share a folder.
-    static func unclaimed(_ found: [Found], lanes: [AgentLane], backends: [String: any LaneBackend]) -> [Found] {
+    /// listed it. A row holds a session when:
+    ///
+    /// - it knows the session's own id, from `heldSessionIDs` (the id its
+    ///   status is matched by, or the one its status record carries), on
+    ///   any backend;
+    /// - it is on a backend that listed the session and claims it by name or
+    ///   folder (``claims(_:backend:_:)``);
+    /// - it is on another backend on the same machine and its session name
+    ///   is the session's, as a wrapper's row is that attaches a tmux lane
+    ///   or a Claude Code background session of the same name;
+    /// - or, knowing no session id, it runs Claude in a folder where exactly
+    ///   one Claude Code background session works, which a wrapper attaches
+    ///   whatever it named the session.
+    ///
+    /// Folders alone are not enough across backends otherwise: a Codex lane
+    /// and a Claude lane share a folder.
+    static func unclaimed(_ found: [Found], lanes: [AgentLane], backends: [String: any LaneBackend],
+                          heldSessionIDs: [AgentLane.ID: [String]] = [:]) -> [Found] {
         var reporters: [String: Set<String>] = [:]
-        for item in found { reporters[item.session.key, default: []].insert(item.backendID) }
+        var backgroundPerFolder: [String: Int] = [:]
+        var counted = Set<String>()
+        for item in found {
+            reporters[item.session.key, default: []].insert(item.backendID)
+            if item.session.kind == ClaudeBackgroundLaneBackend.kind, item.session.host == nil,
+               let directory = item.session.directory, counted.insert(item.session.key).inserted {
+                backgroundPerFolder[LaneStatusMatch.normalizedPath(directory), default: 0] += 1
+            }
+        }
+        // Rows that run Claude and know no session id, by folder, for the
+        // one-session-in-the-folder rule.
+        var claudeFolders = Set<String>()
+        for lane in lanes where (heldSessionIDs[lane.id] ?? []).isEmpty {
+            guard let backend = backends[lane.backendID], laneHost(backend) == nil, runsClaude(backend) else { continue }
+            claudeFolders.insert(LaneStatusMatch.normalizedPath(lane.path))
+        }
+        let heldIDs = heldSessionIDs.values.flatMap { $0 }.filter { !$0.isEmpty }
         var seen = Set<String>()
         var out: [Found] = []
         for item in found.sorted(by: { ($0.backendID, $0.session.name) < ($1.backendID, $1.session.name) }) {
             let key = item.session.key
             guard seen.insert(key).inserted else { continue }
+            let session = item.session
+            if let id = session.sessionID, heldIDs.contains(where: { sameSession(id, $0) }) { continue }
+            if session.kind == ClaudeBackgroundLaneBackend.kind, session.host == nil, let directory = session.directory {
+                let folder = LaneStatusMatch.normalizedPath(directory)
+                if backgroundPerFolder[folder] == 1, claudeFolders.contains(folder) { continue }
+            }
             let ids = reporters[key] ?? []
             let claimed = lanes.contains { lane in
                 guard let backend = backends[lane.backendID] else { return false }
-                if ids.contains(lane.backendID) { return claims(lane, backend: backend, item.session) }
-                return laneHost(backend) == item.session.host && laneName(lane, backend: backend) == item.session.name
+                if ids.contains(lane.backendID) { return claims(lane, backend: backend, session) }
+                return laneHost(backend) == session.host && laneName(lane, backend: backend) == session.name
             }
             if !claimed { out.append(item) }
         }
         return out
+    }
+
+    /// Two ids for one session: the same, or one the start of the other, as
+    /// a lane wrapper may record only the first eight characters.
+    static func sameSession(_ a: String, _ b: String) -> Bool {
+        guard !a.isEmpty, !b.isEmpty else { return false }
+        return a == b || a.hasPrefix(b) || b.hasPrefix(a)
+    }
+
+    /// Whether a backend's lanes run Claude Code.
+    static func runsClaude(_ backend: any LaneBackend) -> Bool {
+        if backend is ClaudeBackgroundLaneBackend { return true }
+        return (backend as? CommandLaneBackend)?.statusAgent == "claude"
+    }
+
+    /// The agent session ids a row holds: the one its status is matched by
+    /// and the one its current status record carries.
+    static func heldSessionIDs(match: LaneStatusMatch, record: LaneStatus?) -> [String] {
+        var ids = match.sessionIDs
+        if let id = record?.sessionID, !id.isEmpty, !ids.contains(id) { ids.append(id) }
+        return ids
     }
 }
 
@@ -309,6 +370,15 @@ extension LaneStatusMatch {
         case .lane(let name): return name
         case .firstOf(let matches): return matches.lazy.compactMap(\.laneName).first
         default: return nil
+        }
+    }
+
+    /// The agent session ids a match looks for.
+    var sessionIDs: [String] {
+        switch self {
+        case .session(let id): return id.isEmpty ? [] : [id]
+        case .firstOf(let matches): return matches.flatMap(\.sessionIDs)
+        default: return []
         }
     }
 }

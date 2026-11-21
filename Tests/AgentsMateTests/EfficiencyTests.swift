@@ -162,3 +162,57 @@ final class EfficiencyTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(CadenceTimer.toleranceFraction, 0.1)
     }
 }
+
+final class UsageCommandTests: XCTestCase {
+    private final class Box: @unchecked Sendable {
+        var now = Date(timeIntervalSince1970: 1_800_000_000)
+        var output = ""
+        var runs = 0
+    }
+
+    private func reading(_ box: Box) -> String {
+        "UTILIZATION=25\nRESETS_AT=2027-06-01T00:00:00Z\nTIMESTAMP=\(Int(box.now.timeIntervalSince1970))\n"
+    }
+
+    func testRunsAtMostOncePerIntervalAndBacksOff() {
+        let box = Box()
+        let source = KeyValueUsageCommandSource(agent: "Claude", command: ["/usr/bin/true"], interval: 300, maxInterval: 1200,
+                                                timeout: 5, maxAge: 1800,
+                                                runner: { _, _ in box.runs += 1; return box.output }, clock: { box.now })
+        box.output = reading(box)
+        XCTAssertEqual(source.read()?.fullest?.percent, 25)
+        XCTAssertEqual(source.read()?.fullest?.percent, 25, "the last text, read again")
+        XCTAssertEqual(box.runs, 1, "not run again within the interval")
+
+        // The other Mac stops answering: each failure doubles the wait, to the ceiling.
+        box.output = ""
+        box.now += 301
+        XCTAssertEqual(source.read()?.fullest?.percent, 25, "a failed run keeps the last good reading while it is young")
+        XCTAssertEqual(box.runs, 2)
+        box.now += 301
+        _ = source.read()
+        XCTAssertEqual(box.runs, 2, "backed off to ten minutes")
+        box.now += 300
+        _ = source.read()
+        XCTAssertEqual(box.runs, 3)
+        box.now += 1199
+        _ = source.read()
+        XCTAssertEqual(box.runs, 3, "twenty minutes is the ceiling here")
+        box.now += 2
+        XCTAssertEqual(source.read()?.isUnknown, true, "and past half an hour, the old reading counts for nothing")
+        XCTAssertEqual(box.runs, 4)
+
+        box.output = reading(box)
+        box.now += 1201
+        XCTAssertEqual(source.read()?.fullest?.percent, 25, "a good run comes back")
+        box.now += 301
+        _ = source.read()
+        XCTAssertEqual(box.runs, 6, "and the interval is back to five minutes")
+    }
+
+    func testNeedsAnAbsoluteExecutable() {
+        let source = KeyValueUsageCommandSource(agent: "Claude", command: ["ssh", "host"])
+        XCTAssertNil(source.read())
+        XCTAssertNil(KeyValueUsageCommandSource(agent: "Claude", command: []).read())
+    }
+}

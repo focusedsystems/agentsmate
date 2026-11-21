@@ -872,6 +872,9 @@ public final class AgentLaneStore: ObservableObject {
     /// Everything the last sweep found, kept so rows added later can claim
     /// their sessions without asking the backends again.
     private var discovered: [DetachedSessions.Found] = []
+    /// The agent session ids each row holds, as of the last status update,
+    /// so a session a row attaches leaves Detached whatever it is named.
+    private var heldSessionIDs: [AgentLane.ID: [String]] = [:]
 
     private func startDiscovery() {
         discoveryTimer = CadenceTimer(interval: Self.discoveryInterval) { [weak self] in
@@ -918,7 +921,7 @@ public final class AgentLaneStore: ObservableObject {
     private func reconcileDetached() {
         guard configuration.findsDetachedSessions else { return }
         let rows = lanes.filter { !detachedIDs.contains($0.id) }
-        let wanted = DetachedSessions.unclaimed(discovered, lanes: rows, backends: backends)
+        let wanted = DetachedSessions.unclaimed(discovered, lanes: rows, backends: backends, heldSessionIDs: heldSessionIDs)
         let wantedIDs = Set(wanted.map(DetachedSessions.laneID))
         for id in detachedIDs where !wantedIDs.contains(id) && sessions[id]?.isAttached != true {
             removeDetachedRow(id)
@@ -1328,9 +1331,32 @@ public final class AgentLaneStore: ObservableObject {
         recordVisit(id)
         if id == splitID { splitID = selectedID == id ? nil : selectedID }
         selectedID = id
+        let starting = !session.isAttached
         start(session)
         if focus { session.wantsFocus = true }
         updateShown()
+        if starting, !detachedIDs.contains(id) { claimAfterAttach() }
+    }
+
+    /// How long after a row attaches its wrapper is given to record the
+    /// session it picked up, before the row is matched against Detached again.
+    static let claimDelay: TimeInterval = 3
+    private var claimTask: Task<Void, Never>?
+
+    /// A row just attached: match its session against Detached once now and
+    /// once its wrapper has had time to record the session id, so a
+    /// Detached row for the same session goes at once rather than at the
+    /// next sweep. Reads no more than the status match already does.
+    private func claimAfterAttach() {
+        guard configuration.findsDetachedSessions, !discovered.isEmpty else { return }
+        apply(statusFeed?.records ?? [])
+        claimTask?.cancel()
+        claimTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(Self.claimDelay))
+            guard !Task.isCancelled, let self else { return }
+            self.claimTask = nil
+            self.apply(self.statusFeed?.records ?? [])
+        }
     }
 
     public func openSelected(focus: Bool = true) {
@@ -1571,11 +1597,24 @@ public final class AgentLaneStore: ObservableObject {
     }
 
     private func apply(_ records: [LaneStatus]) {
+        var held: [AgentLane.ID: [String]] = [:]
         for session in sessions.values {
             let match = session.lane.statusMatch ?? session.backend.statusMatch(for: session.lane)
-            session.update(record: match.find(in: records))
+            let record = match.find(in: records)
+            session.update(record: record)
+            if !detachedIDs.contains(session.id) {
+                let ids = DetachedSessions.heldSessionIDs(match: match, record: record)
+                if !ids.isEmpty { held[session.id] = ids }
+            }
         }
         objectWillChange.send()
+        // A row that has just picked up a session (its wrapper wrote the id,
+        // or a hook reported it) takes it out of Detached now, not at the
+        // next sweep. Nothing runs here: the last sweep is matched again.
+        if held != heldSessionIDs {
+            heldSessionIDs = held
+            if !discovered.isEmpty { reconcileDetached() }
+        }
     }
 
     /// A note is found by the lane's id, or by the tmux session its status

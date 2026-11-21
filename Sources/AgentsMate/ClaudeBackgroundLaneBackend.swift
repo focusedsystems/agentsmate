@@ -98,7 +98,7 @@ public struct ClaudeBackgroundLaneBackend: LaneBackend {
         var seen = Set<String>()
         return records.compactMap { record in
             guard let name = record.lane, !name.isEmpty else { return nil }
-            let session = DiscoveredSession(kind: kind, name: name, directory: record.directory)
+            let session = DiscoveredSession(kind: kind, name: name, directory: record.directory, sessionID: record.sessionID)
             let counts = isRelevant.map { $0(session) } ?? isLaneSession?(name) ?? true
             guard counts, seen.insert(name).inserted else { return nil }
             return session

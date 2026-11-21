@@ -121,6 +121,25 @@ selection or the keyboard, and the text waits until its agent takes a paste.
 If nothing takes it within 20 seconds it goes on the clipboard instead.
 `store.message(_:to:)` is the same send for an app's own surfaces.
 
+## Usage meter
+
+`Configuration.usageSources` fills the meter at the sidebar's foot.
+`KeyValueUsageFileSource` reads the `KEY=VALUE` file a status-line helper
+writes. A window whose reset has passed is left out, and a file older than an
+hour (`maxAge`) counts for nothing, so an agent with no current reading shows
+as "Usage unknown" rather than with old figures. On a Mac whose agents all run
+elsewhere, `KeyValueUsageCommandSource` reads the same form from a command the
+app supplies, such as `ssh` to the Mac that writes the file. It runs at most
+every five minutes, at background priority with a timeout, and doubles the
+wait after each failure, up to an hour. AgentsMate does not fetch the figures
+itself: the service that reports them wants the account's web sign-in, which
+a package has no business holding.
+
+```swift
+KeyValueUsageCommandSource(agent: "Claude",
+                           command: ["/usr/bin/ssh", "-o", "BatchMode=yes", "--", host, "cat .usage-cache"])
+```
+
 ## Pull request ledger
 
 Every pull request link an agent posts is kept in its lane's ledger, for
@@ -251,6 +270,16 @@ name its status matches, else by folder. A row on a backend that did not list
 the session claims it by name only, so a wrapper lane that attaches a tmux
 session or a Claude Code background session of the same name keeps it out of
 Detached, while a Codex lane in the same folder as a Claude one does not.
+
+A row also holds a session whose own id it knows, whatever either is named:
+the id its status is matched by (`LaneStatusMatch.session`, which a
+`sessionIDFile` gives) or the one its status record carries. Claude Code
+background sessions carry their ids, so a wrapper that starts one under a name
+of its choosing keeps it out of Detached. A Claude row that knows no id holds
+the one background session working in its folder, when there is exactly one.
+When a row attaches, it is matched against the last sweep at once and again a
+moment later, once its wrapper has recorded the session, so a Detached row for
+the same session goes then rather than at the next sweep.
 
 ### Closing a row leaves its session running
 
