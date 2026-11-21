@@ -4,7 +4,8 @@ import Foundation
 public enum LaneState: String, Codable, Sendable, CaseIterable {
     /// Working on a turn: a prompt was submitted or a tool just ran.
     case running
-    /// Idle at its prompt, or asking a question, and waiting for a person.
+    /// Blocked on a question to the person: a question dialog, or a turn that
+    /// ended on a question. Not for an agent idle at its prompt; that is `done`.
     case waitingForInput
     /// Stopped on a permission prompt for a tool.
     case permissionRequested
@@ -53,6 +54,17 @@ public struct LaneStatus: Codable, Equatable, Sendable {
         self.message = message
         self.event = event
         self.updatedAt = updatedAt
+    }
+
+    /// The record as it should be read. Records written before a session
+    /// start was understood as idle say `waitingForInput` for it; that was
+    /// never a question, so it reads as `done`.
+    public var normalized: LaneStatus {
+        guard state == .waitingForInput, event == "SessionStart" else { return self }
+        var copy = self
+        copy.state = .done
+        copy.message = nil
+        return copy
     }
 
     /// Whether this record came from polling a session list rather than from

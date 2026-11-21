@@ -10,7 +10,7 @@ final class StatusEventsTests: XCTestCase {
         XCTAssertEqual(claude(#"{"hook_event_name":"UserPromptSubmit","cwd":"/w","session_id":"s"}"#)?.state, .running)
         XCTAssertEqual(claude(#"{"hook_event_name":"PostToolUse"}"#)?.state, .running)
         XCTAssertEqual(claude(#"{"hook_event_name":"Stop"}"#)?.state, .done)
-        XCTAssertEqual(claude(#"{"hook_event_name":"SessionStart"}"#)?.state, .waitingForInput)
+        XCTAssertEqual(claude(#"{"hook_event_name":"SessionStart"}"#)?.state, .done, "a fresh session is idle, not blocked")
         XCTAssertEqual(claude(#"{"hook_event_name":"SessionEnd"}"#)?.state, .ended)
         XCTAssertEqual(claude(#"{"hook_event_name":"PermissionRequest"}"#)?.state, .permissionRequested)
         XCTAssertNil(claude(#"{"hook_event_name":"SubagentStop"}"#))
@@ -26,6 +26,19 @@ final class StatusEventsTests: XCTestCase {
         XCTAssertNil(claude(#"{"hook_event_name":"Notification","notification_type":"auth_success"}"#))
         XCTAssertEqual(claude(#"{"hook_event_name":"Notification","message":"Claude needs your permission to use Edit"}"#)?.state, .permissionRequested)
         XCTAssertNil(claude(#"{"hook_event_name":"Notification","message":"Claude is waiting for your input"}"#))
+    }
+
+    func testUnrecognisedNotificationWritesNothing() {
+        XCTAssertNil(claude(#"{"hook_event_name":"Notification","message":"Task finished"}"#))
+        XCTAssertNil(claude(#"{"hook_event_name":"Notification","notification_type":"idle_prompt","message":"Claude is waiting for your input"}"#))
+    }
+
+    func testOldSessionStartRecordReadsAsDone() {
+        let old = LaneStatus(agent: "claude", state: .waitingForInput, message: "hi", event: "SessionStart")
+        XCTAssertEqual(old.normalized.state, .done)
+        XCTAssertNil(old.normalized.message)
+        let asking = LaneStatus(agent: "claude", state: .waitingForInput, event: "Stop")
+        XCTAssertEqual(asking.normalized, asking)
     }
 
     func testClaudeRecordCarriesLaneAndFolder() throws {

@@ -7,9 +7,9 @@ AgentsMate reads that folder.
 | State | Written when |
 |---|---|
 | `running` | A prompt was submitted or a tool ran, or the turn ended with a background shell still running |
-| `waitingForInput` | The session started, the agent opened a question dialog, or its turn ended on a question |
+| `waitingForInput` | The agent opened a question dialog, or its turn ended on a question |
 | `permissionRequested` | The agent stopped on a permission prompt |
-| `done` | The agent finished its turn without asking anything |
+| `done` | The session started, or the agent finished its turn without asking anything |
 | `ended` | The agent process exited |
 
 ## How a turn ends
