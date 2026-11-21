@@ -398,6 +398,14 @@ before the menu bar or any view sees the keys, so an app's own menus and
 shortcuts cannot swallow them. Edit › Copy and Paste reach the terminal too.
 Shift-drag selects text when the program has the mouse.
 
+⌘V pastes what is on the clipboard the way Terminal does: copied files go in
+as their quoted paths, text as a paste, and an image on its own as Ctrl+V,
+which Claude Code and Codex both take as "read the image from the
+clipboard". The agent reads its own Mac's clipboard, so an image reaches a
+session attached over ssh only when that Mac's clipboard has it too (through
+Universal Clipboard, for example); copied files paste as local paths, which
+the other Mac may not have.
+
 ## Keeping the agent CLIs current
 
 The `AgentsMateUpdates` product finds the Claude Code and Codex command-line

@@ -150,6 +150,36 @@ final class TerminalCopyPasteTests: XCTestCase {
         XCTAssertFalse(view.handleKeyDown(key("v", code: 9, flags: [.command, .shift, .option])))
     }
 
+    func testPasteSendsTextFilesOrCtrlVForAnImage() {
+        let view = AgentTerminalView(frame: NSRect(x: 0, y: 0, width: 400, height: 100))
+        let board = NSPasteboard(name: NSPasteboard.Name("agentsmate-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        view.pasteboard = board
+
+        board.clearContents()
+        XCTAssertNil(view.pasteInput(), "an empty pasteboard sends nothing")
+
+        board.clearContents()
+        board.setString("echo hi\nls", forType: .string)
+        XCTAssertEqual(view.pasteInput().map { String(decoding: $0, as: UTF8.self) }, "echo hi\nls", "a shell takes text as typed")
+        view.feed(text: "\u{1b}[?2004h")
+        XCTAssertEqual(view.pasteInput().map { String(decoding: $0, as: UTF8.self) }, "\u{1b}[200~echo hi\nls\u{1b}[201~")
+
+        board.clearContents()
+        let image = NSImage(size: NSSize(width: 4, height: 4))
+        image.lockFocus(); NSColor.red.setFill(); NSRect(x: 0, y: 0, width: 4, height: 4).fill(); image.unlockFocus()
+        board.writeObjects([image])
+        XCTAssertEqual(PasteContent(board), .image)
+        XCTAssertEqual(view.pasteInput(), [0x16], "an image alone is Ctrl+V, for the agent to read")
+
+        board.clearContents()
+        board.writeObjects([URL(fileURLWithPath: "/tmp/Screen Shot.png") as NSURL])
+        board.setString("Screen Shot.png", forType: .string)
+        XCTAssertEqual(PasteContent(board), .files(["/tmp/Screen Shot.png"]), "copied files win over their names")
+        XCTAssertEqual(view.pasteInput().map { String(decoding: $0, as: UTF8.self) },
+                       "\u{1b}[200~'/tmp/Screen Shot.png' \u{1b}[201~")
+    }
+
     func testReopenKeysReachTheStoreFromATerminal() {
         let view = AgentTerminalView(frame: NSRect(x: 0, y: 0, width: 400, height: 100))
         var asked: TerminalShortcut?
