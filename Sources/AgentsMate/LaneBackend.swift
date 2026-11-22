@@ -40,6 +40,11 @@ public struct AgentLane: Identifiable, Hashable, Sendable {
     /// adopted. A backend that can attach by name does so instead of
     /// working the session out from the folder.
     public var sessionName: String?
+    /// The host the lane runs on, by its name in the hosts registry
+    /// (``AgentHosts``), or nil for the default. When set, the lane's
+    /// terminal gets `CLAUDE_REMOTE_HOST` and `CODEX_REMOTE_HOST` naming it,
+    /// which the lane wrappers read.
+    public var host: String?
 
     public init(id: String, title: String, symbol: String = "terminal", tintHex: String? = nil,
                 directory: URL? = nil, backendID: String, isClosable: Bool = false,

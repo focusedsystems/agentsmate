@@ -427,6 +427,9 @@ public struct AgentLaneSidebar<Accessory: View>: View {
                 }
             }
         }
+        if !store.runOnHosts(for: lane.id).isEmpty {
+            LaneRunOnMenu(store: store, id: lane.id)
+        }
         Divider()
         Button(store.layout.pinned.contains(lane.id) ? "Unpin" : "Pin") {
             store.setPinned(lane.id, !store.layout.pinned.contains(lane.id))

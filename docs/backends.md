@@ -12,6 +12,9 @@ runs a wrapper that attaches a tmux session named after the folder, passing the
 folder as the last argument. Status comes from hooks (see `status-feed.md`).
 This is the default backend for both Claude Code and Codex lanes.
 
+A lane with a `host` gets `CLAUDE_REMOTE_HOST` and `CODEX_REMOTE_HOST` set to
+it, so the wrapper starts the session there. See `shared-lanes.md`.
+
 Its `renameCommand` is `/rename %@` for a Claude Code or Codex lane, so renaming
 the lane renames the agent's session too (see the README). Set it to nil for a
 wrapper whose agent should keep its own name.
