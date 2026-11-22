@@ -9,21 +9,43 @@ final class HostSessionsParseTests: XCTestCase {
      {"pid":1,"sessionId":"cccc","name":"hand run","cwd":"/w/business","kind":"interactive","status":"busy"}]
     """
 
-    private func output(bindings: String = "Business\t7724e818\nbad line\nOther\t-x\n", end: Bool = true) -> String {
-        agents + "\n" + HostSessions.tmuxMark + "\nrepo\nrepo-2\n" + HostSessions.bindingsMark + "\n" + bindings
-            + (end ? HostSessions.endMark + "\n" : "")
+    private let marks = HostSessions.Marks(nonce: "n0nce")
+
+    private func output(bindings: String = "Business\t7724e818\nbad line\nOther\t-x\n", status: Int = 0,
+                        end: Bool = true) -> String {
+        agents + "\n" + marks.tmux + "\nrepo\nrepo-2\n" + marks.bindings + "\n" + bindings
+            + marks.status + "\(status)\n" + (end ? marks.end + "\n" : "")
     }
 
     func testParsesTheThreeListings() throws {
-        let listing = try XCTUnwrap(HostSessions.parse(output()))
+        let listing = try XCTUnwrap(HostSessions.parse(output(), marks: marks))
         XCTAssertEqual(listing.claude.map(\.agentID), ["7724e818", "ef28618f"], "background sessions only, by short id")
         XCTAssertEqual(listing.tmux, ["repo", "repo-2"])
         XCTAssertEqual(listing.bindings, ["Business": "7724e818"], "malformed lines and ids are dropped")
     }
 
     func testAnAnswerThatDoesNotReachTheEndIsUnknown() {
-        XCTAssertNil(HostSessions.parse(output(end: false)))
-        XCTAssertNil(HostSessions.parse(""))
+        XCTAssertNil(HostSessions.parse(output(end: false), marks: marks))
+        XCTAssertNil(HostSessions.parse("", marks: marks))
+    }
+
+    func testAMarkInsideASessionNameOrAnotherNonceCannotMoveTheFrame() {
+        let forged = HostSessions.Marks(nonce: "guess")
+        let sneaky = output().replacingOccurrences(of: "\nrepo\n", with: "\n" + forged.end + "\nrepo\n")
+        XCTAssertNotNil(HostSessions.parse(sneaky, marks: marks), "another nonce's marks are just text")
+        let inline = output().replacingOccurrences(of: "\nrepo\n", with: "\nrepo " + marks.end + "\n")
+        XCTAssertEqual(HostSessions.parse(inline, marks: marks)?.tmux, ["repo " + marks.end, "repo-2"],
+                       "a mark that is not a whole line is not a mark")
+        let twice = output().replacingOccurrences(of: "\nrepo\n", with: "\n" + marks.end + "\n")
+        XCTAssertNil(HostSessions.parse(twice, marks: marks), "a mark twice is no frame")
+    }
+
+    func testFailedBindingsAreNotKnownAndAMissingCommandIsNone() throws {
+        let failed = try XCTUnwrap(HostSessions.parse(output(status: 1), marks: marks))
+        XCTAssertFalse(failed.bindingsKnown)
+        XCTAssertTrue(failed.bindings.isEmpty)
+        let missing = try XCTUnwrap(HostSessions.parse(output(bindings: "", status: 127), marks: marks))
+        XCTAssertTrue(missing.bindingsKnown)
     }
 
     func testRemoteListingIsReadOnlySSHInBatchMode() throws {
@@ -38,8 +60,8 @@ final class HostSessionsParseTests: XCTestCase {
 
     func testTheLocalScriptRunsToTheEndEvenWhenTheBindingsGlobMatchesNothing() throws {
         let config = HostSessionsConfiguration(claude: "/usr/bin/false", tmux: "/usr/bin/false",
-                                               bindingsCommand: #"for f in /nonexistent-agentsmate/*; do [ -f "$f" ] && echo "$f"; done"#)
-        let command = try XCTUnwrap(HostSessions.command(host: nil, config: config))
+                                               bindingsCommand: #"for f in /nonexistent-agentsmate/*; do [ -f "$f" ] && echo "$f"; done; true"#)
+        let command = try XCTUnwrap(HostSessions.command(host: nil, config: config, marks: marks))
         let process = Process()
         process.executableURL = URL(fileURLWithPath: command.executable)
         process.arguments = command.arguments
@@ -49,7 +71,7 @@ final class HostSessionsParseTests: XCTestCase {
         try process.run()
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
-        XCTAssertEqual(HostSessions.parse(String(decoding: data, as: UTF8.self)), HostSessionListing())
+        XCTAssertEqual(HostSessions.parse(String(decoding: data, as: UTF8.self), marks: marks), HostSessionListing())
     }
 }
 
@@ -98,6 +120,20 @@ final class HostSessionsTargetTests: XCTestCase {
         XCTAssertNil(HostSessions.target(for: lane, backend: bg, listing: ended, config: config, remoteHost: nil))
     }
 
+    func testUnknownBindingsAttachNothingForAnyLane() {
+        let listing = HostSessionListing(claude: [record("7724e818", name: "x")], tmux: ["repo"], bindingsKnown: false)
+        XCTAssertNil(HostSessions.target(for: lane, backend: tmuxLane, listing: listing, config: config, remoteHost: nil),
+                     "the lane may be bound, so its tmux name does not stand in")
+    }
+
+    func testANameOnlyClaudeMatchMustWorkInTheLanesFolder() {
+        let bg = ClaudeBackgroundLaneBackend(name: { @Sendable _ in "repo" })
+        var elsewhere = record("bbbb2222", name: "repo")
+        elsewhere.directory = "/somewhere/else"
+        XCTAssertNil(HostSessions.target(for: lane, backend: bg, listing: .init(claude: [elsewhere]),
+                                         config: config, remoteHost: nil))
+    }
+
     func testANonPersistentLaneIsNeverAttached() {
         XCTAssertNil(HostSessions.target(for: lane, backend: CommandLaneBackend.shell, listing: .init(tmux: ["repo"]),
                                          config: config, remoteHost: nil))
@@ -123,19 +159,40 @@ final class HostSessionsTargetTests: XCTestCase {
 final class HostSessionsStoreTests: XCTestCase {
     /// Commands that do nothing, so a test that attaches runs no real
     /// ssh, tmux or claude.
-    private let inert = HostSessionsConfiguration(claude: "/usr/bin/true", tmux: "/usr/bin/true", ssh: "/usr/bin/true")
-    private let hosts = AgentHosts(hosts: [.init(name: "hub-mac", role: .hub), .init(name: "lane-mac", role: .lane),
-                                           .init(name: "laptop", role: .client)], selfName: "laptop")
+    /// Every command is /usr/bin/true, so the store's own asks come back
+    /// empty after the test; each test hands it the answers itself.
+    private var inert: HostSessionsConfiguration {
+        HostSessionsConfiguration(claude: "/usr/bin/true", tmux: "/usr/bin/true", ssh: "/usr/bin/true", hosts: hosts)
+    }
+    private let hosts = AgentHosts(hosts: [.init(name: "hub-mac", role: .hub, platform: "mac"),
+                                           .init(name: "lane-mac", role: .lane, platform: "mac"),
+                                           .init(name: "win-box", role: .lane, platform: "windows"),
+                                           .init(name: "laptop", role: .client, platform: "mac")], selfName: "laptop")
 
-    private func store(host: String?) -> AgentLaneStore {
+    func testOnlyHubAndLaneMacsAreAsked() {
+        XCTAssertEqual(HostSessions.askedHosts(hosts).map(\.name), ["hub-mac", "lane-mac"])
+        let unstated = AgentHosts(hosts: [.init(name: "hub-mac", role: .hub)], selfName: "x")
+        XCTAssertTrue(HostSessions.askedHosts(unstated).isEmpty, "a host whose platform is not given is not asked")
+    }
+
+    func testALaneOnAHostThatIsNotAMacIsLeftToAttachByHand() {
+        let store = store(host: "win-box")
+        store.enterAgentsMode()
+        store.openSelectedOnShow()
+        store.received(.init(tmux: ["repo"]), from: "hub-mac", hosts: hosts)
+        XCTAssertNil(store.launchAttachPending, "win-box is never asked, so nothing waits on it")
+        XCTAssertFalse(store.sessions["r"]?.isAttached ?? true)
+    }
+
+    private func store(host: String?, backend: any LaneBackend = CommandLaneBackend.tmuxLane(
+        id: "t", displayName: "T", command: "wrapper", statusAgent: "claude",
+        tmuxSessions: TmuxLaneSessions(sessionName: { @Sendable _ in "repo" }))) -> AgentLaneStore {
         let defaults = UserDefaults(suiteName: "agentsmate-hosts-\(UUID().uuidString)")!
-        let backend = CommandLaneBackend.tmuxLane(id: "t", displayName: "T", command: "wrapper", statusAgent: "claude",
-                                                  tmuxSessions: TmuxLaneSessions(sessionName: { @Sendable _ in "repo" }))
         var config = AgentLaneStore.Configuration(termProgram: "T", sessionFileDirectory: nil, sharedLanes: nil,
                                                   hostSessions: inert)
         config.findsDetachedSessions = false
         let store = AgentLaneStore(configuration: config, backends: [backend], statusFeed: nil, defaults: defaults)
-        var lane = AgentLane(id: "r", title: "Repo", directory: URL(fileURLWithPath: "/w/repo"), backendID: "t")
+        var lane = AgentLane(id: "r", title: "Repo", directory: URL(fileURLWithPath: "/w/repo"), backendID: backend.id)
         lane.host = host
         store.add(lane, open: false)
         store.selectedID = "r"
@@ -184,4 +241,20 @@ final class HostSessionsStoreTests: XCTestCase {
         XCTAssertNil(store.launchAttachPending)
         store.detachAll()
     }
+
+    func testTheHostComesFromHowTheBackendRunsTheLane() {
+        let wrapper = store(host: nil)
+        XCTAssertEqual(wrapper.sessionHost(for: wrapper.lanes[0]), "hub-mac", "a wrapper lane with no host runs on the hub")
+        let pinned = store(host: "lane-mac")
+        XCTAssertEqual(pinned.sessionHost(for: pinned.lanes[0]), "lane-mac")
+        let stranger = store(host: "not-in-registry")
+        XCTAssertNil(stranger.sessionHost(for: stranger.lanes[0]), "a host outside the registry is never asked")
+        let bg = store(host: "lane-mac", backend: ClaudeBackgroundLaneBackend(name: { @Sendable _ in "repo" }))
+        XCTAssertEqual(bg.sessionHost(for: bg.lanes[0]), "laptop", "a backend that ignores a lane's host runs here")
+        let fixed = store(host: nil, backend: CommandLaneBackend.tmuxLane(
+            id: "t", displayName: "T", command: "w", statusAgent: "claude",
+            tmuxSessions: TmuxLaneSessions(sessionName: { @Sendable _ in "repo" }, host: "elsewhere")))
+        XCTAssertNil(fixed.sessionHost(for: fixed.lanes[0]), "a backend's own host must be in the registry")
+    }
 }
+

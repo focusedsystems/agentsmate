@@ -1306,9 +1306,9 @@ public final class AgentLaneStore: ObservableObject {
 
     /// Ask every hub and lane host in the registry what it has running.
     private func startHostListing() {
-        guard let config = configuration.hostSessions, let hosts = agentHosts ?? AgentHosts.load() else { return }
+        guard let config = configuration.hostSessions, let hosts = config.hosts ?? agentHosts ?? AgentHosts.load() else { return }
         listingHosts = hosts
-        for host in hosts.hosts where host.role == .hub || host.role == .lane {
+        for host in HostSessions.askedHosts(hosts) {
             let name = host.name, local = name == hosts.selfName
             Task { @MainActor [weak self] in
                 let listing = await HostSessions.list(host: local ? nil : name, config: config)
@@ -1330,9 +1330,21 @@ public final class AgentLaneStore: ObservableObject {
         attachPendingFromHosts()
     }
 
-    /// The host a lane's session runs on: its own host, else the hub.
+    /// The host a lane's session runs on, as its backend runs it: a tmux
+    /// lane backend's own host, which must be in the registry; for a lane
+    /// wrapper that takes a lane's host (what Run On offers), the lane's
+    /// host, else the hub; for any other backend, this Mac.
     func sessionHost(for lane: AgentLane) -> String? {
-        lane.host ?? listingHosts?.hub?.name
+        guard let hosts = listingHosts, let backend = backends[lane.backendID] else { return nil }
+        let known = Set(hosts.hosts.map(\.name))
+        if let command = backend as? CommandLaneBackend {
+            if let host = command.tmuxSessions?.host { return known.contains(host) ? host : nil }
+            if command.passesDirectory {
+                guard let host = lane.host ?? hosts.hub?.name else { return nil }
+                return known.contains(host) ? host : nil
+            }
+        }
+        return hosts.selfName
     }
 
     /// Attach the lane launch is waiting on, once its host has answered and
@@ -1346,7 +1358,10 @@ public final class AgentLaneStore: ObservableObject {
             return
         }
         guard let listing = hostListings[host] else {
-            if unknownHosts.contains(host) { launchAttachPending = nil }
+            // A host that is never asked (not a Mac) or did not answer leaves
+            // the lane to be attached by hand.
+            let asked = listingHosts.map { HostSessions.askedHosts($0).contains { $0.name == host } } ?? false
+            if unknownHosts.contains(host) || !asked { launchAttachPending = nil }
             return
         }
         launchAttachPending = nil
