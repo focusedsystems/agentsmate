@@ -1221,6 +1221,7 @@ public final class AgentLaneStore: ObservableObject {
             dockMaximized = defaults.bool(forKey: keys.dockMaximized)
         }
         dockVisible = true
+        firstShowPending = false
         if lanes.isEmpty { openNewLane(in: newLaneDirectory) } else { openSelected(focus: true) }
     }
 
@@ -1232,6 +1233,33 @@ public final class AgentLaneStore: ObservableObject {
             window.makeFirstResponder(focus)
         }
         focusBeforeDock = nil
+    }
+
+    /// Agents mode for an app that shows its lanes in ``AgentLaneDock``: the
+    /// dock open and filling the window. Unlike ``showDock(newLaneDirectory:)``
+    /// it starts nothing: no new lane, and the terminal area shows the
+    /// selected lane only if its session is already running.
+    public func enterAgentsMode() {
+        if !dockVisible {
+            focusBeforeDock = NSApp.keyWindow?.firstResponder
+            dockVisible = true
+        }
+        dockMaximized = true
+    }
+
+    /// Until the lanes have been on screen once, showing them starts no
+    /// session: launch opens Agents mode without running an agent anyone
+    /// did not ask for.
+    private(set) var firstShowPending = true
+
+    /// Show the selected lane's terminal as the lanes come on screen. The
+    /// first time after launch, that is only a lane whose session already
+    /// runs (attached here or found by a presence source); a lane is never
+    /// started, nor one created.
+    public func openSelectedOnShow(focus: Bool = true) {
+        guard firstShowPending else { return openSelected(focus: focus) }
+        firstShowPending = false
+        if let id = selectedID, sessions[id]?.isActive == true { open(id, focus: focus) }
     }
 
     public func toggleDock(newLaneDirectory: URL? = nil) {

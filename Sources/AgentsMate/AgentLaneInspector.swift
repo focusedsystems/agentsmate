@@ -32,7 +32,7 @@ public struct AgentLaneInspector<Empty: View>: View {
         .agentLanePalette(store)
         .onAppear {
             store.isShowing = true
-            store.openSelected(focus: false)
+            store.openSelectedOnShow(focus: false)
         }
         .onDisappear { store.isShowing = false }
     }

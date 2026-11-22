@@ -724,7 +724,7 @@ public struct AgentLaneDetail<Empty: View>: View {
         .agentLanePalette(store)
         .onAppear {
             store.isShowing = true
-            store.openSelected(focus: true)
+            store.openSelectedOnShow()
         }
         .onDisappear { store.isShowing = false }
     }
