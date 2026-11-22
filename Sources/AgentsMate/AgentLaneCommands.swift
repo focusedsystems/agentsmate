@@ -1,7 +1,7 @@
 import SwiftUI
 import AppKit
 
-/// The lanes' menu: every lane on ⌘1–⌘9 (when the app gives it those keys),
+/// The lanes' menu: the pinned lanes on ⌘1–⌘9 (when the app gives it those keys),
 /// moving between them, and attaching, detaching or clearing the selected
 /// one. Every command here is also on the row's contextual menu or a
 /// terminal shortcut, so the menu bar is where people find them.
@@ -48,11 +48,14 @@ public struct AgentLaneCommands: Commands {
 
     public var body: some Commands {
         CommandMenu(menuTitle) {
-            ForEach(Array(store.lanes.prefix(9).enumerated()), id: \.element.id) { index, lane in
+            // The pinned rows, on ⌘1–⌘9 in the order the list shows them.
+            ForEach(Array(store.numberedLanes.enumerated()), id: \.element.id) { index, lane in
                 laneButton(lane, index: index)
             }
             if store.lanes.isEmpty {
                 Text(emptyText)
+            } else if store.numberedLanes.isEmpty {
+                Text("Pin a \(labels.laneNoun) to reach it with ⌘1–⌘9")
             }
             Divider()
             Button("Next \(noun)") {

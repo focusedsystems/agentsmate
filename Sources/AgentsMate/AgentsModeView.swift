@@ -49,6 +49,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
     @AppStorage private var filterRunning: Bool
     @AppStorage private var filterNeedsYou: Bool
     @AppStorage private var filterIdle: Bool
+    @AppStorage private var filterUnread: Bool
     @State private var searchText = ""
     @State private var showingNewSection = false
     @State private var renaming: String?
@@ -75,6 +76,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         _filterRunning = AppStorage(wrappedValue: false, keys.filterRunning)
         _filterNeedsYou = AppStorage(wrappedValue: false, keys.filterWaiting)
         _filterIdle = AppStorage(wrappedValue: false, keys.filterIdle)
+        _filterUnread = AppStorage(wrappedValue: false, keys.filterUnread)
     }
 
     init(store: AgentLaneStore, labels: AgentsModeLabels, inDock: Bool, @ViewBuilder accessory: () -> Accessory) {
@@ -85,13 +87,17 @@ public struct AgentLaneSidebar<Accessory: View>: View {
     public var body: some View {
         List(selection: selectionBinding) {
             // Every group folds the same way, the first included; its
-            // header keeps the app's accessory beside the + menu.
+            // header keeps the app's accessory beside the + menu. The
+            // header draws its own chevron, always shown, instead of the
+            // sidebar's, which appears only under the pointer and moves the
+            // header's buttons when it does.
             ForEach(visibleGroups) { group in
-                Section(isExpanded: expandedBinding(group)) {
-                    rows(group)
+                Section {
+                    if isExpanded(group) { rows(group) }
                 } header: {
                     sectionHeader(group)
                 }
+                .collapsible(false)
             }
         }
         .listStyle(.sidebar)
@@ -195,7 +201,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         ForEach(group.lanes) { lane in
             if let session = store.session(for: lane) {
                 LaneRow(session: session,
-                        index: displayIndex[lane.id] ?? 99,
+                        shortcutNumber: shortcutNumbers[lane.id],
                         isSplit: lane.id == store.splitID,
                         style: store.configuration.rowStyle)
                     .tag(lane.id)
@@ -221,20 +227,29 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         !searchText.trimmingCharacters(in: .whitespaces).isEmpty || !activeFilters.isEmpty
     }
 
-    private var displayIndex: [AgentLane.ID: Int] {
-        Dictionary(uniqueKeysWithValues: store.displayOrder.enumerated().map { ($1.id, $0) })
+    /// The ⌘ number each pinned row is reached by; other rows have none.
+    private var shortcutNumbers: [AgentLane.ID: Int] {
+        Dictionary(uniqueKeysWithValues: store.numberedLanes.enumerated().map { ($1.id, $0 + 1) })
     }
 
     /// Open while searching or filtering, so a match is never hidden; the
     /// saved fold is left as it was and comes back when the search ends.
-    private func expandedBinding(_ group: LaneGroup) -> Binding<Bool> {
-        let key = group.collapseKey
-        return Binding(
-            get: { isFiltering || !store.layout.collapsed.contains(key) },
-            set: { open in
-                guard !isFiltering else { return }
-                if open == store.layout.collapsed.contains(key) { store.toggleCollapsed(key) }
-            })
+    private func isExpanded(_ group: LaneGroup) -> Bool {
+        isFiltering || !store.layout.collapsed.contains(group.collapseKey)
+    }
+
+    /// Fold or open a group; with Option held, every group, as an Option-click
+    /// on a disclosure triangle does elsewhere on the Mac.
+    private func toggleExpanded(_ group: LaneGroup) {
+        guard !isFiltering else { return }
+        let open = !isExpanded(group)
+        withAnimation(.easeInOut(duration: 0.15)) {
+            if NSEvent.modifierFlags.contains(.option) {
+                store.setAllCollapsed(!open)
+            } else {
+                store.toggleCollapsed(group.collapseKey)
+            }
+        }
     }
 
     private func beginRenaming(_ name: String) {
@@ -264,7 +279,11 @@ public struct AgentLaneSidebar<Accessory: View>: View {
     private func sectionHeader(_ group: LaneGroup) -> some View {
         let title = group.title ?? labels.listTitle
         let movable = group.section != nil && !group.isPinned && !group.isDetached
+        let expanded = isExpanded(group)
         HStack(spacing: 4) {
+            SectionDisclosure(isExpanded: expanded, title: title, isEnabled: !isFiltering) {
+                toggleExpanded(group)
+            }
             if movable, let name = group.section, renaming == name {
                 TextField("Section Name", text: $sectionName)
                     .textFieldStyle(.roundedBorder)
@@ -497,10 +516,15 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         let sectionHits = query.isEmpty ? [] : Self.lanesInSections(matching: query, groups: store.groups,
                                                                     section: store.layout.section(of:))
         let filters = activeFilters
+        let selected = store.selectedID
         return store.lanes.filter { lane in
             guard let session = store.session(for: lane) else { return false }
             if !query.isEmpty, !sectionHits.contains(lane.id), !Self.matches(session, query: query) { return false }
-            return filters.allSatisfy { $0.admits(isActive: session.isActive, status: session.status) }
+            var state = Self.filterState(session)
+            // Opening an unread row reads it; it stays in the Unread list
+            // while it is the one open, rather than vanishing under the click.
+            if lane.id == selected { state.unread = true }
+            return filters.allSatisfy { $0.admits(state) }
         }
     }
 
@@ -510,6 +534,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         if filterRunning { on.insert(.running) }
         if filterNeedsYou { on.insert(.needsYou) }
         if filterIdle { on.insert(.idle) }
+        if filterUnread { on.insert(.unread) }
         return on
     }
 
@@ -519,20 +544,26 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         case .running: filterRunning = on
         case .needsYou: filterNeedsYou = on
         case .idle: filterIdle = on
+        case .unread: filterUnread = on
         }
     }
 
     /// How many lanes the status filters alone let through.
     private var statusFilteredCount: Int {
         let filters = activeFilters
-        return sessions.filter { s in filters.allSatisfy { $0.admits(isActive: s.isActive, status: s.status) } }.count
+        return sessions.filter { s in filters.allSatisfy { $0.admits(Self.filterState(s)) } }.count
+    }
+
+    /// What the status filters look at in a row.
+    static func filterState(_ session: AgentLaneSession) -> LaneStatusFilter.Lane {
+        .init(isActive: session.isActive, status: session.status, unread: session.needsAttention)
     }
 
     /// Turn off whatever filters would leave nothing to show.
     private func settleFilters(newest: LaneStatusFilter?) {
         let on = activeFilters
         guard !on.isEmpty else { return }
-        let kept = LaneStatusFilter.settled(on, newest: newest, lanes: sessions.map { ($0.isActive, $0.status) })
+        let kept = LaneStatusFilter.settled(on, newest: newest, lanes: sessions.map(Self.filterState))
         for filter in on.subtracting(kept) { setFilter(filter, false) }
     }
 
@@ -585,7 +616,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
             ForEach(LaneStatusFilter.allCases, id: \.self) { filter in
                 LaneFilterToggle(symbol: filter.symbol, symbolScale: filter.symbolScale, title: filter.title,
                                  help: filter.help(noun: labels.laneNoun),
-                                 count: all.filter { filter.admits(isActive: $0.isActive, status: $0.status) }.count,
+                                 count: all.filter { filter.admits(Self.filterState($0)) }.count,
                                  isOn: filterBinding(filter))
             }
             Spacer(minLength: 0)
@@ -787,7 +818,8 @@ struct DetachedAdoptMenu: View {
 
 struct LaneRow: View {
     @ObservedObject var session: AgentLaneSession
-    let index: Int
+    /// The ⌘ number that reaches the row: pinned rows only.
+    let shortcutNumber: Int?
     let isSplit: Bool
     var style: LaneRowStyle = .standard
 
@@ -860,8 +892,8 @@ struct LaneRow: View {
                 Image(systemName: "circle.fill").font(.system(size: 6)).foregroundStyle(.tint)
                     .accessibilityHidden(true)
             }
-            if index < 9 {
-                Text("⌘\(index + 1)").font(.caption).foregroundStyle(.secondary)
+            if let shortcutNumber {
+                Text("⌘\(shortcutNumber)").font(.caption).foregroundStyle(.secondary)
             }
         }
         .padding(.vertical, 2)
@@ -993,7 +1025,15 @@ struct LaneRow: View {
 
 /// The status chips above the lane list. Several on at once must all hold.
 enum LaneStatusFilter: String, CaseIterable, Sendable {
-    case active, running, needsYou, idle
+    case active, running, needsYou, idle, unread
+
+    /// What a filter looks at in one row.
+    struct Lane: Sendable {
+        var isActive: Bool
+        var status: LaneDisplayStatus
+        /// The row has news the person has not seen: its blue dot.
+        var unread = false
+    }
 
     static func wantsYou(_ status: LaneDisplayStatus) -> Bool {
         status == .waitingForInput || status == .permissionRequested
@@ -1002,22 +1042,25 @@ enum LaneStatusFilter: String, CaseIterable, Sendable {
     /// Whether a lane with this state passes the filter. Idle is a lane
     /// that is alive (attached here or running elsewhere) with an agent that
     /// is neither working nor waiting for the person.
-    func admits(isActive: Bool, status: LaneDisplayStatus) -> Bool {
+    func admits(isActive: Bool, status: LaneDisplayStatus, unread: Bool = false) -> Bool {
         switch self {
         case .active: isActive
         case .running: status == .running
         case .needsYou: Self.wantsYou(status)
         case .idle: isActive && status != .running && !Self.wantsYou(status)
+        case .unread: unread
         }
     }
+
+    func admits(_ lane: Lane) -> Bool { admits(isActive: lane.isActive, status: lane.status, unread: lane.unread) }
 
     /// The filters to keep on so the list is not left empty: all of `on`
     /// when some lane passes them, else only `newest` (the chip just turned
     /// on) when some lane passes it, else none.
     static func settled(_ on: Set<LaneStatusFilter>, newest: LaneStatusFilter?,
-                        lanes: [(isActive: Bool, status: LaneDisplayStatus)]) -> Set<LaneStatusFilter> {
+                        lanes: [Lane]) -> Set<LaneStatusFilter> {
         func passes(_ filters: Set<LaneStatusFilter>) -> Bool {
-            lanes.contains { lane in filters.allSatisfy { $0.admits(isActive: lane.isActive, status: lane.status) } }
+            lanes.contains { lane in filters.allSatisfy { $0.admits(lane) } }
         }
         if on.isEmpty || passes(on) { return on }
         if let newest, on.contains(newest), passes([newest]) { return [newest] }
@@ -1030,6 +1073,7 @@ enum LaneStatusFilter: String, CaseIterable, Sendable {
         case .running: "Running"
         case .needsYou: "Needs You"
         case .idle: "Idle"
+        case .unread: "Unread"
         }
     }
 
@@ -1039,6 +1083,7 @@ enum LaneStatusFilter: String, CaseIterable, Sendable {
         case .running: "bolt.fill"
         case .needsYou: "hand.raised.fill"
         case .idle: "moon.fill"
+        case .unread: "bell.badge.fill"
         }
     }
 
@@ -1050,7 +1095,35 @@ enum LaneStatusFilter: String, CaseIterable, Sendable {
         case .running: "Show only \(noun)s whose agent is working"
         case .needsYou: "Show only \(noun)s waiting for input or permission"
         case .idle: "Show only \(noun)s that are open but not working or waiting for you"
+        case .unread: "Show only \(noun)s with news you have not seen yet"
         }
+    }
+}
+
+/// A section header's chevron: always shown, in a fixed frame, so the header
+/// never moves as the pointer comes and goes. Down while the section is open.
+struct SectionDisclosure: View {
+    let isExpanded: Bool
+    let title: String
+    var isEnabled = true
+    let toggle: () -> Void
+
+    var body: some View {
+        Button(action: toggle) {
+            Image(systemName: "chevron.right")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(.secondary)
+                .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                .frame(width: 12, height: 16)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .help(isExpanded ? "Collapse \(title) (Option-click for every section)"
+                         : "Expand \(title) (Option-click for every section)")
+        .accessibilityLabel(title)
+        .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+        .accessibilityHint(isExpanded ? "Collapses the section" : "Expands the section")
     }
 }
 

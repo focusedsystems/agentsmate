@@ -1562,15 +1562,23 @@ public final class AgentLaneStore: ObservableObject {
         return groups
     }
 
-    /// The lanes in the order the list shows them; ⌘1–⌘9 and cycling follow it.
+    /// The lanes in the order the list shows them; cycling follows it.
     public var displayOrder: [AgentLane] {
         groups.flatMap(\.lanes)
     }
 
+    /// The rows ⌘1–⌘9 go to: the pinned ones, in the order the list shows
+    /// them. A row that is not pinned has no number, so pinning is how a
+    /// person chooses which rows the keys reach.
+    public var numberedLanes: [AgentLane] {
+        Array((groups.first(where: \.isPinned)?.lanes ?? []).prefix(9))
+    }
+
+    /// Open the pinned row ⌘ and `index + 1` goes to.
     public func open(index: Int) {
-        let ordered = displayOrder
-        guard ordered.indices.contains(index) else { return }
-        open(ordered[index].id)
+        let numbered = numberedLanes
+        guard numbered.indices.contains(index) else { return }
+        open(numbered[index].id)
     }
 
     // MARK: Layout
@@ -1993,6 +2001,7 @@ public struct AgentsModeKeys: Sendable {
     public var filterRunning: String { prefix + "filterRunning" }
     public var filterWaiting: String { prefix + "filterWaiting" }
     public var filterIdle: String { prefix + "filterIdle" }
+    public var filterUnread: String { prefix + "filterUnread" }
     public var fontOffset: String { prefix + "fontOffset" }
     public var layout: String { prefix + "layout" }
     public var shortcuts: String { prefix + "shortcuts" }
