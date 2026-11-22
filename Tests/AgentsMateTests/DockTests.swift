@@ -85,15 +85,15 @@ final class HistoryPaletteTests: XCTestCase {
 
 @MainActor
 final class AgentsLaunchTests: XCTestCase {
-    func testLaunchOpensAgentsModeAndFullScreenUnlessTurnedOff() {
+    func testLaunchOpensAgentsModeButNotFullScreenByDefault() {
         let defaults = UserDefaults(suiteName: "agentsmate-launch-\(UUID().uuidString)")!
         let keys = AgentsModeKeys(prefix: "app.")
         XCTAssertTrue(AgentsLaunch.opensAgentsMode(keys, defaults: defaults))
-        XCTAssertTrue(AgentsLaunch.opensFullScreen(keys, defaults: defaults))
-        defaults.set(false, forKey: keys.agentsModeAtLaunch)
-        defaults.set(false, forKey: keys.fullScreenAtLaunch)
-        XCTAssertFalse(AgentsLaunch.opensAgentsMode(keys, defaults: defaults))
         XCTAssertFalse(AgentsLaunch.opensFullScreen(keys, defaults: defaults))
+        defaults.set(false, forKey: keys.agentsModeAtLaunch)
+        defaults.set(true, forKey: keys.fullScreenAtLaunch)
+        XCTAssertFalse(AgentsLaunch.opensAgentsMode(keys, defaults: defaults))
+        XCTAssertTrue(AgentsLaunch.opensFullScreen(keys, defaults: defaults))
     }
 
     func testEnterAgentsModeFillsTheWindowAndStartsNothing() {
