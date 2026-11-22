@@ -69,10 +69,27 @@ public struct TmuxPresenceSource: LanePresenceSource {
 
 extension Array where Element == LanePresence {
     /// The session behind a lane: by name when the lane is matched by name,
-    /// else the one whose folder is the lane's.
+    /// else the one whose folder is the lane's. A lane that reports no
+    /// status (``LaneStatusMatch/none``) has none.
     func find(for lane: AgentLane, match: LaneStatusMatch) -> LanePresence? {
-        if case .lane(let name) = match { return first { $0.name == name } }
-        let want = LaneStatusMatch.normalizedPath(lane.path)
-        return first { $0.directory.map(LaneStatusMatch.normalizedPath) == want }
+        locate(for: lane, match: match)?.presence
+    }
+
+    /// ``find(for:match:)``, saying whether the session was matched by its
+    /// tmux name, which names one lane's session, rather than by a folder
+    /// any session could be working in.
+    func locate(for lane: AgentLane, match: LaneStatusMatch) -> (presence: LanePresence, byName: Bool)? {
+        switch match {
+        case .none:
+            return nil
+        case .lane(let name):
+            return first { $0.name == name }.map { ($0, true) }
+        case .firstOf(let matches):
+            for match in matches { if let found = locate(for: lane, match: match) { return found } }
+            return nil
+        case .directory, .session:
+            let want = LaneStatusMatch.normalizedPath(lane.path)
+            return first { $0.directory.map(LaneStatusMatch.normalizedPath) == want }.map { ($0, false) }
+        }
     }
 }

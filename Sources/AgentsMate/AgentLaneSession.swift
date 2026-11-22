@@ -107,6 +107,9 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
     @Published public private(set) var isOrphan = false
     /// A presence source lists the lane's session as running.
     @Published public private(set) var isPresent = false
+    /// The presence source found the session by its tmux name, so it is
+    /// this lane's own and not just a session in the same folder.
+    public private(set) var isPresentByName = false
 
     /// The lane's session is running somewhere: a presence source or a
     /// daemon's session list has it, whether or not it is attached here.
@@ -280,8 +283,9 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
         if orphan != isOrphan { isOrphan = orphan }
     }
 
-    func update(present: Bool) {
+    func update(present: Bool, byName: Bool = false) {
         if present != isPresent { isPresent = present }
+        isPresentByName = present && byName
     }
 
     /// Take what the conversation file says.
