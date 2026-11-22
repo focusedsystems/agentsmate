@@ -133,4 +133,32 @@ final class AgentsLaunchTests: XCTestCase {
         XCTAssertTrue(store.sessions["r"]?.isAttached ?? false)
         store.detachAll()
     }
+
+    func testASameFolderSessionNeverStartsANonPersistentLaneAtLaunch() {
+        let defaults = UserDefaults(suiteName: "agentsmate-launch-\(UUID().uuidString)")!
+        let plain = CommandLaneBackend(id: "plain", displayName: "Plain", command: "true")
+        let store = AgentLaneStore(configuration: .init(termProgram: "T", sessionFileDirectory: nil),
+                                   backends: [plain], statusFeed: nil, defaults: defaults)
+        let folder = URL(fileURLWithPath: "/w/repo", isDirectory: true)
+        store.add(AgentLane(id: "r", title: "Repo", directory: folder, backendID: "plain", isClosable: false,
+                            statusMatch: .directory("/w/repo", agent: nil)), open: false)
+        store.selectedID = "r"
+        store.sessions["r"]?.resumeOnStart = true
+        store.apply(presence: [LanePresence(name: "someone-else", directory: "/w/repo", attachedClients: 0)])
+        XCTAssertTrue(store.sessions["r"]?.isPresent ?? false, "the folder match still marks the row as running")
+        XCTAssertFalse(store.sessions["r"]?.isPresentByName ?? true)
+        store.enterAgentsMode()
+        store.openSelectedOnShow()
+        XCTAssertFalse(store.sessions["r"]?.isAttached ?? true, "no process starts for a session matched by folder alone")
+        XCTAssertNil(store.sessions["r"]?.shellPID)
+    }
+
+    func testPresenceFindsNothingForALaneWithNoStatusAndSaysHowItMatched() {
+        let list = [LanePresence(name: "a", directory: "/w/a", attachedClients: 0)]
+        let lane = AgentLane(id: "x", title: "X", directory: URL(fileURLWithPath: "/w/a"), backendID: "s")
+        XCTAssertNil(list.find(for: lane, match: .none))
+        XCTAssertEqual(list.locate(for: lane, match: .lane("a"))?.byName, true)
+        XCTAssertEqual(list.locate(for: lane, match: .directory("/w/a", agent: nil))?.byName, false)
+        XCTAssertEqual(list.locate(for: lane, match: .session("abc"))?.byName, false)
+    }
 }

@@ -1254,12 +1254,22 @@ public final class AgentLaneStore: ObservableObject {
 
     /// Show the selected lane's terminal as the lanes come on screen. The
     /// first time after launch, that is only a lane whose session already
-    /// runs (attached here or found by a presence source); a lane is never
-    /// started, nor one created.
+    /// runs: one attached here is shown as it is, and one not attached is
+    /// attached only when its backend keeps sessions running detached and
+    /// a presence source lists the session under the lane's own tmux name
+    /// (never a session that merely shares its folder), without resuming a
+    /// conversation. Nothing is created, and nothing new is started.
     public func openSelectedOnShow(focus: Bool = true) {
         guard firstShowPending else { return openSelected(focus: focus) }
         firstShowPending = false
-        if let id = selectedID, sessions[id]?.isActive == true { open(id, focus: focus) }
+        guard let id = selectedID, let session = sessions[id] else { return }
+        if session.isAttached {
+            if focus { session.wantsFocus = true }
+            updateShown()
+        } else if session.backend.keepsRunningWhenDetached, session.isPresentByName {
+            session.resumeOnStart = false
+            open(id, focus: focus)
+        }
     }
 
     public func toggleDock(newLaneDirectory: URL? = nil) {
@@ -1948,12 +1958,12 @@ public final class AgentLaneStore: ObservableObject {
         }
     }
 
-    private func apply(presence: [LanePresence]) {
+    func apply(presence: [LanePresence]) {
         for session in sessions.values {
             let match = session.lane.statusMatch ?? session.backend.statusMatch(for: session.lane)
-            let found = presence.find(for: session.lane, match: match)
-            session.update(orphan: configuration.highlightsOrphans && found?.attachedClients == 0 && !session.isAttached)
-            session.update(present: found != nil)
+            let found = presence.locate(for: session.lane, match: match)
+            session.update(orphan: configuration.highlightsOrphans && found?.presence.attachedClients == 0 && !session.isAttached)
+            session.update(present: found != nil, byName: found?.byName ?? false)
         }
         objectWillChange.send()
     }
