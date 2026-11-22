@@ -10,6 +10,8 @@ final class UsageTests: XCTestCase {
         XCTAssertEqual(usage?.windows.first?.resetsAt, Date(timeIntervalSince1970: 1_800_000_000))
         let reached = CodexSessionUsageSource.parse(line: #"{"rate_limits":{"primary":null,"rate_limit_reached_type":"credits_depleted"}}"#)
         XCTAssertEqual(reached?.note, "Credits Depleted")
+        XCTAssertEqual(reached?.isDepleted, true, "a reached limit with no window is depleted")
+        XCTAssertNil(reached?.depletedUntil, "Codex gives no reset for spent credits")
         XCTAssertNil(CodexSessionUsageSource.parse(line: "{}"))
     }
 
@@ -63,6 +65,21 @@ final class UsageTests: XCTestCase {
         try "UTILIZATION=84\nRESETS_AT=2020-01-01T00:00:00Z\nTIMESTAMP=1577800000\n".write(to: url, atomically: true, encoding: .utf8)
         XCTAssertEqual(KeyValueUsageFileSource(url: url, agent: "Claude").read()?.isUnknown, true)
         XCTAssertNil(KeyValueUsageFileSource(url: url, agent: "Claude", signedIn: { false }).read())
+    }
+
+    func testDepletedWhenAWindowIsFullOrALimitIsReached() {
+        let now = Date()
+        let soon = now.addingTimeInterval(3600), later = now.addingTimeInterval(86_400)
+        let full = AgentUsage(agent: "Claude", windows: [.init(label: "Session", percent: 100, resetsAt: soon),
+                                                         .init(label: "Week", percent: 100, resetsAt: later)])
+        XCTAssertTrue(full.isDepleted)
+        XCTAssertEqual(full.depletedUntil, later, "work resumes once every full window has reset")
+        let partly = AgentUsage(agent: "Claude", windows: [.init(label: "Session", percent: 100, resetsAt: soon),
+                                                           .init(label: "Week", percent: 40, resetsAt: later)])
+        XCTAssertEqual(partly.depletedUntil, soon)
+        XCTAssertFalse(AgentUsage(agent: "Claude", windows: [.init(label: "Week", percent: 99)]).isDepleted)
+        XCTAssertFalse(AgentUsage(agent: "Codex", windows: [], note: AgentUsage.unknownNote).isDepleted,
+                       "unknown is not depleted")
     }
 }
 

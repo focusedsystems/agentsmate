@@ -121,7 +121,8 @@ public final class KeyValueUsageCommandSource: AgentUsageSource, @unchecked Send
 }
 
 /// A compact meter for a sidebar's foot: one bar per agent, showing its
-/// fullest window, with every window and its reset time in the tooltip.
+/// fullest window, with every window and its reset time in the tooltip. An
+/// agent that has run out shows a full grey bar.
 public struct AgentUsageMeter: View {
     @ObservedObject var model: AgentUsageModel
 
@@ -132,43 +133,44 @@ public struct AgentUsageMeter: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             ForEach(model.usages, id: \.agent) { usage in
-                if let window = usage.fullest {
-                    VStack(alignment: .leading, spacing: 1) {
-                    HStack(spacing: 6) {
-                        Text(usage.agent).font(.caption).frame(width: 44, alignment: .leading)
-                        ProgressView(value: min(window.percent, 100), total: 100)
-                            .tint(window.percent >= 90 ? .red : window.percent >= 70 ? .orange : .accentColor)
-                        // No percentage beside the bar: the bar says it, and the
-                        // width goes to the bar. The figure is in the tooltip.
-                        if let reset = window.resetsAt {
-                            TimelineView(.periodic(from: .now, by: 60)) { context in
-                                Text(Self.shortReset(reset, now: context.date))
-                                    .font(.caption.monospacedDigit())
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                                    .fixedSize()
-                            }
-                        }
-                    }
-                    // Spent: say when it comes back, and how long that is.
-                    if window.percent >= 100, let reset = window.resetsAt {
-                        TimelineView(.periodic(from: .now, by: 60)) { context in
-                            Text(Self.resetLine(reset, now: context.date))
-                                .font(.caption)
-                                .foregroundStyle(.red)
-                        }
-                    }
-                    }
-                    .help(Self.describe(usage))
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("\(usage.agent) usage")
-                    .accessibilityValue(Self.describe(usage))
+                if usage.isDepleted {
+                    // Spent: the same row, with a full grey bar and when it
+                    // comes back, if the agent says.
+                    row(usage, percent: 100, tint: .gray, reset: usage.depletedUntil)
+                } else if let window = usage.fullest {
+                    row(usage, percent: min(window.percent, 100),
+                        tint: window.percent >= 90 ? .red : window.percent >= 70 ? .orange : .accentColor,
+                        reset: window.resetsAt)
                 } else if let note = usage.note {
                     Text("\(usage.agent): \(note)").font(.caption).foregroundStyle(.secondary)
                 }
             }
         }
         .onAppear { model.start() }
+    }
+
+    /// One agent: its name, a bar, and the reset time on the right. No
+    /// percentage beside the bar: the bar says it, and the width goes to the
+    /// bar. The figure is in the tooltip.
+    private func row(_ usage: AgentUsage, percent: Double, tint: Color, reset: Date?) -> some View {
+        HStack(spacing: 6) {
+            Text(usage.agent).font(.caption).frame(width: 44, alignment: .leading)
+            ProgressView(value: percent, total: 100)
+                .tint(tint)
+            if let reset {
+                TimelineView(.periodic(from: .now, by: 60)) { context in
+                    Text(Self.shortReset(reset, now: context.date))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .fixedSize()
+                }
+            }
+        }
+        .help(Self.describe(usage))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(usage.agent) usage")
+        .accessibilityValue(Self.describe(usage))
     }
 
     /// The bar's own reset label: the time alone when it is today ("14:00"),
@@ -203,6 +205,9 @@ public struct AgentUsageMeter: View {
             return "\(w.label): \(Int(w.percent.rounded()))%\(reset)"
         }
         if let note = usage.note { lines.append(note) }
+        if usage.isDepleted {
+            lines.append(usage.depletedUntil.map { resetLine($0) } ?? "No reset time reported")
+        }
         return lines.joined(separator: "\n")
     }
 }

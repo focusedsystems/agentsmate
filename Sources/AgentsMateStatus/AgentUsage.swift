@@ -32,6 +32,21 @@ public struct AgentUsage: Equatable, Sendable {
     /// The fullest window, which is the one that stops work first.
     public var fullest: Window? { windows.max { $0.percent < $1.percent } }
 
+    /// Whether the agent can do no more work until something resets: a
+    /// window at 100%, or a limit it reports reached (a note such as
+    /// "Credits Depleted") with no window to show.
+    public var isDepleted: Bool {
+        if windows.contains(where: { $0.percent >= 100 }) { return true }
+        return windows.isEmpty && note != nil && !isUnknown
+    }
+
+    /// When a depleted agent can work again: the latest reset of the full
+    /// windows, since all of them must clear. Nil when the agent is not
+    /// depleted or reported no reset, as Codex does not for spent credits.
+    public var depletedUntil: Date? {
+        windows.filter { $0.percent >= 100 }.compactMap(\.resetsAt).max()
+    }
+
     /// The note an agent gets when nothing it last reported still holds.
     public static let unknownNote = "Usage unknown"
 
