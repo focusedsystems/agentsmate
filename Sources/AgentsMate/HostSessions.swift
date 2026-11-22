@@ -16,7 +16,7 @@ public struct HostSessionsConfiguration: Sendable {
     public var tmux: String
     /// The login shell the commands run in on each host.
     public var shell: String
-    /// A command run on each host that prints one `<key>\t<id>` line per
+    /// A `sh` command run on each host that prints one `<key>\t<id>` line per
     /// lane, tying a lane (by ``bindingKey``) to the Claude background
     /// session that is its own, by that session's short id. A lane bound
     /// this way is attached by id, never by name. Nil when the app has none.
@@ -82,7 +82,11 @@ enum HostSessions {
                      "echo; echo " + ShellQuote.quote(tmuxMark),
                      ShellQuote.quote(config.tmux) + " list-sessions -F '#{session_name}' 2>/dev/null",
                      "echo " + ShellQuote.quote(bindingsMark)]
-        if let bindings = config.bindingsCommand, !bindings.isEmpty { lines.append("{ " + bindings + "; } 2>/dev/null") }
+        // In sh, so a login shell's own rules (zsh ending the whole script
+        // on a glob that matches nothing) never cut the listing short.
+        if let bindings = config.bindingsCommand, !bindings.isEmpty {
+            lines.append("/bin/sh -c " + ShellQuote.quote(bindings) + " 2>/dev/null")
+        }
         lines.append("echo " + ShellQuote.quote(endMark))
         return lines.joined(separator: "; ")
     }

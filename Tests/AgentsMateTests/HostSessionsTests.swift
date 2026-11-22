@@ -35,6 +35,22 @@ final class HostSessionsParseTests: XCTestCase {
         XCTAssertNil(HostSessions.command(host: "-oProxyCommand=x", config: config))
         XCTAssertEqual(HostSessions.command(host: nil, config: config)?.executable, "/bin/zsh")
     }
+
+    func testTheLocalScriptRunsToTheEndEvenWhenTheBindingsGlobMatchesNothing() throws {
+        let config = HostSessionsConfiguration(claude: "/usr/bin/false", tmux: "/usr/bin/false",
+                                               bindingsCommand: #"for f in /nonexistent-agentsmate/*; do [ -f "$f" ] && echo "$f"; done"#)
+        let command = try XCTUnwrap(HostSessions.command(host: nil, config: config))
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: command.executable)
+        process.arguments = command.arguments
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        XCTAssertEqual(HostSessions.parse(String(decoding: data, as: UTF8.self)), HostSessionListing())
+    }
 }
 
 final class HostSessionsTargetTests: XCTestCase {
