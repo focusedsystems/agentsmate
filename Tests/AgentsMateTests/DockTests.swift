@@ -96,15 +96,41 @@ final class AgentsLaunchTests: XCTestCase {
         XCTAssertFalse(AgentsLaunch.opensFullScreen(keys, defaults: defaults))
     }
 
-    func testEnterAgentsModeFillsTheWindow() {
+    func testEnterAgentsModeFillsTheWindowAndStartsNothing() {
         let defaults = UserDefaults(suiteName: "agentsmate-launch-\(UUID().uuidString)")!
         let store = AgentLaneStore(configuration: .init(termProgram: "T", sessionFileDirectory: nil),
                                    backends: [CommandLaneBackend.shell], statusFeed: nil, defaults: defaults)
         store.add(AgentLane(id: "r", title: "Repo", backendID: "shell", isClosable: false), open: false)
+        store.selectedID = "r"
         store.enterAgentsMode()
+        store.openSelectedOnShow()
         XCTAssertTrue(store.dockVisible)
         XCTAssertTrue(store.dockMaximized)
-        XCTAssertEqual(store.lanes.map(\.id), ["r"], "a store with lanes opens no new one")
+        XCTAssertEqual(store.lanes.map(\.id), ["r"], "no lane is created")
+        XCTAssertFalse(store.sessions["r"]?.isAttached ?? false, "a lane not running is not started at launch")
+        store.openSelectedOnShow()
+        XCTAssertTrue(store.sessions["r"]?.isAttached ?? false, "after launch, showing the lanes opens the selected one")
+        store.detachAll()
+    }
+
+    func testEnterAgentsModeWithNoLanesCreatesNone() {
+        let defaults = UserDefaults(suiteName: "agentsmate-launch-\(UUID().uuidString)")!
+        let store = AgentLaneStore(configuration: .init(termProgram: "T", sessionFileDirectory: nil),
+                                   backends: [CommandLaneBackend.shell], statusFeed: nil, defaults: defaults)
+        store.enterAgentsMode()
+        store.openSelectedOnShow()
+        XCTAssertTrue(store.dockVisible)
+        XCTAssertTrue(store.lanes.isEmpty, "launch with no lanes opens none, unlike showDock")
+    }
+
+    func testShowDockOnRequestStillOpensTheSelectedLane() {
+        let defaults = UserDefaults(suiteName: "agentsmate-launch-\(UUID().uuidString)")!
+        let store = AgentLaneStore(configuration: .init(termProgram: "T", sessionFileDirectory: nil),
+                                   backends: [CommandLaneBackend.shell], statusFeed: nil, defaults: defaults)
+        store.add(AgentLane(id: "r", title: "Repo", backendID: "shell", isClosable: false), open: false)
+        store.selectedID = "r"
+        store.showDock()
+        XCTAssertTrue(store.sessions["r"]?.isAttached ?? false)
         store.detachAll()
     }
 }

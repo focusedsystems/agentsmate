@@ -5,6 +5,10 @@ import AppKit
 /// Both happen once, when the first window appears after launch, so leaving
 /// Agents mode or full screen later in the session is never undone.
 ///
+/// Launch starts no agent: no lane is created, and the terminal area shows
+/// the selected lane only if its session is already running (see
+/// ``AgentLaneStore/openSelectedOnShow()``).
+///
 /// Both are on unless the person turns them off with the store's
 /// ``AgentsModeKeys/agentsModeAtLaunch`` and
 /// ``AgentsModeKeys/fullScreenAtLaunch`` defaults.
@@ -29,20 +33,11 @@ public extension AgentsModeKeys {
     var fullScreenAtLaunch: String { prefix + "fullScreenAtLaunch" }
 }
 
-public extension AgentLaneStore {
-    /// Agents mode for an app that shows its lanes in ``AgentLaneDock``: the
-    /// dock open and filling the window.
-    func enterAgentsMode() {
-        if !dockVisible { showDock() }
-        dockMaximized = true
-    }
-}
-
 public extension View {
     /// Open the app the way ``AgentsLaunch`` says, the first time a window
     /// with this modifier appears in the process. `enterAgentsMode` switches
     /// the app into Agents mode; the default opens the store's dock filling
-    /// the window. Put it on the main window's root view.
+    /// the window (``AgentLaneStore/enterAgentsMode()``). Put it on the main window's root view.
     func agentsLaunch(_ store: AgentLaneStore, defaults: UserDefaults = .standard,
                       enterAgentsMode: (() -> Void)? = nil) -> some View {
         background(AgentsLaunchAnchor { window in
