@@ -72,16 +72,27 @@ final class StatusFilterTests: XCTestCase {
     }
 
     func testFiltersThatWouldHideEverythingTurnOff() {
-        let lanes: [(isActive: Bool, status: LaneDisplayStatus)] = [(true, .running), (true, .done)]
+        let lanes: [LaneStatusFilter.Lane] = [.init(isActive: true, status: .running), .init(isActive: true, status: .done)]
         XCTAssertEqual(LaneStatusFilter.settled([.running], newest: nil, lanes: lanes), [.running])
         // Running and Needs You together match nothing: the chip just
         // turned on stays, the other goes.
         XCTAssertEqual(LaneStatusFilter.settled([.running, .needsYou], newest: .running, lanes: lanes), [.running])
         // A lane stops running while Running is on: the filter clears.
-        let stopped: [(isActive: Bool, status: LaneDisplayStatus)] = [(true, .done), (false, .notOpened)]
+        let stopped: [LaneStatusFilter.Lane] = [.init(isActive: true, status: .done), .init(isActive: false, status: .notOpened)]
         XCTAssertEqual(LaneStatusFilter.settled([.running], newest: nil, lanes: stopped), [])
         XCTAssertEqual(LaneStatusFilter.settled([.running, .idle], newest: .idle, lanes: stopped), [.idle])
         XCTAssertEqual(LaneStatusFilter.settled([], newest: nil, lanes: []), [])
+    }
+
+    func testUnreadFollowsTheBlueDot() {
+        XCTAssertTrue(LaneStatusFilter.unread.admits(.init(isActive: true, status: .done, unread: true)))
+        XCTAssertTrue(LaneStatusFilter.unread.admits(.init(isActive: false, status: .notOpened, unread: true)))
+        XCTAssertFalse(LaneStatusFilter.unread.admits(.init(isActive: true, status: .waitingForInput)))
+        // Unread with nothing unread clears itself.
+        let read: [LaneStatusFilter.Lane] = [.init(isActive: true, status: .done)]
+        XCTAssertEqual(LaneStatusFilter.settled([.unread], newest: .unread, lanes: read), [])
+        XCTAssertEqual(LaneStatusFilter.settled([.unread, .idle], newest: .unread,
+                                                lanes: [.init(isActive: true, status: .done, unread: true)]), [.unread, .idle])
     }
 }
 
@@ -192,5 +203,32 @@ final class NewLaneInSectionTests: XCTestCase {
         XCTAssertFalse(store.canCollapseOtherSections(than: group(store, "Work")))
         store.setAllCollapsed(true)
         XCTAssertTrue(store.layout.collapsed.contains(LaneLayout.unsectionedKey))
+    }
+}
+
+@MainActor
+final class PinnedNumberTests: XCTestCase {
+    private func store() -> AgentLaneStore {
+        let config = AgentLaneStore.Configuration(termProgram: "T", sessionFileDirectory: nil, findsDetachedSessions: false)
+        let store = AgentLaneStore(configuration: config,
+                                   backends: [CommandLaneBackend(id: "agent", displayName: "Agent", command: "true")],
+                                   statusFeed: nil,
+                                   defaults: UserDefaults(suiteName: "agentsmate-pins-\(UUID().uuidString)")!)
+        store.sync(lanes: ["a", "b", "c", "d"].map {
+            AgentLane(id: $0, title: $0.uppercased(), directory: URL(fileURLWithPath: "/w/" + $0), backendID: "agent", section: "Cloud")
+        })
+        return store
+    }
+
+    func testOnlyPinnedRowsAreNumbered() {
+        let store = store()
+        XCTAssertTrue(store.numberedLanes.isEmpty, "nothing pinned, nothing numbered")
+        store.setPinned("c", true)
+        store.setPinned("a", true)
+        XCTAssertEqual(store.numberedLanes.map(\.id), ["a", "c"], "pinned rows in the order the list shows them")
+        store.open(index: 1)
+        XCTAssertEqual(store.selectedID, "c")
+        store.open(index: 2)
+        XCTAssertEqual(store.selectedID, "c", "a number past the pinned rows goes nowhere")
     }
 }
