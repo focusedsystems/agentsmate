@@ -4,6 +4,10 @@ import Foundation
 /// they opened themselves, each with its folder, backend, name and section.
 public struct LaneWorkspace: Codable, Equatable, Sendable, Identifiable {
     public struct Lane: Codable, Equatable, Sendable {
+        /// The lane's ``AgentLane/id``, reused when it is opened again so its
+        /// `$AGENTSMATE_LANE` never changes. Nil in files written before it
+        /// was kept; such a lane gets a new id.
+        public var id: String?
         public var title: String?
         public var directory: String?
         public var backendID: String
@@ -15,10 +19,21 @@ public struct LaneWorkspace: Codable, Equatable, Sendable, Identifiable {
         public var sessionName: String?
         /// The lane that was selected, in the restore snapshot.
         public var selected: Bool?
+        /// See ``AgentLane/host``.
+        public var host: String?
+        /// The command and variant flag of a ``CommandLaneBackend`` that
+        /// passes the folder, so the lane can be started without the app.
+        public var command: String?
+        public var variantFlag: String?
 
         public init(title: String? = nil, directory: String? = nil, backendID: String,
                     section: String? = nil, pinned: Bool? = nil, variant: String? = nil,
-                    sessionName: String? = nil, selected: Bool? = nil) {
+                    sessionName: String? = nil, selected: Bool? = nil, id: String? = nil,
+                    host: String? = nil, command: String? = nil, variantFlag: String? = nil) {
+            self.id = id
+            self.host = host
+            self.command = command
+            self.variantFlag = variantFlag
             self.variant = variant
             self.sessionName = sessionName
             self.selected = selected

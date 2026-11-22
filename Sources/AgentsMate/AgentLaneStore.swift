@@ -95,6 +95,10 @@ public final class AgentLaneStore: ObservableObject {
         /// lane sessions (``LaneBackend/discoverSessions()``) and list the
         /// ones no row attaches in a Detached section.
         public var findsDetachedSessions: Bool
+        /// The lane list shared by every Mac through the hub, when the hosts
+        /// registry (``AgentHosts``) is there. On by default for an app
+        /// bundle; without the registry lanes stay per-Mac. Nil turns it off.
+        public var sharedLanes: SharedLaneSettings?
         /// Asks the person for a folder when a section header's + starts a
         /// lane, opening at the folder given (nil for the system's choice),
         /// and returns nil when they cancel. The default is an `NSOpenPanel`
@@ -125,10 +129,12 @@ public final class AgentLaneStore: ObservableObject {
                     pullRequestLedgerFile: URL? = Configuration.defaultPullRequestLedgerFile,
                     pullRequestSeedFile: URL? = Configuration.defaultPullRequestSeedFile,
                     findsDetachedSessions: Bool = true,
+                    sharedLanes: SharedLaneSettings? = SharedLaneSettings.automatic(),
                     chooseFolder: @escaping @MainActor (_ startingAt: URL?) async -> URL? = AgentLaneStore.chooseFolderWithOpenPanel,
                     scrollSensitivity: CGFloat = 1) {
             self.scrollSensitivity = scrollSensitivity
             self.findsDetachedSessions = findsDetachedSessions
+            self.sharedLanes = sharedLanes
             self.chooseFolder = chooseFolder
             self.pullRequestResolvers = pullRequestResolvers
             self.pullRequestLedgerFile = pullRequestLedgerFile
@@ -159,7 +165,12 @@ public final class AgentLaneStore: ObservableObject {
     }
 
     @Published public private(set) var lanes: [AgentLane] = [] {
-        didSet { if lanes != oldValue { scheduleRestoreWrite() } }
+        didSet {
+            if lanes != oldValue {
+                scheduleRestoreWrite()
+                sharedLanes?.localChanged()
+            }
+        }
     }
     @Published public private(set) var sessions: [AgentLane.ID: AgentLaneSession] = [:]
     @Published public var selectedID: AgentLane.ID? {
@@ -247,6 +258,7 @@ public final class AgentLaneStore: ObservableObject {
             guard layout != oldValue, let data = try? JSONEncoder().encode(layout) else { return }
             defaults.set(data, forKey: keys.layout)
             scheduleRestoreWrite()
+            sharedLanes?.localChanged()
         }
     }
 
@@ -291,6 +303,10 @@ public final class AgentLaneStore: ObservableObject {
         startPullRequestLedger()
         if !configuration.usageSources.isEmpty { usage = AgentUsageModel(sources: configuration.usageSources) }
         if configuration.findsDetachedSessions { startDiscovery() }
+        if let settings = configuration.sharedLanes, let resolved = settings.resolve() {
+            agentHosts = resolved.hosts
+            sharedLanes = SharedLaneSync(store: self, transport: resolved.transport, cacheFile: settings.cacheFile)
+        }
         terminationObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
             // Terminals ending as the app quits are not the person closing
@@ -684,13 +700,16 @@ public final class AgentLaneStore: ObservableObject {
 
     private func workspace(named name: String, lanes opened: [AgentLane], marksSelection: Bool) -> LaneWorkspace {
         let lanes = opened.map { lane in
-            LaneWorkspace.Lane(title: layout.names[lane.id],
-                               directory: sessions[lane.id]?.currentDirectory ?? lane.directory?.path,
-                               backendID: lane.backendID,
-                               section: layout.section(of: lane),
-                               pinned: layout.pinned.contains(lane.id) ? true : nil,
-                               variant: lane.variant, sessionName: lane.sessionName,
-                               selected: marksSelection && lane.id == selectedID ? true : nil)
+            let wrapper = wrapperCommand(for: lane)
+            return LaneWorkspace.Lane(title: layout.names[lane.id],
+                                      directory: sessions[lane.id]?.currentDirectory ?? lane.directory?.path,
+                                      backendID: lane.backendID,
+                                      section: layout.section(of: lane),
+                                      pinned: layout.pinned.contains(lane.id) ? true : nil,
+                                      variant: lane.variant, sessionName: lane.sessionName,
+                                      selected: marksSelection && lane.id == selectedID ? true : nil,
+                                      id: lane.id, host: lane.host,
+                                      command: wrapper?.command, variantFlag: wrapper?.variantFlag)
         }
         let used = Set(lanes.compactMap(\.section))
         return LaneWorkspace(name: name, sections: layout.orderedSections(for: self.lanes).filter { used.contains($0) || layout.sections.contains($0) },
@@ -716,44 +735,70 @@ public final class AgentLaneStore: ObservableObject {
         writeWorkspaces { $0.openAtLaunch = name }
     }
 
-    /// Add a workspace's lanes, skipping any already open in the same folder
-    /// on the same backend. They wait until shown, apart from the first.
+    /// Add a workspace's lanes, each under the id it was saved with, skipping
+    /// any whose id is already open; so two lanes in one folder both come
+    /// back. A lane saved before ids were kept is skipped when one is open in
+    /// the same folder on the same backend, and gets a new id. They wait
+    /// until shown, apart from the first.
     public func open(workspace: LaneWorkspace, resume: Bool = false) {
         for name in workspace.sections { layout.addSection(name) }
         var first: AgentLane.ID?
         var chosen: AgentLane.ID?
         for saved in workspace.lanes {
-            let path = saved.directory.map { ($0 as NSString).expandingTildeInPath }
-            let already = lanes.contains { lane in
+            guard let id = addSaved(saved, resume: resume) else { continue }
+            if first == nil { first = id }
+            if saved.selected == true { chosen = id }
+        }
+        if let pick = chosen ?? first, selected?.lane.isClosable != true { selectedID = pick }
+    }
+
+    /// Add one saved lane without showing it, returning its id, or nil when
+    /// it is already open.
+    @discardableResult
+    func addSaved(_ saved: LaneWorkspace.Lane, resume: Bool) -> AgentLane.ID? {
+        let path = saved.directory.map { ($0 as NSString).expandingTildeInPath }
+        let already: Bool
+        if let id = saved.id {
+            already = lanes.contains { $0.id == id }
+        } else {
+            already = lanes.contains { lane in
                 guard !detachedIDs.contains(lane.id), lane.backendID == saved.backendID else { return false }
                 if let name = saved.sessionName ?? lane.sessionName { return name == lane.sessionName && name == saved.sessionName }
                 return lane.variant == saved.variant
                     && path.map { LaneStatusMatch.normalizedPath($0) == LaneStatusMatch.normalizedPath(lane.path) } ?? false
             }
-            if already { continue }
-            var lane = AgentLane(id: UUID().uuidString, title: saved.sessionName ?? (path as NSString?)?.lastPathComponent ?? "Lane",
-                                 directory: path.map { URL(fileURLWithPath: $0, isDirectory: true) },
-                                 backendID: saved.backendID, isClosable: true, section: saved.section)
-            lane.variant = saved.variant
-            lane.sessionName = saved.sessionName
-            // A session the restore brings back attaches here, so its
-            // Detached row (if the sweep already found it) goes.
-            if let name = saved.sessionName,
-               let row = lanes.first(where: { detachedIDs.contains($0.id) && $0.backendID == saved.backendID && $0.sessionName == name }),
-               sessions[row.id]?.isAttached != true {
-                removeDetachedRow(row.id)
-            }
-            add(lane, focus: false, open: false)
-            if resume {
-                sessions[lane.id]?.resumeOnStart = true
-                restoredPending.insert(lane.id)
-            }
-            if let title = saved.title { setName(lane.id, to: title) }
-            if saved.pinned == true { layout.setPinned(lane.id, true) }
-            if first == nil { first = lane.id }
-            if saved.selected == true { chosen = lane.id }
         }
-        if let pick = chosen ?? first, selected?.lane.isClosable != true { selectedID = pick }
+        if already { return nil }
+        var lane = AgentLane(id: saved.id ?? UUID().uuidString,
+                             title: saved.sessionName ?? (path as NSString?)?.lastPathComponent ?? "Lane",
+                             directory: path.map { URL(fileURLWithPath: $0, isDirectory: true) },
+                             backendID: saved.backendID, isClosable: true, section: saved.section)
+        lane.variant = saved.variant
+        lane.sessionName = saved.sessionName
+        lane.host = saved.host
+        // A session the restore brings back attaches here, so its
+        // Detached row (if the sweep already found it) goes.
+        if let name = saved.sessionName,
+           let row = lanes.first(where: { detachedIDs.contains($0.id) && $0.backendID == saved.backendID && $0.sessionName == name }),
+           sessions[row.id]?.isAttached != true {
+            removeDetachedRow(row.id)
+        }
+        add(lane, focus: false, open: false)
+        if resume {
+            sessions[lane.id]?.resumeOnStart = true
+            restoredPending.insert(lane.id)
+        }
+        if let title = saved.title { setName(lane.id, to: title) }
+        if saved.pinned == true { layout.setPinned(lane.id, true) }
+        return lane.id
+    }
+
+    /// The wrapper a lane runs, when its backend is a ``CommandLaneBackend``
+    /// that passes the folder.
+    func wrapperCommand(for lane: AgentLane) -> (command: String, variantFlag: String?)? {
+        guard let backend = backends[lane.backendID] as? CommandLaneBackend, backend.passesDirectory else { return nil }
+        let command = backend.command.trimmingCharacters(in: .whitespaces)
+        return command.isEmpty ? nil : (command, backend.variantFlag)
     }
 
     /// Record the lanes attached now, to reopen at the next launch. Call when
@@ -785,6 +830,100 @@ public final class AgentLaneStore: ObservableObject {
     private func currentRestore() -> LaneWorkspace? {
         let snapshot = restoreSnapshot()
         return snapshot.lanes.isEmpty ? nil : snapshot
+    }
+
+    // MARK: Shared lanes and hosts
+
+    /// The hosts registry (``AgentHosts``), when this Mac has one.
+    @Published public private(set) var agentHosts: AgentHosts?
+    /// Keeps the lane list in step with the hub's; nil without the registry.
+    var sharedLanes: SharedLaneSync?
+
+    /// The hosts Run On offers for a lane: the hub, then every lane host.
+    /// Empty without a registry, and for a lane whose backend is not a lane
+    /// wrapper that reads the host from its environment.
+    public func runOnHosts(for id: AgentLane.ID) -> [AgentHosts.Host] {
+        guard let hosts = agentHosts, let lane = lanes.first(where: { $0.id == id }), lane.isClosable,
+              !detachedIDs.contains(id), let backend = backends[lane.backendID] as? CommandLaneBackend,
+              backend.passesDirectory, backend.tmuxSessions?.host == nil else { return [] }
+        return hosts.laneHosts
+    }
+
+    /// The host a lane runs on: its own, else the hub.
+    public func host(of id: AgentLane.ID) -> String? {
+        lanes.first { $0.id == id }?.host ?? agentHosts?.hub?.name
+    }
+
+    /// Run a lane on `host` from now on, restarting its terminal when it is
+    /// attached so the wrapper starts there. The hub is recorded as no host.
+    public func setHost(_ id: AgentLane.ID, to host: String?) {
+        guard let index = lanes.firstIndex(where: { $0.id == id }), lanes[index].isClosable else { return }
+        let value = host.flatMap { $0.isEmpty || $0 == agentHosts?.hub?.name ? nil : $0 }
+        guard lanes[index].host != value else { return }
+        lanes[index].host = value
+        guard let session = sessions[id] else { return }
+        session.update(lane: lanes[index])
+        if session.isAttached { reattach(id) }
+    }
+
+    /// The lanes the person opened, as the shared list records them, in
+    /// list order. `updated` is left for the sync to fill in.
+    func sharedLaneEntries() -> [SharedLaneList.Lane] {
+        displayOrder.filter { $0.isClosable && !detachedIDs.contains($0.id) }.enumerated().map { order, lane in
+            let wrapper = wrapperCommand(for: lane)
+            return SharedLaneList.Lane(id: lane.id, title: layout.names[lane.id],
+                                       directory: lane.directory.map { SharedLaneList.tildePath($0.path) },
+                                       backendID: lane.backendID, command: wrapper?.command,
+                                       variantFlag: wrapper?.variantFlag, variant: lane.variant, host: lane.host,
+                                       section: layout.section(of: lane),
+                                       pinned: layout.pinned.contains(lane.id) ? true : nil,
+                                       order: order, updated: .distantPast)
+        }
+    }
+
+    /// Bring the sidebar in line with a merged list: add the lanes another
+    /// Mac opened, take away the ones closed elsewhere (their sessions keep
+    /// running), and take renames, moves, pins and hosts made elsewhere.
+    /// `captured` is what this Mac had when the sync began; a lane changed
+    /// here since is left alone, and so are the `skipping` ids.
+    func applyShared(_ list: SharedLaneList, captured: [SharedLaneList.Lane], skipping: Set<String>) {
+        let before = Dictionary(captured.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        var current = Dictionary(sharedLaneEntries().map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        let live = Set(list.lanes.map(\.id))
+        for close in list.closed where !live.contains(close.id) && current[close.id] != nil {
+            removeSharedLane(close.id)
+            current.removeValue(forKey: close.id)
+        }
+        for entry in list.lanes where !skipping.contains(entry.id) {
+            if let now = current[entry.id] {
+                guard let then = before[entry.id], then.sameContent(as: now), !entry.sameContent(as: now) else { continue }
+                if entry.title != now.title { setName(entry.id, to: entry.title) }
+                if entry.section != now.section { layout.move(entry.id, to: entry.section) }
+                if entry.pinned != now.pinned { layout.setPinned(entry.id, entry.pinned == true) }
+                if entry.host != now.host { setHost(entry.id, to: entry.host) }
+            } else if !lanes.contains(where: { $0.id == entry.id }), backends[entry.backendID] != nil {
+                addSaved(LaneWorkspace.Lane(title: entry.title, directory: entry.directory, backendID: entry.backendID,
+                                            section: entry.section, pinned: entry.pinned, variant: entry.variant,
+                                            id: entry.id, host: entry.host),
+                         resume: true)
+            }
+        }
+    }
+
+    /// Take a lane closed on another Mac out of the sidebar. Only the
+    /// terminal here ends; its session is never stopped.
+    func removeSharedLane(_ id: AgentLane.ID) {
+        guard let index = lanes.firstIndex(where: { $0.id == id }), lanes[index].isClosable else { return }
+        restoredPending.remove(id)
+        sessions[id]?.detach()
+        sessions.removeValue(forKey: id)
+        lanes.remove(at: index)
+        if splitID == id { splitID = nil }
+        if selectedID == id {
+            let neighbour = lanes.indices.contains(index) ? lanes[index] : lanes.last
+            selectedID = neighbour?.id
+        }
+        reconcileDetached()
     }
 
     // MARK: Restore snapshot
@@ -846,7 +985,10 @@ public final class AgentLaneStore: ObservableObject {
     /// open at launch. Returns whether anything was added.
     @discardableResult
     public func restoreAtLaunch() -> Bool {
-        defer { restoreSettled = true }
+        defer {
+            restoreSettled = true
+            sharedLanes?.start()
+        }
         reloadWorkspaces()
         if let restore = workspaces.restore, !restore.lanes.isEmpty {
             open(workspace: restore, resume: true)
@@ -1146,7 +1288,10 @@ public final class AgentLaneStore: ObservableObject {
     /// quit (or the launch workspace), else open one new lane in the
     /// background, else nothing.
     public func performLaunchBehavior(newLaneDirectory: URL? = nil) {
-        defer { restoreSettled = true }
+        defer {
+            restoreSettled = true
+            sharedLanes?.start()
+        }
         let reopen = defaults.object(forKey: keys.reopenLast) as? Bool ?? true
         if reopen, configuration.workspaceFile != nil, restoreAtLaunch() { return }
         if defaults.bool(forKey: keys.openAtLaunch), !lanes.contains(where: \.isClosable) {
@@ -1524,6 +1669,7 @@ public final class AgentLaneStore: ObservableObject {
         }
         let closed = lanes[index]
         restoredPending.remove(id)
+        if !detachedIDs.contains(id) { sharedLanes?.closed(id) }
         defer {
             // A session left running shows in Detached again.
             reconcileDetached()

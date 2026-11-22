@@ -113,6 +113,7 @@ public struct AgentLaneCommands: Commands {
             .laneShortcut(store.shortcuts.binding(for: .reattach))
             .disabled(store.selectedID == nil)
             LaneReopenMenu(store: store, reveal: reveal)
+            LaneRunOnMenu(store: store, id: store.selectedID, reveal: reveal)
             Button("Detach") {
                 if let id = store.selectedID { store.detach(id) }
             }

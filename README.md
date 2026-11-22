@@ -43,6 +43,8 @@ A name the person gives the row wins over that, which wins over the task in the
 agent's terminal title.
 
 Backends and the case for each: [docs/backends.md](docs/backends.md).
+Every Mac showing the same lanes, and running a lane on another host:
+[docs/shared-lanes.md](docs/shared-lanes.md).
 
 ## Summaries
 

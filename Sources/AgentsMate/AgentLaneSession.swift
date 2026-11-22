@@ -410,10 +410,18 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
         }
         for (key, value) in configuration.environment { env[key] = value }
         for (key, value) in launch.environment { env[key] = value }
+        for (key, value) in Self.hostEnvironment(for: lane) { env[key] = value }
         for (key, value) in lane.environment { env[key] = value }
         view.startProcess(executable: launch.executable, args: launch.arguments,
                           environment: env.map { "\($0.key)=\($0.value)" },
                           execName: nil, currentDirectory: launch.directory)
+    }
+
+    /// What tells the lane wrappers which host to run a lane on: nothing
+    /// when ``AgentLane/host`` is nil, so they keep their own default.
+    nonisolated static func hostEnvironment(for lane: AgentLane) -> [String: String] {
+        guard let host = lane.host, !host.isEmpty else { return [:] }
+        return ["CLAUDE_REMOTE_HOST": host, "CODEX_REMOTE_HOST": host]
     }
 
     /// An app started from inside another terminal or agent inherits its
