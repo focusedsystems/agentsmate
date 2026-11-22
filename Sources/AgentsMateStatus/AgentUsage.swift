@@ -8,11 +8,15 @@ public struct AgentUsage: Equatable, Sendable {
         /// 0–100.
         public var percent: Double
         public var resetsAt: Date?
+        /// How long the window runs, when the source says, so a reset that
+        /// has passed can be carried to the next one.
+        public var length: TimeInterval?
 
-        public init(label: String, percent: Double, resetsAt: Date? = nil) {
+        public init(label: String, percent: Double, resetsAt: Date? = nil, length: TimeInterval? = nil) {
             self.label = label
             self.percent = percent
             self.resetsAt = resetsAt
+            self.length = length
         }
     }
 
@@ -22,8 +26,8 @@ public struct AgentUsage: Equatable, Sendable {
     public var note: String?
     public var readAt: Date
     /// When a limit reported with no window of its own comes back, when the
-    /// source can tell: for Codex's spent credits, the latest window reset
-    /// its earlier records still give in the future.
+    /// source can tell: for Codex's spent credits, the reset Codex reports
+    /// for them, else one its window records give.
     public var resetsAt: Date?
 
     public init(agent: String, windows: [Window], note: String? = nil, readAt: Date = Date(), resetsAt: Date? = nil) {
@@ -105,52 +109,90 @@ public enum AgentSignIn {
 
 /// Codex's limits, from the `rate_limits` it records in its newest session
 /// file under `~/.codex/sessions`.
+///
+/// When Codex reports a limit reached with no window of its own (spent
+/// workspace credits), the reset comes from, in order: Codex's own account
+/// read (``CodexLimitsReader``, what the Codex app shows), the latest window
+/// reset a record still gives in the future, then the latest window reset any
+/// record gives, rolled forward by its window's length until it is to come.
 public struct CodexSessionUsageSource: AgentUsageSource {
     public let root: URL
     let signedIn: @Sendable () -> Bool
+    let limits: CodexLimitsReader?
 
     /// Reads nothing while Codex is signed out, so the meter leaves it out.
+    /// `limits` asks Codex itself for the reset while credits are spent; nil
+    /// keeps every read to the session files.
     public init(root: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex/sessions"),
-                signedIn: @escaping @Sendable () -> Bool = { AgentSignIn.codex() }) {
+                signedIn: @escaping @Sendable () -> Bool = { AgentSignIn.codex() },
+                limits: CodexLimitsReader? = CodexLimitsReader()) {
         self.root = root
         self.signedIn = signedIn
+        self.limits = limits
     }
 
     public func read() -> AgentUsage? {
         guard signedIn() else { return nil }
         let texts = recentSessions().compactMap { tail(of: $0) }
-        return Self.usage(fromNewestFirst: texts)
+        let now = Date()
+        return Self.usage(fromNewestFirst: texts, now: now,
+                          authoritative: { limits?.depletedUntil(now: now) },
+                          older: { recentSessions(limit: 20, maxAge: nil).compactMap { tail(of: $0) } })
     }
 
     /// The usage in session text, newest file first: the newest record's.
-    /// When that record says a limit is reached and gives no reset (Codex's
-    /// spent credits carry no window), the latest window reset any recent
-    /// record still gives in the future stands in for it.
-    static func usage(fromNewestFirst texts: [String], now: Date = Date()) -> AgentUsage? {
+    /// When that record says a limit is reached and gives no reset, the reset
+    /// comes from `authoritative`, else the records' windows: the latest
+    /// reset still to come, else the latest one rolled forward by its window
+    /// length. `older` gives more text, read only when the first gives no
+    /// window at all.
+    static func usage(fromNewestFirst texts: [String], now: Date = Date(),
+                      authoritative: () -> Date? = { nil },
+                      older: () -> [String] = { [] }) -> AgentUsage? {
         var latest: AgentUsage?
-        var futureReset: Date?
+        var windows: [AgentUsage.Window] = []
         for text in texts {
             for line in text.split(separator: "\n").reversed() where line.contains("\"rate_limits\"") {
                 guard let usage = parse(line: String(line), now: now) else { continue }
                 if latest == nil { latest = usage }
-                for reset in usage.windows.compactMap(\.resetsAt) where reset > now {
-                    futureReset = max(futureReset ?? reset, reset)
-                }
+                windows += usage.windows
             }
-            if latest != nil, latest?.isDepleted != true || latest?.depletedUntil != nil { break }
         }
         guard var usage = latest else { return nil }
-        if usage.isDepleted, usage.depletedUntil == nil { usage.resetsAt = futureReset }
+        guard usage.isDepleted, usage.depletedUntil == nil else { return usage }
+        if let reset = authoritative(), reset > now {
+            usage.resetsAt = reset
+            return usage
+        }
+        if !windows.contains(where: { $0.resetsAt != nil }) {
+            for text in older() {
+                for line in text.split(separator: "\n") where line.contains("\"rate_limits\"") {
+                    windows += parse(line: String(line), now: now)?.windows ?? []
+                }
+            }
+        }
+        usage.resetsAt = nextReset(of: windows, after: now)
         return usage
     }
 
-    /// Codex files sessions by date: the few newest of the last week, newest
-    /// first.
-    func recentSessions(limit: Int = 5) -> [URL] {
+    /// The latest reset still to come; failing that, the latest reset rolled
+    /// forward by its window's length to the first one after `now`.
+    static func nextReset(of windows: [AgentUsage.Window], after now: Date) -> Date? {
+        if let future = windows.compactMap(\.resetsAt).filter({ $0 > now }).max() { return future }
+        return windows.compactMap { window -> Date? in
+            guard let reset = window.resetsAt, let length = window.length, length > 0 else { return nil }
+            let periods = (now.timeIntervalSince(reset) / length).rounded(.down) + 1
+            return reset.addingTimeInterval(periods * length)
+        }.max()
+    }
+
+    /// Codex files sessions by date: the few newest, newest first, of those
+    /// changed within `maxAge` (any age when nil).
+    func recentSessions(limit: Int = 5, maxAge: TimeInterval? = 7 * 24 * 3600) -> [URL] {
         let fm = FileManager.default
         guard let files = fm.enumerator(at: root, includingPropertiesForKeys: [.contentModificationDateKey]) else { return [] }
         var found: [(URL, Date)] = []
-        let cutoff = Date().addingTimeInterval(-7 * 24 * 3600)
+        let cutoff = maxAge.map { Date().addingTimeInterval(-$0) } ?? .distantPast
         for case let url as URL in files where url.pathExtension == "jsonl" {
             guard let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate,
                   date > cutoff else { continue }
@@ -182,13 +224,16 @@ public struct CodexSessionUsageSource: AgentUsageSource {
             else if let seconds = (w["resets_in_seconds"] as? NSNumber)?.doubleValue { resets = now.addingTimeInterval(seconds) }
             let minutes = (w["window_minutes"] as? NSNumber)?.intValue
             let label = minutes.map { $0 >= 7 * 24 * 60 ? "Week" : $0 >= 24 * 60 ? "Day" : "\($0 / 60)h" } ?? fallback
-            windows.append(.init(label: label, percent: used, resetsAt: resets))
+            windows.append(.init(label: label, percent: used, resetsAt: resets, length: minutes.map { Double($0) * 60 }))
         }
         let reached = (limits["rate_limit_reached_type"] as? String).map {
             $0.replacingOccurrences(of: "_", with: " ").capitalized
         }
         guard !windows.isEmpty || reached != nil else { return nil }
-        return AgentUsage(agent: "Codex", windows: windows, note: reached)
+        // A spend limit of the member's own carries its reset.
+        let spendReset = ((limits["individual_limit"] as? [String: Any])?["resets_at"] as? NSNumber)
+            .map { Date(timeIntervalSince1970: $0.doubleValue) }
+        return AgentUsage(agent: "Codex", windows: windows, note: reached, resetsAt: spendReset)
     }
 
     static func find(_ key: String, in value: Any) -> Any? {
@@ -199,6 +244,173 @@ public struct CodexSessionUsageSource: AgentUsageSource {
             for child in array { if let hit = find(key, in: child) { return hit } }
         }
         return nil
+    }
+}
+
+/// When Codex's spent limit resets, as Codex itself reports it: the account
+/// read (`account/rateLimits/read`) of `codex app-server`, the same answer
+/// the Codex app gives. It runs the command at most once per ``interval``,
+/// at background QoS with a timeout, and answers from the last run between.
+public final class CodexLimitsReader: @unchecked Sendable {
+    public let interval: TimeInterval
+    let run: @Sendable () -> String?
+
+    private let lock = NSLock()
+    private var lastRun = Date.distantPast
+    private var reset: Date?
+
+    /// `executable` is the `codex` command; nil looks for it.
+    public convenience init(executable: URL? = nil, interval: TimeInterval = 600, timeout: TimeInterval = 20) {
+        self.init(interval: interval) {
+            guard let codex = executable ?? CommandLocator.locate("codex") else { return nil }
+            return Self.accountLimits(codex: codex, timeout: timeout)
+        }
+    }
+
+    init(interval: TimeInterval, run: @escaping @Sendable () -> String?) {
+        self.interval = interval
+        self.run = run
+    }
+
+    /// When the spent limit lifts, if it is still to come at `now`.
+    public func depletedUntil(now: Date = Date()) -> Date? {
+        lock.lock()
+        let due = now.timeIntervalSince(lastRun) >= interval
+        if due { lastRun = now }
+        lock.unlock()
+        if due, let output = run() {
+            let found = Self.parse(output)
+            lock.lock()
+            if let found { reset = found }
+            lock.unlock()
+        }
+        lock.lock()
+        defer { lock.unlock() }
+        return reset.flatMap { $0 > now ? $0 : nil }
+    }
+
+    /// The reset in an `account/rateLimits/read` result: the reset Codex
+    /// gives for the reached limit, else the member's spend limit's, else
+    /// the latest of the full windows'.
+    static func parse(_ output: String) -> Date? {
+        for line in output.split(separator: "\n") {
+            guard let data = line.data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let result = object["result"] as? [String: Any],
+                  result["rateLimits"] != nil || result["rateLimitsByLimitId"] != nil else { continue }
+            let date = { (value: Any?) in (value as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue) } }
+            if let at = date((result["rateLimitUpsell"] as? [String: Any])?["reset_at"]) { return at }
+            var snapshots = (result["rateLimitsByLimitId"] as? [String: Any])?.values.compactMap { $0 as? [String: Any] } ?? []
+            if let main = result["rateLimits"] as? [String: Any] { snapshots.insert(main, at: 0) }
+            for snapshot in snapshots {
+                if let at = date((snapshot["individualLimit"] as? [String: Any])?["resetsAt"]) { return at }
+            }
+            let full = snapshots.flatMap { snapshot in
+                ["primary", "secondary"].compactMap { snapshot[$0] as? [String: Any] }
+            }.filter { (($0["usedPercent"] as? NSNumber)?.doubleValue ?? 0) >= 100 }
+            return full.compactMap { date($0["resetsAt"]) }.max()
+        }
+        return nil
+    }
+
+    /// Starts `codex app-server`, asks for the account's limits and returns
+    /// the reply line, or nil when none comes within `timeout`.
+    static func accountLimits(codex: URL, timeout: TimeInterval) -> String? {
+        let process = Process()
+        process.qualityOfService = .background
+        process.executableURL = codex
+        process.arguments = ["app-server"]
+        let input = Pipe(), output = Pipe()
+        process.standardInput = input
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        let replied = DispatchSemaphore(value: 0)
+        let buffer = LockedBuffer()
+        output.fileHandleForReading.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            if chunk.isEmpty { handle.readabilityHandler = nil; replied.signal(); return }
+            if buffer.append(chunk) { replied.signal() }
+        }
+        do { try process.run() } catch {
+            output.fileHandleForReading.readabilityHandler = nil
+            return nil
+        }
+        let requests = [
+            #"{"id":1,"method":"initialize","params":{"clientInfo":{"name":"agentsmate","version":"1"}}}"#,
+            #"{"method":"initialized"}"#,
+            #"{"id":2,"method":"account/rateLimits/read"}"#,
+        ].joined(separator: "\n") + "\n"
+        try? input.fileHandleForWriting.write(contentsOf: Data(requests.utf8))
+        _ = replied.wait(timeout: .now() + timeout)
+        output.fileHandleForReading.readabilityHandler = nil
+        try? input.fileHandleForWriting.close()
+        if process.isRunning { process.terminate() }
+        return buffer.reply
+    }
+
+    /// The app server's output as it arrives, until the reply to request 2.
+    private final class LockedBuffer: @unchecked Sendable {
+        private let lock = NSLock()
+        private var data = Data()
+        private(set) var reply: String? {
+            get { lock.lock(); defer { lock.unlock() }; return _reply }
+            set { lock.lock(); _reply = newValue; lock.unlock() }
+        }
+        private var _reply: String?
+
+        /// Adds a chunk; true once the reply has arrived.
+        func append(_ chunk: Data) -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            guard _reply == nil else { return true }
+            data.append(chunk)
+            let text = String(decoding: data, as: UTF8.self)
+            if let line = text.split(separator: "\n").first(where: { $0.contains(#""id":2"#) && $0.hasSuffix("}") }) {
+                _reply = String(line)
+                return true
+            }
+            return false
+        }
+    }
+}
+
+/// Where a command-line tool is installed. A GUI app does not inherit the
+/// person's shell PATH, so the usual install locations are checked first,
+/// then a login shell is asked.
+enum CommandLocator {
+    static func locate(_ name: String, extra: [String] = []) -> URL? {
+        let fm = FileManager.default
+        let home = fm.homeDirectoryForCurrentUser.path
+        let candidates = extra + ["\(home)/.local/bin/\(name)", "/opt/homebrew/bin/\(name)", "/usr/local/bin/\(name)"]
+        for path in candidates where fm.isExecutableFile(atPath: path) {
+            return URL(fileURLWithPath: path)
+        }
+        return loginShellLookup(name)
+    }
+
+    static func loginShellLookup(_ name: String) -> URL? {
+        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        let process = Process()
+        // Callers may wait on this while an app starts, so it must not queue
+        // behind background work.
+        process.qualityOfService = .userInitiated
+        process.executableURL = URL(fileURLWithPath: shell)
+        process.arguments = ["-lic", "command -v \(name)"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            return nil
+        }
+        guard process.terminationStatus == 0,
+              let data = try? pipe.fileHandleForReading.readToEnd(),
+              let raw = String(data: data, encoding: .utf8) else { return nil }
+        let path = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !path.isEmpty, FileManager.default.isExecutableFile(atPath: path) else { return nil }
+        return URL(fileURLWithPath: path)
     }
 }
 
