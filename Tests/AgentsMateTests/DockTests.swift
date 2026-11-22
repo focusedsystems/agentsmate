@@ -82,3 +82,29 @@ final class HistoryPaletteTests: XCTestCase {
         store.detachAll()
     }
 }
+
+@MainActor
+final class AgentsLaunchTests: XCTestCase {
+    func testLaunchOpensAgentsModeAndFullScreenUnlessTurnedOff() {
+        let defaults = UserDefaults(suiteName: "agentsmate-launch-\(UUID().uuidString)")!
+        let keys = AgentsModeKeys(prefix: "app.")
+        XCTAssertTrue(AgentsLaunch.opensAgentsMode(keys, defaults: defaults))
+        XCTAssertTrue(AgentsLaunch.opensFullScreen(keys, defaults: defaults))
+        defaults.set(false, forKey: keys.agentsModeAtLaunch)
+        defaults.set(false, forKey: keys.fullScreenAtLaunch)
+        XCTAssertFalse(AgentsLaunch.opensAgentsMode(keys, defaults: defaults))
+        XCTAssertFalse(AgentsLaunch.opensFullScreen(keys, defaults: defaults))
+    }
+
+    func testEnterAgentsModeFillsTheWindow() {
+        let defaults = UserDefaults(suiteName: "agentsmate-launch-\(UUID().uuidString)")!
+        let store = AgentLaneStore(configuration: .init(termProgram: "T", sessionFileDirectory: nil),
+                                   backends: [CommandLaneBackend.shell], statusFeed: nil, defaults: defaults)
+        store.add(AgentLane(id: "r", title: "Repo", backendID: "shell", isClosable: false), open: false)
+        store.enterAgentsMode()
+        XCTAssertTrue(store.dockVisible)
+        XCTAssertTrue(store.dockMaximized)
+        XCTAssertEqual(store.lanes.map(\.id), ["r"], "a store with lanes opens no new one")
+        store.detachAll()
+    }
+}
