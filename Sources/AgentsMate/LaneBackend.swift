@@ -125,6 +125,11 @@ public protocol LaneBackend: Sendable {
     /// daemon holds. Called at launch and about every ten minutes, off the
     /// main actor; keep it to one bounded helper process. Empty by default.
     func discoverSessions() async -> [DiscoveredSession]
+    /// The process that attaches the lane's session if it is running and
+    /// does nothing else: no wrapper, no new session if it has gone. Nil
+    /// when the backend cannot attach a session without possibly starting
+    /// one. What launch uses to open a lane by itself. Nil by default.
+    func attachLaunch(for lane: AgentLane, shell: String) -> TerminalLaunch?
 }
 
 public extension LaneBackend {
@@ -135,6 +140,7 @@ public extension LaneBackend {
     func canStop(_ lane: AgentLane) -> Bool { canStop }
     func sessionName(for lane: AgentLane) -> String? { lane.sessionName }
     func discoverSessions() async -> [DiscoveredSession] { [] }
+    func attachLaunch(for lane: AgentLane, shell: String) -> TerminalLaunch? { nil }
 }
 
 /// Runs a command without waiting for it, for stopping a lane.
@@ -271,6 +277,17 @@ public struct CommandLaneBackend: LaneBackend {
         }
         if returnsToShell { line += "; exec " + ShellQuote.quote(shell) + " -l" }
         return TerminalLaunch(executable: shell, arguments: ["-l", "-i", "-c", line], directory: directory)
+    }
+
+    /// `exec tmux attach-session -t =<name>` for a lane whose tmux session
+    /// on this Mac is known by name, with no fallback: if the session has
+    /// gone the terminal ends rather than run the wrapper. Nil for a lane
+    /// on another host or with no session name.
+    public func attachLaunch(for lane: AgentLane, shell: String) -> TerminalLaunch? {
+        guard keepsRunningWhenDetached, let tmux = tmuxSessions, tmux.host == nil,
+              let name = sessionName(for: lane), TmuxLaneSessions.isValidSessionName(name) else { return nil }
+        let line = tmux.localAttachLine(session: name, fallback: nil)
+        return TerminalLaunch(executable: shell, arguments: ["-l", "-i", "-c", line], directory: lane.path)
     }
 
     /// A lane on ``TmuxLaneSessions/host``: attach its session there by

@@ -162,3 +162,78 @@ final class AgentsLaunchTests: XCTestCase {
         XCTAssertEqual(list.locate(for: lane, match: .session("abc"))?.byName, false)
     }
 }
+
+/// A persistent backend that counts which launch the store asked for.
+private final class LaunchCounter: @unchecked Sendable {
+    var launches = 0
+    var attaches = 0
+}
+
+private struct CountingBackend: LaneBackend {
+    let id = "counting"
+    let displayName = "Counting"
+    let keepsRunningWhenDetached = true
+    let counter: LaunchCounter
+    let canAttach: Bool
+
+    func launch(for lane: AgentLane, shell: String) -> TerminalLaunch {
+        counter.launches += 1
+        return TerminalLaunch(executable: "/usr/bin/true", arguments: [], directory: lane.path)
+    }
+
+    func statusMatch(for lane: AgentLane) -> LaneStatusMatch { .lane("own") }
+
+    func attachLaunch(for lane: AgentLane, shell: String) -> TerminalLaunch? {
+        guard canAttach else { return nil }
+        counter.attaches += 1
+        return TerminalLaunch(executable: "/usr/bin/true", arguments: [], directory: lane.path)
+    }
+}
+
+@MainActor
+final class AttachOnlyLaunchTests: XCTestCase {
+    private func store(_ backend: CountingBackend) -> AgentLaneStore {
+        let defaults = UserDefaults(suiteName: "agentsmate-attach-\(UUID().uuidString)")!
+        let store = AgentLaneStore(configuration: .init(termProgram: "T", sessionFileDirectory: nil),
+                                   backends: [backend], statusFeed: nil, defaults: defaults)
+        store.add(AgentLane(id: "r", title: "Repo", backendID: "counting", isClosable: false), open: false)
+        store.selectedID = "r"
+        store.sessions["r"]?.resumeOnStart = true
+        store.apply(presence: [LanePresence(name: "own", directory: nil, attachedClients: 0)])
+        return store
+    }
+
+    func testLaunchAttachesThroughTheAttachOnlyLaunchAndNeverTheStartOne() {
+        let counter = LaunchCounter()
+        let store = store(CountingBackend(counter: counter, canAttach: true))
+        XCTAssertTrue(store.sessions["r"]?.isPresentByName ?? false)
+        store.enterAgentsMode()
+        store.openSelectedOnShow()
+        XCTAssertGreaterThan(counter.attaches, 0, "the session is attached")
+        XCTAssertEqual(counter.launches, 0, "the start launch, which can make a session, is never used")
+        store.detachAll()
+    }
+
+    func testABackendWithNoAttachOnlyLaunchIsNotOpenedAtLaunch() {
+        let counter = LaunchCounter()
+        let store = store(CountingBackend(counter: counter, canAttach: false))
+        store.enterAgentsMode()
+        store.openSelectedOnShow()
+        XCTAssertFalse(store.sessions["r"]?.isAttached ?? true)
+        XCTAssertEqual(counter.launches, 0)
+    }
+
+    func testTmuxAttachLaunchHasNoFallback() {
+        let tmux = CommandLaneBackend.tmuxLane(id: "t", displayName: "T", command: "lane-wrapper", statusAgent: "claude",
+                                               tmuxSessions: TmuxLaneSessions())
+        var lane = AgentLane(id: "x", title: "X", directory: URL(fileURLWithPath: "/w/a"), backendID: "t")
+        XCTAssertNil(tmux.attachLaunch(for: lane, shell: "/bin/zsh"), "no session name, nothing to attach")
+        lane.sessionName = "a-lane"
+        let line = tmux.attachLaunch(for: lane, shell: "/bin/zsh")?.arguments.last ?? ""
+        XCTAssertTrue(line.hasPrefix("exec "), line)
+        XCTAssertTrue(line.contains("attach-session -t '=a-lane'"), line)
+        XCTAssertFalse(line.contains("lane-wrapper"), "never falls back to the wrapper")
+        XCTAssertNil(CommandLaneBackend.shell.attachLaunch(for: lane, shell: "/bin/zsh"))
+    }
+}
+

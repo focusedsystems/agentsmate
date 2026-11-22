@@ -1255,10 +1255,12 @@ public final class AgentLaneStore: ObservableObject {
     /// Show the selected lane's terminal as the lanes come on screen. The
     /// first time after launch, that is only a lane whose session already
     /// runs: one attached here is shown as it is, and one not attached is
-    /// attached only when its backend keeps sessions running detached and
-    /// a presence source lists the session under the lane's own tmux name
-    /// (never a session that merely shares its folder), without resuming a
-    /// conversation. Nothing is created, and nothing new is started.
+    /// attached only when its backend keeps sessions running detached, a
+    /// presence source lists the session under the lane's own tmux name
+    /// (never a session that merely shares its folder), and the backend has
+    /// an attach-only launch for it (``LaneBackend/attachLaunch(for:shell:)``).
+    /// That launch never resumes or starts anything; if the session has gone
+    /// the row shows Reattach. Nothing is created, and nothing new is started.
     public func openSelectedOnShow(focus: Bool = true) {
         guard firstShowPending else { return openSelected(focus: focus) }
         firstShowPending = false
@@ -1266,8 +1268,10 @@ public final class AgentLaneStore: ObservableObject {
         if session.isAttached {
             if focus { session.wantsFocus = true }
             updateShown()
-        } else if session.backend.keepsRunningWhenDetached, session.isPresentByName {
+        } else if session.backend.keepsRunningWhenDetached, session.isPresentByName,
+                  session.backend.attachLaunch(for: session.lane, shell: "/bin/sh") != nil {
             session.resumeOnStart = false
+            session.attachOnlyOnStart = true
             open(id, focus: focus)
         }
     }

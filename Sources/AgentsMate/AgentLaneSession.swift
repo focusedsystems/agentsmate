@@ -161,6 +161,10 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
     /// Start by resuming the agent's last conversation, once. Set for lanes
     /// brought back at launch.
     public var resumeOnStart = false
+    /// The next start only attaches the running session, through the
+    /// backend's ``LaneBackend/attachLaunch(for:shell:)``; if it cannot, the
+    /// terminal ends and the row shows Reattach, and nothing else runs.
+    var attachOnlyOnStart = false
 
     /// Whether a program other than the shell has the terminal: the
     /// foreground process group of the pseudo-terminal is not the shell's.
@@ -397,8 +401,17 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
 
     private func startProcess(configuration: AgentLaneStore.Configuration) {
         let shell = ProcessInfo.processInfo.environment["SHELL"].flatMap { $0.isEmpty ? nil : $0 } ?? "/bin/zsh"
-        let launch = (resumeOnStart ? backend.resumeLaunch(for: lane, shell: shell) : nil)
-            ?? backend.launch(for: lane, shell: shell)
+        let attachOnly = attachOnlyOnStart
+        attachOnlyOnStart = false
+        let launch: TerminalLaunch
+        if attachOnly {
+            // `/usr/bin/false` ends at once, so the row shows Reattach.
+            launch = backend.attachLaunch(for: lane, shell: shell)
+                ?? TerminalLaunch(executable: "/usr/bin/false", arguments: [], directory: lane.path)
+        } else {
+            launch = (resumeOnStart ? backend.resumeLaunch(for: lane, shell: shell) : nil)
+                ?? backend.launch(for: lane, shell: shell)
+        }
         resumeOnStart = false
         var env = Self.scrubbed(ProcessInfo.processInfo.environment)
         env["TERM"] = "xterm-256color"
