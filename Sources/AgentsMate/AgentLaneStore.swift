@@ -1268,8 +1268,8 @@ public final class AgentLaneStore: ObservableObject {
         if session.isAttached {
             if focus { session.wantsFocus = true }
             updateShown()
-        } else if session.backend.keepsRunningWhenDetached, session.isPresentByName,
-                  session.backend.attachLaunch(for: session.lane, shell: "/bin/sh") != nil {
+        } else if session.backend.keepsRunningWhenDetached, let name = session.presenceName,
+                  session.backend.attachLaunch(for: session.lane, sessionName: name, shell: "/bin/sh") != nil {
             session.resumeOnStart = false
             session.attachOnlyOnStart = true
             open(id, focus: focus)
@@ -1967,7 +1967,7 @@ public final class AgentLaneStore: ObservableObject {
             let match = session.lane.statusMatch ?? session.backend.statusMatch(for: session.lane)
             let found = presence.locate(for: session.lane, match: match)
             session.update(orphan: configuration.highlightsOrphans && found?.presence.attachedClients == 0 && !session.isAttached)
-            session.update(present: found != nil, byName: found?.byName ?? false)
+            session.update(present: found != nil, byName: found?.byName ?? false, name: found?.presence.name)
         }
         objectWillChange.send()
     }

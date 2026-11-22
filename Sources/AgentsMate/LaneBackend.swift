@@ -125,11 +125,13 @@ public protocol LaneBackend: Sendable {
     /// daemon holds. Called at launch and about every ten minutes, off the
     /// main actor; keep it to one bounded helper process. Empty by default.
     func discoverSessions() async -> [DiscoveredSession]
-    /// The process that attaches the lane's session if it is running and
-    /// does nothing else: no wrapper, no new session if it has gone. Nil
-    /// when the backend cannot attach a session without possibly starting
-    /// one. What launch uses to open a lane by itself. Nil by default.
-    func attachLaunch(for lane: AgentLane, shell: String) -> TerminalLaunch?
+    /// The process that attaches exactly the session named `sessionName` if
+    /// it is running and does nothing else: no wrapper, no new session if it
+    /// has gone. Nil when that is not the session the backend resolves for
+    /// the lane (``sessionName(for:)``), or when the backend cannot attach
+    /// without possibly starting one. What launch uses to open a lane by
+    /// itself. Nil by default.
+    func attachLaunch(for lane: AgentLane, sessionName: String, shell: String) -> TerminalLaunch?
 }
 
 public extension LaneBackend {
@@ -140,7 +142,7 @@ public extension LaneBackend {
     func canStop(_ lane: AgentLane) -> Bool { canStop }
     func sessionName(for lane: AgentLane) -> String? { lane.sessionName }
     func discoverSessions() async -> [DiscoveredSession] { [] }
-    func attachLaunch(for lane: AgentLane, shell: String) -> TerminalLaunch? { nil }
+    func attachLaunch(for lane: AgentLane, sessionName: String, shell: String) -> TerminalLaunch? { nil }
 }
 
 /// Runs a command without waiting for it, for stopping a lane.
@@ -280,12 +282,13 @@ public struct CommandLaneBackend: LaneBackend {
     }
 
     /// `exec tmux attach-session -t =<name>` for a lane whose tmux session
-    /// on this Mac is known by name, with no fallback: if the session has
-    /// gone the terminal ends rather than run the wrapper. Nil for a lane
-    /// on another host or with no session name.
-    public func attachLaunch(for lane: AgentLane, shell: String) -> TerminalLaunch? {
+    /// on this Mac is `sessionName`, the name the lane resolves to, with no
+    /// fallback: if the session has gone the terminal ends rather than run
+    /// the wrapper. Nil for a lane on another host, or when `sessionName` is
+    /// not the lane's own.
+    public func attachLaunch(for lane: AgentLane, sessionName name: String, shell: String) -> TerminalLaunch? {
         guard keepsRunningWhenDetached, let tmux = tmuxSessions, tmux.host == nil,
-              let name = sessionName(for: lane), TmuxLaneSessions.isValidSessionName(name) else { return nil }
+              sessionName(for: lane) == name, TmuxLaneSessions.isValidSessionName(name) else { return nil }
         let line = tmux.localAttachLine(session: name, fallback: nil)
         return TerminalLaunch(executable: shell, arguments: ["-l", "-i", "-c", line], directory: lane.path)
     }
@@ -314,13 +317,20 @@ public struct CommandLaneBackend: LaneBackend {
         return tmuxSessions?.host == nil && stopCommand != nil
     }
 
-    /// The lane's tmux session: the one it was found by, else what
-    /// ``TmuxLaneSessions/sessionName`` or ``variantStatusName`` says.
+    /// The lane's tmux session, in the order ``statusMatch(for:)`` finds its
+    /// status: the one it was found by, else for a variant what
+    /// ``variantStatusName`` says, else what ``TmuxLaneSessions/sessionName``
+    /// says. Nil for a variant whose two names disagree, since either could
+    /// be the base lane's session.
     public func sessionName(for lane: AgentLane) -> String? {
         if let name = lane.sessionName { return name }
-        if let name = tmuxSessions?.sessionName?(lane) { return name }
-        if lane.variant != nil, let name = variantStatusName?(lane) { return name }
-        return nil
+        let tmuxName = tmuxSessions?.sessionName?(lane)
+        if lane.variant != nil {
+            let variantName = variantStatusName?(lane)
+            if let variantName, let tmuxName, variantName != tmuxName { return nil }
+            return variantName ?? tmuxName
+        }
+        return tmuxName
     }
 
     /// The tmux sessions ``tmuxSessions`` counts as lanes, on this Mac or

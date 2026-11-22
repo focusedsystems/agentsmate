@@ -183,8 +183,8 @@ private struct CountingBackend: LaneBackend {
 
     func statusMatch(for lane: AgentLane) -> LaneStatusMatch { .lane("own") }
 
-    func attachLaunch(for lane: AgentLane, shell: String) -> TerminalLaunch? {
-        guard canAttach else { return nil }
+    func attachLaunch(for lane: AgentLane, sessionName: String, shell: String) -> TerminalLaunch? {
+        guard canAttach, sessionName == "own" else { return nil }
         counter.attaches += 1
         return TerminalLaunch(executable: "/usr/bin/true", arguments: [], directory: lane.path)
     }
@@ -227,13 +227,62 @@ final class AttachOnlyLaunchTests: XCTestCase {
         let tmux = CommandLaneBackend.tmuxLane(id: "t", displayName: "T", command: "lane-wrapper", statusAgent: "claude",
                                                tmuxSessions: TmuxLaneSessions())
         var lane = AgentLane(id: "x", title: "X", directory: URL(fileURLWithPath: "/w/a"), backendID: "t")
-        XCTAssertNil(tmux.attachLaunch(for: lane, shell: "/bin/zsh"), "no session name, nothing to attach")
+        XCTAssertNil(tmux.attachLaunch(for: lane, sessionName: "a-lane", shell: "/bin/zsh"), "the lane resolves no name")
         lane.sessionName = "a-lane"
-        let line = tmux.attachLaunch(for: lane, shell: "/bin/zsh")?.arguments.last ?? ""
+        let line = tmux.attachLaunch(for: lane, sessionName: "a-lane", shell: "/bin/zsh")?.arguments.last ?? ""
         XCTAssertTrue(line.hasPrefix("exec "), line)
         XCTAssertTrue(line.contains("attach-session -t '=a-lane'"), line)
         XCTAssertFalse(line.contains("lane-wrapper"), "never falls back to the wrapper")
-        XCTAssertNil(CommandLaneBackend.shell.attachLaunch(for: lane, shell: "/bin/zsh"))
+        XCTAssertNil(tmux.attachLaunch(for: lane, sessionName: "other", shell: "/bin/zsh"), "only the lane's own name")
+        XCTAssertNil(CommandLaneBackend.shell.attachLaunch(for: lane, sessionName: "a-lane", shell: "/bin/zsh"))
+    }
+
+    func testAVariantLaneResolvesItsOwnSessionOrNone() {
+        func backend(variantName: String?) -> CommandLaneBackend {
+            CommandLaneBackend.tmuxLane(id: "t", displayName: "T", command: "lane-wrapper", statusAgent: "claude",
+                                        variantFlag: "-n",
+                                        variantStatusName: { @Sendable lane in lane.variant.flatMap { _ in variantName } },
+                                        tmuxSessions: TmuxLaneSessions(sessionName: { @Sendable _ in "repo" }))
+        }
+        var duplicate = AgentLane(id: "d", title: "Repo 2", directory: URL(fileURLWithPath: "/w/repo"), backendID: "t")
+        duplicate.variant = "2"
+        let agreeing = CommandLaneBackend.tmuxLane(id: "t", displayName: "T", command: "lane-wrapper", statusAgent: "claude",
+                                                   variantFlag: "-n",
+                                                   variantStatusName: { @Sendable lane in "repo-" + (lane.variant ?? "") },
+                                                   tmuxSessions: TmuxLaneSessions(sessionName: { @Sendable lane in
+                                                       "repo" + (lane.variant.map { "-" + $0 } ?? "") }))
+        XCTAssertEqual(agreeing.sessionName(for: duplicate), "repo-2", "the duplicate's own -n session")
+        XCTAssertNotNil(agreeing.attachLaunch(for: duplicate, sessionName: "repo-2", shell: "/bin/zsh"))
+        XCTAssertNil(agreeing.attachLaunch(for: duplicate, sessionName: "repo", shell: "/bin/zsh"),
+                     "the base lane's session is never attached for the duplicate")
+        let disagreeing = backend(variantName: "repo-2")
+        XCTAssertNil(disagreeing.sessionName(for: duplicate), "two names for one variant: ambiguous, so none")
+        XCTAssertNil(disagreeing.attachLaunch(for: duplicate, sessionName: "repo", shell: "/bin/zsh"))
+        XCTAssertNil(disagreeing.attachLaunch(for: duplicate, sessionName: "repo-2", shell: "/bin/zsh"))
+        var base = duplicate
+        base.variant = nil
+        XCTAssertEqual(disagreeing.sessionName(for: base), "repo")
+    }
+
+    func testLaunchAttachesThePresenceNameOnlyWhenItIsTheLanesOwn() {
+        let backend = CommandLaneBackend.tmuxLane(id: "t", displayName: "T", command: "lane-wrapper", statusAgent: "claude",
+                                                  variantFlag: "-n",
+                                                  variantStatusName: { @Sendable lane in "repo-" + (lane.variant ?? "") },
+                                                  tmuxSessions: TmuxLaneSessions(sessionName: { @Sendable lane in
+                                                      "repo" + (lane.variant.map { "-" + $0 } ?? "") }))
+        let defaults = UserDefaults(suiteName: "agentsmate-attach-\(UUID().uuidString)")!
+        let store = AgentLaneStore(configuration: .init(termProgram: "T", sessionFileDirectory: nil),
+                                   backends: [backend], statusFeed: nil, defaults: defaults)
+        var duplicate = AgentLane(id: "d", title: "Repo 2", directory: URL(fileURLWithPath: "/w/repo"), backendID: "t",
+                                  isClosable: true, statusMatch: .firstOf([.lane("repo"), .lane("repo-2")]))
+        duplicate.variant = "2"
+        store.add(duplicate, open: false)
+        store.selectedID = "d"
+        store.apply(presence: [LanePresence(name: "repo", directory: "/w/repo", attachedClients: 0)])
+        XCTAssertEqual(store.sessions["d"]?.presenceName, "repo")
+        store.enterAgentsMode()
+        store.openSelectedOnShow()
+        XCTAssertFalse(store.sessions["d"]?.isAttached ?? true, "presence found the base session, not the duplicate's")
     }
 }
 
