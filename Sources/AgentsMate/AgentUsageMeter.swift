@@ -136,7 +136,7 @@ public struct AgentUsageMeter: View {
                 if usage.isDepleted {
                     // Spent: the same row, with a full grey bar and when it
                     // comes back, if the agent says.
-                    row(usage, percent: 100, tint: .gray, reset: usage.depletedUntil)
+                    row(usage, percent: 100, tint: .gray, reset: usage.depletedUntil, unknownReset: true)
                 } else if let window = usage.fullest {
                     row(usage, percent: min(window.percent, 100),
                         tint: window.percent >= 90 ? .red : window.percent >= 70 ? .orange : .accentColor,
@@ -152,7 +152,10 @@ public struct AgentUsageMeter: View {
     /// One agent: its name, a bar, and the reset time on the right. No
     /// percentage beside the bar: the bar says it, and the width goes to the
     /// bar. The figure is in the tooltip.
-    private func row(_ usage: AgentUsage, percent: Double, tint: Color, reset: Date?) -> some View {
+    /// `unknownReset` shows a dash where the time would be, for a spent
+    /// agent that gave no reset.
+    private func row(_ usage: AgentUsage, percent: Double, tint: Color, reset: Date?,
+                     unknownReset: Bool = false) -> some View {
         HStack(spacing: 6) {
             Text(usage.agent).font(.caption).frame(width: 44, alignment: .leading)
             ProgressView(value: percent, total: 100)
@@ -165,6 +168,11 @@ public struct AgentUsageMeter: View {
                         .lineLimit(1)
                         .fixedSize()
                 }
+            } else if unknownReset {
+                Text("—")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .fixedSize()
             }
         }
         .help(Self.describe(usage))
