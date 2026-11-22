@@ -21,12 +21,17 @@ public struct AgentUsage: Equatable, Sendable {
     /// A note such as "Credits depleted", when the agent reports one.
     public var note: String?
     public var readAt: Date
+    /// When a limit reported with no window of its own comes back, when the
+    /// source can tell: for Codex's spent credits, the latest window reset
+    /// its earlier records still give in the future.
+    public var resetsAt: Date?
 
-    public init(agent: String, windows: [Window], note: String? = nil, readAt: Date = Date()) {
+    public init(agent: String, windows: [Window], note: String? = nil, readAt: Date = Date(), resetsAt: Date? = nil) {
         self.agent = agent
         self.windows = windows
         self.note = note
         self.readAt = readAt
+        self.resetsAt = resetsAt
     }
 
     /// The fullest window, which is the one that stops work first.
@@ -41,10 +46,11 @@ public struct AgentUsage: Equatable, Sendable {
     }
 
     /// When a depleted agent can work again: the latest reset of the full
-    /// windows, since all of them must clear. Nil when the agent is not
-    /// depleted or reported no reset, as Codex does not for spent credits.
+    /// windows, since all of them must clear, else ``resetsAt``. Nil when
+    /// the agent is not depleted or nothing gives a reset.
     public var depletedUntil: Date? {
-        windows.filter { $0.percent >= 100 }.compactMap(\.resetsAt).max()
+        guard isDepleted else { return nil }
+        return windows.filter { $0.percent >= 100 }.compactMap(\.resetsAt).max() ?? resetsAt
     }
 
     /// The note an agent gets when nothing it last reported still holds.
@@ -61,9 +67,12 @@ public struct AgentUsage: Equatable, Sendable {
         if let maxAge, now.timeIntervalSince(readAt) > maxAge {
             return AgentUsage(agent: agent, windows: [], note: Self.unknownNote, readAt: readAt)
         }
+        var current = self
+        if let resetsAt, resetsAt <= now { current.resetsAt = nil }
         let kept = windows.filter { window in window.resetsAt.map { $0 > now } ?? true }
-        guard kept.count != windows.count else { return self }
-        return AgentUsage(agent: agent, windows: kept, note: kept.isEmpty ? Self.unknownNote : note, readAt: readAt)
+        guard kept.count != windows.count else { return current }
+        return AgentUsage(agent: agent, windows: kept, note: kept.isEmpty ? Self.unknownNote : note, readAt: readAt,
+                          resetsAt: current.resetsAt)
     }
 }
 
@@ -108,26 +117,50 @@ public struct CodexSessionUsageSource: AgentUsageSource {
     }
 
     public func read() -> AgentUsage? {
-        guard signedIn(), let file = newestSession(), let text = tail(of: file) else { return nil }
-        for line in text.split(separator: "\n").reversed() where line.contains("\"rate_limits\"") {
-            if let usage = Self.parse(line: String(line)) { return usage }
-        }
-        return nil
+        guard signedIn() else { return nil }
+        let texts = recentSessions().compactMap { tail(of: $0) }
+        return Self.usage(fromNewestFirst: texts)
     }
 
-    /// Codex files sessions by date; the newest is found in the last few days.
-    func newestSession() -> URL? {
+    /// The usage in session text, newest file first: the newest record's.
+    /// When that record says a limit is reached and gives no reset (Codex's
+    /// spent credits carry no window), the latest window reset any recent
+    /// record still gives in the future stands in for it.
+    static func usage(fromNewestFirst texts: [String], now: Date = Date()) -> AgentUsage? {
+        var latest: AgentUsage?
+        var futureReset: Date?
+        for text in texts {
+            for line in text.split(separator: "\n").reversed() where line.contains("\"rate_limits\"") {
+                guard let usage = parse(line: String(line), now: now) else { continue }
+                if latest == nil { latest = usage }
+                for reset in usage.windows.compactMap(\.resetsAt) where reset > now {
+                    futureReset = max(futureReset ?? reset, reset)
+                }
+            }
+            if latest != nil, latest?.isDepleted != true || latest?.depletedUntil != nil { break }
+        }
+        guard var usage = latest else { return nil }
+        if usage.isDepleted, usage.depletedUntil == nil { usage.resetsAt = futureReset }
+        return usage
+    }
+
+    /// Codex files sessions by date: the few newest of the last week, newest
+    /// first.
+    func recentSessions(limit: Int = 5) -> [URL] {
         let fm = FileManager.default
-        guard let files = fm.enumerator(at: root, includingPropertiesForKeys: [.contentModificationDateKey]) else { return nil }
-        var best: (URL, Date)?
+        guard let files = fm.enumerator(at: root, includingPropertiesForKeys: [.contentModificationDateKey]) else { return [] }
+        var found: [(URL, Date)] = []
         let cutoff = Date().addingTimeInterval(-7 * 24 * 3600)
         for case let url as URL in files where url.pathExtension == "jsonl" {
             guard let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate,
                   date > cutoff else { continue }
-            if best.map({ date > $0.1 }) ?? true { best = (url, date) }
+            found.append((url, date))
         }
-        return best?.0
+        return found.sorted { $0.1 > $1.1 }.prefix(limit).map(\.0)
     }
+
+    /// The newest session file of the last week.
+    func newestSession() -> URL? { recentSessions(limit: 1).first }
 
     func tail(of url: URL, bytes: Int = 256 * 1024) -> String? {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
@@ -137,7 +170,7 @@ public struct CodexSessionUsageSource: AgentUsageSource {
         return (try? handle.readToEnd()).map { String(decoding: $0, as: UTF8.self) }
     }
 
-    static func parse(line: String) -> AgentUsage? {
+    static func parse(line: String, now: Date = Date()) -> AgentUsage? {
         guard let data = line.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let limits = find("rate_limits", in: object) as? [String: Any] else { return nil }
@@ -146,7 +179,7 @@ public struct CodexSessionUsageSource: AgentUsageSource {
             guard let w = limits[key] as? [String: Any], let used = (w["used_percent"] as? NSNumber)?.doubleValue else { continue }
             var resets: Date?
             if let at = (w["resets_at"] as? NSNumber)?.doubleValue { resets = Date(timeIntervalSince1970: at) }
-            else if let seconds = (w["resets_in_seconds"] as? NSNumber)?.doubleValue { resets = Date().addingTimeInterval(seconds) }
+            else if let seconds = (w["resets_in_seconds"] as? NSNumber)?.doubleValue { resets = now.addingTimeInterval(seconds) }
             let minutes = (w["window_minutes"] as? NSNumber)?.intValue
             let label = minutes.map { $0 >= 7 * 24 * 60 ? "Week" : $0 >= 24 * 60 ? "Day" : "\($0 / 60)h" } ?? fallback
             windows.append(.init(label: label, percent: used, resetsAt: resets))

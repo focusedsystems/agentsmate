@@ -67,6 +67,36 @@ final class UsageTests: XCTestCase {
         XCTAssertNil(KeyValueUsageFileSource(url: url, agent: "Claude", signedIn: { false }).read())
     }
 
+    func testSpentCodexCreditsBorrowTheLatestFutureReset() {
+        let now = Date(timeIntervalSince1970: 1_795_400_000)
+        let window = { (used: Int, resets: Int) in
+            #"{"rate_limits":{"limit_id":"codex","primary":{"used_percent":\#(used),"window_minutes":10080,"resets_at":\#(resets)},"secondary":null}}"#
+        }
+        let spent = #"{"rate_limits":{"limit_id":"premium","primary":null,"secondary":null,"credits":{"has_credits":false},"rate_limit_reached_type":"workspace_member_credits_depleted"}}"#
+        let older = window(40, 1_795_000_000) // reset already passed
+        let newer = [window(81, 1_795_539_448), window(82, 1_795_539_457), spent].joined(separator: "\n")
+        let usage = try? XCTUnwrap(CodexSessionUsageSource.usage(fromNewestFirst: [newer, older], now: now))
+        XCTAssertEqual(usage?.note, "Workspace Member Credits Depleted")
+        XCTAssertEqual(usage?.isDepleted, true)
+        XCTAssertEqual(usage?.depletedUntil, Date(timeIntervalSince1970: 1_795_539_457), "the latest reset still to come")
+
+        // An earlier file can give it when the newest has none.
+        let fromOlder = CodexSessionUsageSource.usage(fromNewestFirst: [spent, window(82, 1_795_539_457)], now: now)
+        XCTAssertEqual(fromOlder?.depletedUntil, Date(timeIntervalSince1970: 1_795_539_457))
+
+        // Nothing in the future: depleted, with no reset.
+        let none = CodexSessionUsageSource.usage(fromNewestFirst: [[older, spent].joined(separator: "\n")], now: now)
+        XCTAssertEqual(none?.isDepleted, true)
+        XCTAssertNil(none?.depletedUntil)
+        // A borrowed reset that passes is dropped.
+        XCTAssertNil(usage?.current(at: Date(timeIntervalSince1970: 1_795_600_000)).depletedUntil)
+
+        // Not depleted: the newest record as it is, no borrowing.
+        let fine = CodexSessionUsageSource.usage(fromNewestFirst: [window(82, 1_795_539_457)], now: now)
+        XCTAssertEqual(fine?.isDepleted, false)
+        XCTAssertNil(fine?.resetsAt)
+    }
+
     func testDepletedWhenAWindowIsFullOrALimitIsReached() {
         let now = Date()
         let soon = now.addingTimeInterval(3600), later = now.addingTimeInterval(86_400)
