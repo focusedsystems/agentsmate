@@ -156,7 +156,7 @@ open class AgentTerminalView: LocalProcessTerminalView {
     }
 
     /// Terminal-style editing keys SwiftTerm leaves to the host, the scroll
-    /// wheel for full-screen programs, and plain pointer movement.
+    /// wheel and trackpad, and plain pointer movement.
     ///
     /// Plain movement is not passed on: a program that asks for every mouse
     /// event (mode 1003) otherwise hears each pixel the pointer crosses, and
@@ -258,24 +258,50 @@ open class AgentTerminalView: LocalProcessTerminalView {
         return false
     }
 
-    /// A full-screen program (an agent's TUI) has no scrollback of its own
-    /// here, so the wheel goes to it: as mouse wheel events when it reports
-    /// the mouse, else as arrow keys. ⇧ always scrolls the local history.
+    /// How far the terminal scrolls for a given trackpad travel or wheel
+    /// turn; 1 is a line per row height of travel and a step per notch.
+    public var scrollSensitivity: CGFloat {
+        get { scrollAccumulator.sensitivity }
+        set { scrollAccumulator.sensitivity = max(0.1, newValue) }
+    }
+    private var scrollAccumulator = ScrollStepAccumulator()
+    /// Lines the local history moves for each wheel notch, as in Terminal.
+    static let wheelLinesPerNotch = 3
+
+    /// The wheel and trackpad, here rather than in SwiftTerm, which turns
+    /// each event into one to a screenful of lines and so flies past on a
+    /// trackpad. Travel is gathered into steps by `scrollAccumulator`.
+    ///
+    /// A full-screen program (an agent's TUI, tmux) has no scrollback of its
+    /// own here, so the steps go to it: a mouse wheel report each when it
+    /// reports the mouse, else an arrow key each. Otherwise, and always with
+    /// ⇧, they move the local history.
     private func handleScrollWheel(_ event: NSEvent) -> Bool {
         let terminal = getTerminal()
-        guard terminal.isCurrentBufferAlternate, !event.modifierFlags.contains(.shift) else { return false }
-        guard event.scrollingDeltaY != 0 else { return true }
-        let count = min(10, max(1, Int(abs(event.scrollingDeltaY))))
+        let shift = event.modifierFlags.contains(.shift)
+        var delta = event.scrollingDeltaY
+        // The system turns a ⇧-scrolled mouse wheel sideways.
+        if delta == 0, shift, !event.hasPreciseScrollingDeltas { delta = event.scrollingDeltaX }
+        let input = ScrollStepAccumulator.Input(event, delta: delta)
+        let rowHeight = bounds.height / CGFloat(max(terminal.rows, 1))
+        let steps = scrollAccumulator.steps(for: input, rowHeight: rowHeight)
+        guard steps != 0 else { return true }
+        let count = abs(steps)
+        guard terminal.isCurrentBufferAlternate, !shift else {
+            let lines = input.isPrecise ? count : count * Self.wheelLinesPerNotch
+            if steps > 0 { scrollUp(lines: lines) } else { scrollDown(lines: lines) }
+            return true
+        }
         if allowMouseReporting, terminal.mouseMode != .off {
             let point = convert(event.locationInWindow, from: nil)
             let column = min(terminal.cols - 1, max(0, Int(point.x / max(bounds.width, 1) * CGFloat(terminal.cols))))
             let row = min(terminal.rows - 1, max(0, Int((bounds.height - point.y) / max(bounds.height, 1) * CGFloat(terminal.rows))))
             for _ in 0..<count {
-                terminal.sendEvent(buttonFlags: event.scrollingDeltaY > 0 ? 64 : 65,
+                terminal.sendEvent(buttonFlags: steps > 0 ? 64 : 65,
                                    x: column, y: row, pixelX: Int(point.x), pixelY: Int(bounds.height - point.y))
             }
         } else {
-            let sequence = event.scrollingDeltaY > 0 ? "\u{1b}[A" : "\u{1b}[B"
+            let sequence = steps > 0 ? "\u{1b}[A" : "\u{1b}[B"
             for _ in 0..<count { send(txt: sequence) }
         }
         return true
