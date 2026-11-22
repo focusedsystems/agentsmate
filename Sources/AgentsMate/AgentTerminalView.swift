@@ -35,10 +35,9 @@ open class AgentTerminalView: LocalProcessTerminalView {
 
     open override func dataReceived(slice: ArraySlice<UInt8>) {
         let requests = colorRequests.scan(slice)
-        for text in clipboardRequests.scan(slice) {
-            pasteboard.clearContents()
-            pasteboard.setString(text, forType: .string)
-        }
+        // OSC 52 writes go on the clipboard here: SwiftTerm 1.11's macOS
+        // view drops them. Reading the clipboard back is never answered.
+        for text in clipboardRequests.scan(slice) { writeClipboard(text) }
         // The caret stays out of sight while output streams and comes back
         // once it settles: an agent redraws many times a second, hiding and
         // moving the cursor each time, which made the caret flicker.
@@ -172,6 +171,7 @@ open class AgentTerminalView: LocalProcessTerminalView {
             if event.type == .leftMouseDown || event.type == .leftMouseUp {
                 let dropCommand = MainActor.assumeIsolated { () -> Bool in
                     guard event.window === self.window else { return false }
+                    if event.type == .leftMouseDown { self.selectsOnShift(event) }
                     return self.handleLinkClick(event)
                 }
                 return dropCommand ? Self.withoutCommand(event) ?? event : event
@@ -205,6 +205,12 @@ open class AgentTerminalView: LocalProcessTerminalView {
             }
             return event
         }
+    }
+
+    /// Shift as the press finds it, in case its change was missed while
+    /// another app was active: held, the drag selects here.
+    func selectsOnShift(_ event: NSEvent) {
+        allowMouseReporting = !event.modifierFlags.contains(.shift)
     }
 
     public func removeInputHandling() {
@@ -463,8 +469,7 @@ open class AgentTerminalView: LocalProcessTerminalView {
     }
 
     /// A clipboard write a program asked for (OSC 52), onto ``pasteboard``.
-    func writeClipboard(_ content: Data) {
-        guard let text = String(data: content, encoding: .utf8) else { return }
+    func writeClipboard(_ text: String) {
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
     }
@@ -541,7 +546,9 @@ final class TerminalLinkDelegate: TerminalViewDelegate {
     func send(source: TerminalView, data: ArraySlice<UInt8>) { view.send(source: source, data: data) }
     func scrolled(source: TerminalView, position: Double) { view.scrolled(source: source, position: position) }
     func rangeChanged(source: TerminalView, startY: Int, endY: Int) { view.rangeChanged(source: source, startY: startY, endY: endY) }
-    func clipboardCopy(source: TerminalView, content: Data) { view.writeClipboard(content) }
+    /// OSC 52 writes are taken from the output in `dataReceived(slice:)`,
+    /// so one coming here as well would be written twice.
+    func clipboardCopy(source: TerminalView, content: Data) {}
 
     func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {
         guard let url = TerminalLinks.url(from: link) else { return }
