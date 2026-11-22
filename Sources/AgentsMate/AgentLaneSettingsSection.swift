@@ -1,5 +1,38 @@
 import SwiftUI
 
+/// A Launch section for an app's Agent settings: whether the app opens in
+/// Agents mode, saved under ``AgentsModeKeys/agentsModeAtLaunch`` and read by
+/// ``AgentsLaunch``. On unless the person turns it off. Put it first in a
+/// grouped `Form`; ``AgentLaneSettingsSection`` already leads with it.
+public struct AgentsLaunchSettingsSection: View {
+    let store: AgentLaneStore
+
+    public init(store: AgentLaneStore) { self.store = store }
+
+    public var body: some View {
+        Section {
+            AgentsLaunchToggle(store: store)
+        } header: {
+            Text("Launch")
+        }
+    }
+}
+
+/// The Open in Agents mode at launch toggle on its own, for an app whose
+/// Agent settings are not a grouped `Form`.
+public struct AgentsLaunchToggle: View {
+    @AppStorage private var isOn: Bool
+
+    public init(store: AgentLaneStore) {
+        _isOn = AppStorage(wrappedValue: true, store.keys.agentsModeAtLaunch)
+    }
+
+    public var body: some View {
+        Toggle("Open in Agents mode at launch", isOn: $isOn)
+            .help("Open the window with the Agents view filling it. A change applies at the next launch.")
+    }
+}
+
 /// A Settings section for the lanes the person opens: what a new lane runs
 /// (an installed backend or a command of their own), whether one opens at
 /// launch, whether the lanes open at quit come back, whether renaming a lane
@@ -35,6 +68,7 @@ public struct AgentLaneSettingsSection: View {
     }
 
     public var body: some View {
+        AgentsLaunchSettingsSection(store: store)
         Section {
             Picker("Runs", selection: $backendID) {
                 ForEach(store.installedBackends, id: \.id) { backend in
