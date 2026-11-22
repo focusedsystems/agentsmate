@@ -1,4 +1,5 @@
 import XCTest
+import AgentsMateStatus
 @testable import AgentsMate
 
 private func date(_ seconds: TimeInterval) -> Date { Date(timeIntervalSince1970: 1_800_000_000 + seconds) }
@@ -394,5 +395,82 @@ final class SharedLaneStoreTests: XCTestCase {
         XCTAssertEqual(store.sessions["a"]?.lane.host, "mini-1")
         store.setHost("a", to: "hub-mac")
         XCTAssertNil(store.lanes.first?.host)
+    }
+}
+
+
+/// A lane wrapper as the second Mac has it: names each lane's tmux session
+/// after its folder and variant, and lists the sessions running.
+private struct NamingWrapper: LaneBackend {
+    var id = "w"
+    var displayName = "W"
+    var found: [DiscoveredSession]
+    var keepsRunningWhenDetached: Bool { true }
+    func launch(for lane: AgentLane, shell: String) -> TerminalLaunch {
+        TerminalLaunch(executable: "/bin/sh", arguments: ["-c", "sleep 30"], directory: "/tmp")
+    }
+    func statusMatch(for lane: AgentLane) -> LaneStatusMatch { sessionName(for: lane).map { .lane($0) } ?? .none }
+    func sessionName(for lane: AgentLane) -> String? {
+        "lane-" + (lane.directory?.lastPathComponent ?? "") + (lane.variant.map { "-" + $0 } ?? "")
+    }
+    func discoverSessions() async -> [DiscoveredSession] { found }
+}
+
+@MainActor
+final class SharedLaneDetachedTests: XCTestCase {
+    private func hosts(_ me: String) -> AgentHosts {
+        AgentHosts(hosts: [.init(name: "hub-mac", role: .hub), .init(name: "laptop", role: .client)], selfName: me)
+    }
+
+    private func store(_ backend: any LaneBackend, hub: MemoryTransport, me: String, finds: Bool) -> AgentLaneStore {
+        let settings = SharedLaneSettings(appID: "example.app",
+                                          cacheFile: FileManager.default.temporaryDirectory
+                                              .appendingPathComponent("cache-\(UUID().uuidString).json"),
+                                          transport: hub, hosts: hosts(me))
+        let config = AgentLaneStore.Configuration(termProgram: "T", sessionFileDirectory: nil,
+                                                  findsDetachedSessions: finds, sharedLanes: settings)
+        return AgentLaneStore(configuration: config, backends: [backend], statusFeed: nil,
+                              defaults: UserDefaults(suiteName: "agentsmate-shared-found-\(UUID().uuidString)")!)
+    }
+
+    private func sync(_ store: AgentLaneStore) async {
+        let done = expectation(description: "sync")
+        store.sharedLanes?.sync { done.fulfill() }
+        await fulfillment(of: [done], timeout: 10)
+    }
+
+    /// Two variants in one folder, added from the hub with their saved ids:
+    /// each claims its own session, and only a third session in the folder,
+    /// which no row has, is listed under them.
+    func testSharedVariantsClaimTheirSessionsAndListOnlyTheRest() async throws {
+        let hub = MemoryTransport()
+        let wrapper = CommandLaneBackend.tmuxLane(id: "w", displayName: "W", command: "lane-wrapper", statusAgent: "claude",
+                                                  variantFlag: "-n")
+        let first = store(wrapper, hub: hub, me: "hub-mac", finds: false)
+        let folder = "/tmp/shared-found-\(UUID().uuidString)/work"
+        first.add(AgentLane(id: "main", title: "Work", directory: URL(fileURLWithPath: folder), backendID: "w",
+                            isClosable: true, section: "Cloud"), open: false)
+        let copy = try XCTUnwrap(first.duplicate("main", focus: false))
+        first.detach(copy.id)
+        await sync(first)
+
+        let running = [DiscoveredSession(kind: "tmux", name: "lane-work", directory: folder),
+                       DiscoveredSession(kind: "tmux", name: "lane-work-2", directory: folder),
+                       DiscoveredSession(kind: "tmux", name: "lane-work-3", directory: folder + "/.worktrees/fix")]
+        let second = store(NamingWrapper(found: running), hub: hub, me: "laptop", finds: true)
+        await sync(second)
+        XCTAssertEqual(second.lanes.map(\.id), ["main", copy.id], "the saved ids")
+        XCTAssertEqual(second.lanes.map(\.variant), [nil, "2"])
+
+        second.sweepForDetachedSessions()
+        for _ in 0..<200 where second.detachedIDs.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        let found = second.lanes.filter { second.isDetached($0.id) }
+        XCTAssertEqual(found.map(\.sessionName), ["lane-work-3"], "each variant holds its own session")
+        let ids = second.displayOrder.map(\.id)
+        XCTAssertEqual(ids.count, Set(ids).count, "no row twice")
+        XCTAssertEqual(second.detachedOwners[found[0].id], "main")
+        XCTAssertFalse(second.groups.contains(where: \.isDetached), "nothing left apart")
+        XCTAssertFalse(second.sharedLaneEntries().contains { second.isDetached($0.id) }, "found sessions stay off the hub")
+        second.detachAll()
     }
 }
