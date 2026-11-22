@@ -656,13 +656,17 @@ public struct AgentLaneSidebar<Accessory: View>: View {
                     }
                 }
             } label: {
-                Label("Sort and Sections", systemImage: "arrow.up.arrow.down")
+                // The Mac's filter symbol, circled while a Show Only filter
+                // is on, as Mail and Finder mark a filtered list.
+                Label("Sort and Filter", systemImage: activeFilters.isEmpty ? "line.3.horizontal.decrease"
+                                                                           : "line.3.horizontal.decrease.circle")
                     .labelStyle(.iconOnly)
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
-            .help("Sort the list, or add and fold sections")
+            .help(activeFilters.isEmpty ? "Sort or filter the list, or add and fold sections"
+                                        : "Sort or filter the list, or add and fold sections (a filter is on)")
             if inDock {
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) { store.dockMaximized.toggle() }
