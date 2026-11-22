@@ -164,10 +164,15 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
     /// Start by resuming the agent's last conversation, once. Set for lanes
     /// brought back at launch.
     public var resumeOnStart = false
-    /// The next start only attaches the running session, through the
-    /// backend's ``LaneBackend/attachLaunch(for:shell:)``; if it cannot, the
-    /// terminal ends and the row shows Reattach, and nothing else runs.
-    var attachOnlyOnStart = false
+    /// What the next start runs in place of the backend's launch: one that
+    /// only attaches a running session. If it fails, the terminal ends and
+    /// the row shows Reattach, and nothing else runs.
+    var attachOnlyLaunch: TerminalLaunch?
+
+    /// The person's login shell, which runs every lane's command.
+    nonisolated static var loginShell: String {
+        ProcessInfo.processInfo.environment["SHELL"].flatMap { $0.isEmpty ? nil : $0 } ?? "/bin/zsh"
+    }
 
     /// Whether a program other than the shell has the terminal: the
     /// foreground process group of the pseudo-terminal is not the shell's.
@@ -405,13 +410,11 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
 
     private func startProcess(configuration: AgentLaneStore.Configuration) {
         let shell = ProcessInfo.processInfo.environment["SHELL"].flatMap { $0.isEmpty ? nil : $0 } ?? "/bin/zsh"
-        let attachOnly = attachOnlyOnStart
-        attachOnlyOnStart = false
+        let attachOnly = attachOnlyLaunch
+        attachOnlyLaunch = nil
         let launch: TerminalLaunch
-        if attachOnly {
-            // `/usr/bin/false` ends at once, so the row shows Reattach.
-            launch = presenceName.flatMap { backend.attachLaunch(for: lane, sessionName: $0, shell: shell) }
-                ?? TerminalLaunch(executable: "/usr/bin/false", arguments: [], directory: lane.path)
+        if let attachOnly {
+            launch = attachOnly
         } else {
             launch = (resumeOnStart ? backend.resumeLaunch(for: lane, shell: shell) : nil)
                 ?? backend.launch(for: lane, shell: shell)

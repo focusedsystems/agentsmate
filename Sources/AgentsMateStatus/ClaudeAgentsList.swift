@@ -36,7 +36,7 @@ public enum ClaudeAgentsList {
             return LaneStatus(agent: "claude", state: state, lane: entry.name, directory: entry.cwd,
                               sessionID: entry.sessionId ?? entry.id,
                               message: entry.kind.map { "\($0) session" },
-                              event: event, updatedAt: now)
+                              event: event, updatedAt: now, agentID: entry.id)
         }
     }
 
