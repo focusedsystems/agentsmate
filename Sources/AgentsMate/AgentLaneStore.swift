@@ -112,6 +112,10 @@ public final class AgentLaneStore: ObservableObject {
         /// (``AgentLaneStore/chooseFolderWithOpenPanel(startingAt:)``); an
         /// app can offer its own recent folders or repositories instead.
         public var chooseFolder: @MainActor (_ startingAt: URL?) async -> URL?
+        /// Read what every lane host has running at launch, so launch can
+        /// reattach a lane whose session runs on another Mac
+        /// (``HostSessionsConfiguration``). Nil, the default, reads nothing.
+        public var hostSessions: HostSessionsConfiguration?
 
         /// `~/Library/Caches/<bundle id>/agent-pull-requests.json`.
         public static var defaultPullRequestLedgerFile: URL { PullRequestLedgerCache.defaultURL() }
@@ -138,7 +142,9 @@ public final class AgentLaneStore: ObservableObject {
                     findsDetachedSessions: Bool = true,
                     sharedLanes: SharedLaneSettings? = SharedLaneSettings.automatic(),
                     chooseFolder: @escaping @MainActor (_ startingAt: URL?) async -> URL? = AgentLaneStore.chooseFolderWithOpenPanel,
-                    scrollSensitivity: CGFloat = 1, placesDetachedSessions: Bool = true) {
+                    scrollSensitivity: CGFloat = 1, placesDetachedSessions: Bool = true,
+                    hostSessions: HostSessionsConfiguration? = nil) {
+            self.hostSessions = hostSessions
             self.placesDetachedSessions = placesDetachedSessions
             self.scrollSensitivity = scrollSensitivity
             self.findsDetachedSessions = findsDetachedSessions
@@ -316,6 +322,7 @@ public final class AgentLaneStore: ObservableObject {
             agentHosts = resolved.hosts
             sharedLanes = SharedLaneSync(store: self, transport: resolved.transport, cacheFile: settings.cacheFile)
         }
+        if configuration.hostSessions != nil { startHostListing() }
         terminationObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
             // Terminals ending as the app quits are not the person closing
@@ -1222,6 +1229,7 @@ public final class AgentLaneStore: ObservableObject {
         }
         dockVisible = true
         firstShowPending = false
+        launchAttachPending = nil
         if lanes.isEmpty { openNewLane(in: newLaneDirectory) } else { openSelected(focus: true) }
     }
 
@@ -1269,11 +1277,85 @@ public final class AgentLaneStore: ObservableObject {
             if focus { session.wantsFocus = true }
             updateShown()
         } else if session.backend.keepsRunningWhenDetached, let name = session.presenceName,
-                  session.backend.attachLaunch(for: session.lane, sessionName: name, shell: "/bin/sh") != nil {
-            session.resumeOnStart = false
-            session.attachOnlyOnStart = true
-            open(id, focus: focus)
+                  let attach = session.backend.attachLaunch(for: session.lane, sessionName: name,
+                                                            shell: AgentLaneSession.loginShell) {
+            attachOnly(id, with: attach, focus: focus)
+        } else if configuration.hostSessions != nil {
+            launchAttachPending = id
+            attachPendingFromHosts()
         }
+    }
+
+    private func attachOnly(_ id: AgentLane.ID, with launch: TerminalLaunch, focus: Bool) {
+        guard let session = sessions[id] else { return }
+        session.resumeOnStart = false
+        session.attachOnlyLaunch = launch
+        open(id, focus: focus)
+    }
+
+    // MARK: Lane hosts
+
+    /// What each lane host had running when asked at launch, by host name.
+    @Published public private(set) var hostListings: [String: HostSessionListing] = [:]
+    /// Lane hosts that did not answer: their sessions are unknown, not gone.
+    @Published public private(set) var unknownHosts: Set<String> = []
+    /// The lane launch shows, waiting for its host to answer so its session
+    /// can be attached. Cleared when anything else opens a lane.
+    private(set) var launchAttachPending: AgentLane.ID?
+    private var listingHosts: AgentHosts?
+
+    /// Ask every hub and lane host in the registry what it has running.
+    private func startHostListing() {
+        guard let config = configuration.hostSessions, let hosts = agentHosts ?? AgentHosts.load() else { return }
+        listingHosts = hosts
+        for host in hosts.hosts where host.role == .hub || host.role == .lane {
+            let name = host.name, local = name == hosts.selfName
+            Task { @MainActor [weak self] in
+                let listing = await HostSessions.list(host: local ? nil : name, config: config)
+                self?.received(listing, from: name)
+            }
+        }
+    }
+
+    /// Record one host's answer, nil when it did not give one.
+    func received(_ listing: HostSessionListing?, from host: String, hosts: AgentHosts? = nil) {
+        if let hosts { listingHosts = hosts }
+        if let listing {
+            hostListings[host] = listing
+            unknownHosts.remove(host)
+        } else {
+            hostListings[host] = nil
+            unknownHosts.insert(host)
+        }
+        attachPendingFromHosts()
+    }
+
+    /// The host a lane's session runs on: its own host, else the hub.
+    func sessionHost(for lane: AgentLane) -> String? {
+        lane.host ?? listingHosts?.hub?.name
+    }
+
+    /// Attach the lane launch is waiting on, once its host has answered and
+    /// lists the lane's own session exactly. An unknown host or a lane with
+    /// no exact session attaches nothing.
+    private func attachPendingFromHosts() {
+        guard let id = launchAttachPending else { return }
+        guard selectedID == id, let session = sessions[id], !session.isAttached,
+              let config = configuration.hostSessions, let host = sessionHost(for: session.lane) else {
+            launchAttachPending = nil
+            return
+        }
+        guard let listing = hostListings[host] else {
+            if unknownHosts.contains(host) { launchAttachPending = nil }
+            return
+        }
+        launchAttachPending = nil
+        let remote = host == listingHosts?.selfName ? nil : host
+        guard let target = HostSessions.target(for: session.lane, backend: session.backend, listing: listing,
+                                               config: config, remoteHost: remote),
+              let launch = HostSessions.launch(target, lane: session.lane, shell: AgentLaneSession.loginShell,
+                                               config: config) else { return }
+        attachOnly(id, with: launch, focus: isShowing)
     }
 
     public func toggleDock(newLaneDirectory: URL? = nil) {
@@ -1634,6 +1716,7 @@ public final class AgentLaneStore: ObservableObject {
     /// lane that is already attached only shows it.
     public func open(_ id: AgentLane.ID, focus: Bool = true) {
         guard let session = sessions[id] else { return }
+        launchAttachPending = nil
         recordVisit(id)
         if id == splitID { splitID = selectedID == id ? nil : selectedID }
         selectedID = id

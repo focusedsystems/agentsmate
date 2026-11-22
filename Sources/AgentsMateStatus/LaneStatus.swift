@@ -41,10 +41,14 @@ public struct LaneStatus: Codable, Equatable, Sendable {
     public var updatedAt: Date
     /// The agent's conversation file, when its hooks name one.
     public var transcriptPath: String?
+    /// The short id the agent's own tools know the session by, such as the
+    /// one `claude attach` takes for a background session.
+    public var agentID: String?
 
     public init(agent: String, state: LaneState, lane: String? = nil, directory: String? = nil,
                 sessionID: String? = nil, message: String? = nil, event: String, updatedAt: Date = Date(),
-                transcriptPath: String? = nil) {
+                transcriptPath: String? = nil, agentID: String? = nil) {
+        self.agentID = agentID
         self.transcriptPath = transcriptPath
         self.agent = agent
         self.state = state
