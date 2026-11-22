@@ -151,9 +151,9 @@ enum HostSessions {
               let code = Int(lines[status].dropFirst(marks.status.count)) else { return nil }
         let claude = ClaudeAgentsList.parse(Data(lines[..<tmux].joined(separator: "\n").utf8))
         let names = lines[(tmux + 1)..<bindings].filter { !$0.isEmpty }
-        // A missing command (127) means there are no bindings; any other
-        // failure means they are not known.
-        let bindingsKnown = code == 0 || code == 127
+        // Any failure, a missing command included, means the bindings are
+        // not known.
+        let bindingsKnown = code == 0
         var bound: [String: String] = [:]
         for line in lines[(bindings + 1)..<status] {
             let fields = line.split(separator: "\t", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
