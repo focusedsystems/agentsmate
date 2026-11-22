@@ -835,76 +835,43 @@ struct LaneRow: View {
     var isNested = false
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(alignment: .top, spacing: 8) {
             LaneIconView(icon: session.icon, tintHex: session.tintHex, size: 16)
                 .frame(width: 20)
                 .overlay(alignment: .bottomTrailing) { statusDot.offset(x: 3, y: 3) }
-            if let summary = leadingSummary {
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(summary).lineLimit(2)
+                .padding(.top, 1)
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 4) {
+                    Text(session.title)
+                        .lineLimit(1)
+                        .layoutPriority(1)
+                    Spacer(minLength: 2)
+                    trailingIndicators
+                }
+                let detail = detailText
+                let status = statusLine
+                if let detail {
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .truncationMode(.tail)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if !status.isEmpty {
+                    statusText(status)
+                }
+                let carriesStatus = detail != nil && !status.isEmpty
+                if carriesStatus || hasPullRequestPills {
                     HStack(spacing: 4) {
-                        Text(session.title)
-                            .font(.caption.weight(.semibold))
-                            .lineLimit(1)
-                            .layoutPriority(1)
-                        if !subtitle.isEmpty {
-                            Text(subtitle)
-                                .font(.caption)
-                                .foregroundStyle(isActive ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
-                                .lineLimit(1)
-                                .truncationMode(.head)
+                        if hasPullRequestPills {
+                            pullRequestPills.layoutPriority(1)
+                        }
+                        if carriesStatus {
+                            statusText(status).frame(minWidth: 24, alignment: .leading)
                         }
                     }
+                    .padding(.top, 1)
                 }
-            } else {
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(session.title).lineLimit(1)
-                    if !subtitle.isEmpty {
-                        Text(subtitle)
-                            .font(.caption)
-                            .foregroundStyle(isActive ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
-                            .lineLimit(1)
-                            .truncationMode(.head)
-                    }
-                }
-            }
-            Spacer(minLength: 2)
-            let pullRequests = session.displayedPullRequests
-            if !pullRequests.isEmpty {
-                ForEach(pullRequests.suffix(Self.rowChipLimit)) { PullRequestBadge(pullRequest: $0) }
-                if pullRequests.count > Self.rowChipLimit {
-                    Text("+\(pullRequests.count - Self.rowChipLimit)")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-            } else if let pr = session.rowMetadata.pullRequest {
-                Text("#\(pr.number)")
-                    .font(.caption.monospacedDigit())
-                    .padding(.horizontal, 5)
-                    .background(Capsule().fill(Self.color(for: pr.state).opacity(0.18)))
-                    .foregroundStyle(Self.color(for: pr.state))
-                    .help("Pull request #\(pr.number), \(pr.state.rawValue)")
-                    .accessibilityLabel("Pull request \(pr.number), \(pr.state.rawValue)")
-            }
-            if let progress = session.note?.progress {
-                ProgressView(value: progress)
-                    .progressViewStyle(.circular)
-                    .controlSize(.mini)
-                    .help("\(Int(progress * 100))% done")
-            }
-            if !session.rowMetadata.ports.isEmpty {
-                Image(systemName: "network")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .help("Listening on " + session.rowMetadata.ports.map(String.init).joined(separator: ", "))
-                    .accessibilityLabel("Listening on ports " + session.rowMetadata.ports.map(String.init).joined(separator: ", "))
-            }
-            if session.needsAttention {
-                Image(systemName: "circle.fill").font(.system(size: 6)).foregroundStyle(.tint)
-                    .accessibilityHidden(true)
-            }
-            if let shortcutNumber {
-                Text("⌘\(shortcutNumber)").font(.caption).foregroundStyle(.secondary)
             }
         }
         .padding(.vertical, 2)
@@ -915,14 +882,92 @@ struct LaneRow: View {
         .accessibilityValue(accessibilityValue)
     }
 
+    /// The status and branch: one caption line, cut from the front so the
+    /// branch stays readable.
+    private func statusText(_ text: String) -> some View {
+        Text(text)
+            .font(.caption)
+            .foregroundStyle(isActive ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+            .lineLimit(1)
+            .truncationMode(.head)
+    }
+
+    /// The small marks that stay beside the title: progress, ports, the
+    /// unread dot and the row's ⌘ number.
+    @ViewBuilder
+    private var trailingIndicators: some View {
+        if let progress = session.note?.progress {
+            ProgressView(value: progress)
+                .progressViewStyle(.circular)
+                .controlSize(.mini)
+                .help("\(Int(progress * 100))% done")
+        }
+        if !session.rowMetadata.ports.isEmpty {
+            Image(systemName: "network")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .help("Listening on " + session.rowMetadata.ports.map(String.init).joined(separator: ", "))
+                .accessibilityLabel("Listening on ports " + session.rowMetadata.ports.map(String.init).joined(separator: ", "))
+        }
+        if session.needsAttention {
+            Image(systemName: "circle.fill").font(.system(size: 6)).foregroundStyle(.tint)
+                .accessibilityHidden(true)
+        }
+        if let shortcutNumber {
+            Text("⌘\(shortcutNumber)").font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private var hasPullRequestPills: Bool {
+        !session.displayedPullRequests.isEmpty || session.rowMetadata.pullRequest != nil
+    }
+
+    /// The pull request pills on their own line under the title: as many of
+    /// the newest as fit, and a count of the rest.
+    @ViewBuilder
+    private var pullRequestPills: some View {
+        let pullRequests = session.displayedPullRequests
+        if !pullRequests.isEmpty {
+            ViewThatFits(in: .horizontal) {
+                ForEach(Array(stride(from: min(pullRequests.count, Self.rowChipLimit), through: 1, by: -1)), id: \.self) { shown in
+                    pills(Array(pullRequests.suffix(shown)), hidden: pullRequests.count - shown)
+                }
+                overflowCount(pullRequests.count)
+            }
+        } else if let pr = session.rowMetadata.pullRequest {
+            Text("#\(pr.number)")
+                .font(.caption.monospacedDigit())
+                .padding(.horizontal, 5)
+                .background(Capsule().fill(Self.color(for: pr.state).opacity(0.18)))
+                .foregroundStyle(Self.color(for: pr.state))
+                .help("Pull request #\(pr.number), \(pr.state.rawValue)")
+                .accessibilityLabel("Pull request \(pr.number), \(pr.state.rawValue)")
+        }
+    }
+
+    private func pills(_ shown: [LanePullRequest], hidden: Int) -> some View {
+        HStack(spacing: 4) {
+            ForEach(shown) { PullRequestBadge(pullRequest: $0).fixedSize() }
+            if hidden > 0 { overflowCount(hidden) }
+        }
+    }
+
+    private func overflowCount(_ count: Int) -> some View {
+        Text("+\(count)")
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(.secondary)
+            .fixedSize()
+    }
+
     /// The summary the row leads with, in the summary-first style.
     private var leadingSummary: String? {
         guard style == .summaryFirst, let summary = session.summary, !summary.isEmpty else { return nil }
         return summary
     }
 
-    /// Pull request chips a row shows; the rest are counted.
-    static let rowChipLimit = 2
+    /// The most pull request chips a row shows; the rest, and any that do
+    /// not fit the width, are counted.
+    static let rowChipLimit = 4
 
     private var accessibilityValue: String {
         let status = session.isOrphan ? "Running, nothing attached"
@@ -941,18 +986,26 @@ struct LaneRow: View {
         }
     }
 
-    private var subtitle: String {
+    /// The agent's own words for the row: its note, or the summary once it
+    /// stops working (always, in the summary-first style). Up to two lines.
+    private var detailText: String? {
+        if session.renameNotice != nil { return nil }
+        if let text = session.note?.text, !text.isEmpty { return text }
+        if let summary = leadingSummary { return summary }
+        if let summary = session.summary, !summary.isEmpty, session.status != .running { return summary }
+        return nil
+    }
+
+    /// The compact status and branch: on the line under the title when the
+    /// row has no summary, beside the pills when it does.
+    private var statusLine: String {
         if let notice = session.renameNotice { return notice }
-        let base = statusSubtitle
+        let base = detailText == nil ? statusSubtitle : ""
         guard let branch = session.rowMetadata.branch else { return base }
         return base.isEmpty ? branch : base + " · " + branch
     }
 
     private var statusSubtitle: String {
-        if let text = session.note?.text { return text }
-        // A row that leads with the summary has it already; a standard row
-        // shows it once the agent stops working.
-        if leadingSummary == nil, let summary = session.summary, session.status != .running { return summary }
         if session.isOrphan, !session.isAttached { return "Running, nothing attached" }
         if session.lane.isClosable, session.status == .attached || session.status == .detached {
             return session.shortDirectory
