@@ -110,6 +110,9 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
     /// The presence source found the session by its tmux name, so it is
     /// this lane's own and not just a session in the same folder.
     public private(set) var isPresentByName = false
+    /// The tmux name the presence source found the session under, when it
+    /// matched by name. Launch attaches exactly this session.
+    public private(set) var presenceName: String?
 
     /// The lane's session is running somewhere: a presence source or a
     /// daemon's session list has it, whether or not it is attached here.
@@ -287,9 +290,10 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
         if orphan != isOrphan { isOrphan = orphan }
     }
 
-    func update(present: Bool, byName: Bool = false) {
+    func update(present: Bool, byName: Bool = false, name: String? = nil) {
         if present != isPresent { isPresent = present }
         isPresentByName = present && byName
+        presenceName = isPresentByName ? name : nil
     }
 
     /// Take what the conversation file says.
@@ -406,7 +410,7 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
         let launch: TerminalLaunch
         if attachOnly {
             // `/usr/bin/false` ends at once, so the row shows Reattach.
-            launch = backend.attachLaunch(for: lane, shell: shell)
+            launch = presenceName.flatMap { backend.attachLaunch(for: lane, sessionName: $0, shell: shell) }
                 ?? TerminalLaunch(executable: "/usr/bin/false", arguments: [], directory: lane.path)
         } else {
             launch = (resumeOnStart ? backend.resumeLaunch(for: lane, shell: shell) : nil)
