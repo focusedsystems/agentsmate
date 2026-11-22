@@ -412,6 +412,98 @@ final class DetachedStoreTests: XCTestCase {
     }
 }
 
+final class DetachedPlacementTests: XCTestCase {
+    private let backends: [String: any LaneBackend] = [
+        "fake": FakeDiscoveringBackend(found: []),
+        "remote": CommandLaneBackend.tmuxLane(id: "remote", displayName: "Remote", command: "true", statusAgent: nil,
+                                              tmuxSessions: TmuxLaneSessions(prefixes: ["lane-"], host: "other-mac")),
+    ]
+
+    private func lane(_ id: String, _ path: String?, backend: String = "fake", closable: Bool = false) -> AgentLane {
+        AgentLane(id: id, title: id, directory: path.map { URL(fileURLWithPath: $0, isDirectory: true) },
+                  backendID: backend, isClosable: closable)
+    }
+
+    private func owner(_ directory: String?, host: String? = nil, _ lanes: [AgentLane]) -> String? {
+        DetachedSessions.owner(of: DiscoveredSession(kind: "fake", name: "s", directory: directory, host: host),
+                               among: lanes, backends: backends, normalize: { $0 })
+    }
+
+    func testASessionGoesUnderTheRowWhoseFolderHoldsIt() {
+        let lanes = [lane("repo", "/w/repo"), lane("other", "/w/other")]
+        XCTAssertEqual(owner("/w/repo", lanes), "repo")
+        XCTAssertEqual(owner("/w/repo/.worktrees/feature", lanes), "repo", "a worktree belongs to its repository")
+        XCTAssertEqual(owner("/w/repo/.claude/worktrees/x", lanes), "repo")
+        XCTAssertNil(owner("/w/repository", lanes), "a folder that only starts with the same name is not inside")
+        XCTAssertNil(owner("/elsewhere", lanes))
+        XCTAssertNil(owner(nil, lanes))
+    }
+
+    func testTheDeepestFolderWinsThenTheAppsRow() {
+        let lanes = [lane("parent", "/w"), lane("mine", "/w/repo", closable: true), lane("app", "/w/repo")]
+        XCTAssertEqual(owner("/w/repo/src", lanes), "app")
+        XCTAssertEqual(owner("/w/notes", lanes), "parent")
+    }
+
+    func testBroadRowsAndOtherMachinesHoldNothing() {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        XCTAssertNil(owner(home + "/x", [lane("home", home), lane("nofolder", nil)]))
+        XCTAssertNil(owner("/w/repo", [lane("root", "/")]))
+        XCTAssertNil(owner("/w/repo", host: "other-mac", [lane("repo", "/w/repo")]), "a local row does not hold a remote session")
+        XCTAssertEqual(owner("/w/repo", host: "other-mac", [lane("remote", "/w/repo", backend: "remote")]), "remote")
+    }
+}
+
+@MainActor
+final class DetachedPlacementStoreTests: XCTestCase {
+    private func waitFor(_ condition: () -> Bool) async {
+        for _ in 0..<200 where !condition() { try? await Task.sleep(for: .milliseconds(10)) }
+    }
+
+    private func makeStore(_ found: [DiscoveredSession], file: URL) -> AgentLaneStore {
+        AgentLaneStore(configuration: .init(termProgram: "T", sessionFileDirectory: nil, workspaceFile: file),
+                       backends: [FakeDiscoveringBackend(found: found)], statusFeed: nil,
+                       defaults: UserDefaults(suiteName: "agentsmate-placement-\(UUID().uuidString)")!)
+    }
+
+    func testFoundSessionsSitUnderTheirFolderOnceAcrossRelaunch() async throws {
+        let root = "/tmp/placement-\(UUID().uuidString)"
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("placement-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: file) }
+        let found = [DiscoveredSession(kind: "fake", name: "lane-repo", directory: root + "/repo"),
+                     DiscoveredSession(kind: "fake", name: "lane-feature", directory: root + "/repo/.worktrees/feature"),
+                     DiscoveredSession(kind: "fake", name: "lane-stray", directory: root + "/stray")]
+        let rows = [AgentLane(id: "repo", title: "Repo", directory: URL(fileURLWithPath: root + "/repo"),
+                              backendID: "fake", section: "Cloud"),
+                    AgentLane(id: "next", title: "Next", directory: URL(fileURLWithPath: root + "/next"),
+                              backendID: "fake", section: "Cloud")]
+
+        for launch in 0..<2 {
+            let store = makeStore(found, file: file)
+            store.sync(lanes: rows)
+            if launch == 1 { _ = store.restoreAtLaunch() }
+            store.sweepForDetachedSessions()
+            await waitFor { store.detachedIDs.count == 2 }
+            let names = { (group: LaneGroup) in group.lanes.map { $0.sessionName ?? $0.id } }
+            let cloud = try XCTUnwrap(store.groups.first { $0.section == "Cloud" })
+            // The repository's own session is its row's; the worktree's is
+            // listed just under it, once; only the stray is apart.
+            XCTAssertEqual(names(cloud), ["repo", "lane-feature", "next"], "launch \(launch)")
+            XCTAssertEqual(store.groups.last.map(names), ["lane-stray"])
+            XCTAssertEqual(store.groups.last?.isDetached, true)
+            XCTAssertEqual(store.displayOrder.count, Set(store.displayOrder.map(\.id)).count, "no row twice")
+            XCTAssertTrue(store.restoreSnapshot().lanes.isEmpty, "found sessions are not saved as lanes")
+
+            // Pinning the row brings its found session along, still after it.
+            store.setPinned("repo", true)
+            XCTAssertEqual(store.groups.first.map(names), ["repo", "lane-feature"])
+            XCTAssertEqual(store.numberedLanes.map(\.id), ["repo"], "only the pinned row gets a number")
+            store.setPinned("repo", false)
+            store.saveRestore()
+        }
+    }
+}
+
 @MainActor
 final class RestoreSnapshotTests: XCTestCase {
     private func makeStore(_ file: URL) -> AgentLaneStore {

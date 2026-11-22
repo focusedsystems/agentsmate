@@ -203,8 +203,13 @@ public struct AgentLaneSidebar<Accessory: View>: View {
                 LaneRow(session: session,
                         shortcutNumber: shortcutNumbers[lane.id],
                         isSplit: lane.id == store.splitID,
-                        style: store.configuration.rowStyle)
+                        style: store.configuration.rowStyle,
+                        // A found session listed under its folder's row.
+                        isNested: !group.isDetached && store.isDetached(lane.id))
                     .tag(lane.id)
+                    // A found session follows its folder's row; it moves
+                    // once adopted.
+                    .moveDisabled(store.isDetached(lane.id))
             }
         }
         .onMove { from, to in move(in: group, from: from, to: to) }
@@ -369,7 +374,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
     private func detachedRowMenu(_ session: AgentLaneSession) -> some View {
         let lane = session.lane
         Button("Reattach") { store.reattach(lane.id) }
-            .help("Attach this session here; the row stays in Detached")
+            .help("Attach this session here; the row stays where it is listed")
         DetachedAdoptMenu(store: store, id: lane.id)
         Divider()
         Button("Stop Session") { store.stop(lane.id) }
@@ -822,6 +827,8 @@ struct LaneRow: View {
     let shortcutNumber: Int?
     let isSplit: Bool
     var style: LaneRowStyle = .standard
+    /// Indented under the row above: a found session under its folder's row.
+    var isNested = false
 
     var body: some View {
         HStack(spacing: 8) {
@@ -897,6 +904,7 @@ struct LaneRow: View {
             }
         }
         .padding(.vertical, 2)
+        .padding(.leading, isNested ? 14 : 0)
         .help(helpText)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(session.title)

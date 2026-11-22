@@ -341,6 +341,38 @@ enum DetachedSessions {
         return out
     }
 
+    /// The row a session no row attaches belongs beside: a row on the same
+    /// machine whose folder is the session's or holds it (a worktree, or any
+    /// folder inside), so the session shows under that row's section rather
+    /// than apart from it. The deepest folder wins; on a tie, a row the app
+    /// gave (not closable) before one the person opened, then the first in
+    /// `lanes`. A row with no folder of its own, or one at the home folder
+    /// or the root, holds nothing: it would claim every session. Nil when no
+    /// row's folder holds the session.
+    ///
+    /// `normalize` turns a path into the form compared, as
+    /// ``LaneStatusMatch/normalizedPath(_:)`` does.
+    static func owner(of session: DiscoveredSession, among lanes: [AgentLane], backends: [String: any LaneBackend],
+                      normalize: (String) -> String = LaneStatusMatch.normalizedPath) -> AgentLane.ID? {
+        guard let directory = session.directory, !directory.isEmpty else { return nil }
+        let path = normalize(directory)
+        let tooBroad: Set<String> = ["/", normalize(FileManager.default.homeDirectoryForCurrentUser.path)]
+        var best: (lane: AgentLane, depth: Int)?
+        for lane in lanes {
+            guard let folder = lane.directory, let backend = backends[lane.backendID],
+                  laneHost(backend) == session.host else { continue }
+            let root = normalize(folder.path)
+            guard !tooBroad.contains(root), path == root || path.hasPrefix(root + "/") else { continue }
+            let depth = root.count
+            if let current = best {
+                if depth < current.depth { continue }
+                if depth == current.depth, !(current.lane.isClosable && !lane.isClosable) { continue }
+            }
+            best = (lane, depth)
+        }
+        return best?.lane.id
+    }
+
     /// Two ids for one session: the same, or one the start of the other, as
     /// a lane wrapper may record only the first eight characters.
     static func sameSession(_ a: String, _ b: String) -> Bool {

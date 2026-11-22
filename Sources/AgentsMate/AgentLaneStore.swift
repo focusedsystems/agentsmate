@@ -32,8 +32,9 @@ public final class AgentLaneStore: ObservableObject {
         /// Closing a lane the person opened also stops its session, as
         /// closing a workspace in a terminal multiplexer does. Off by
         /// default: a lane attaches a session that outlives the app, so
-        /// closing its row only ends the terminal here, the session shows
-        /// in the Detached section, and Stop is what ends it.
+        /// closing its row only ends the terminal here, the session is listed
+        /// as a found session (``findsDetachedSessions``), and Stop is what
+        /// ends it.
         public var closeStopsLane: Bool
         /// Where each lane's `$AGENTSMATE_SESSION` file lives, for agents to
         /// label their row. Nil turns the files off.
@@ -91,10 +92,16 @@ public final class AgentLaneStore: ObservableObject {
         /// Claude Code's pull request status cache, read once at launch as a
         /// warm start for GitHub links. Nil skips it; a missing file is fine.
         public var pullRequestSeedFile: URL?
-        /// At launch and about every ten minutes, ask each backend for its
-        /// lane sessions (``LaneBackend/discoverSessions()``) and list the
-        /// ones no row attaches in a Detached section.
+        /// At launch, about every ten minutes, and soon after the status feed
+        /// shows a session start or end, ask each backend for its lane
+        /// sessions (``LaneBackend/discoverSessions()``) and list the ones no
+        /// row attaches. Each is listed beside the row whose folder holds it
+        /// (``placesDetachedSessions``), else in a Detached group.
         public var findsDetachedSessions: Bool
+        /// List a session no row attaches just under the row whose folder
+        /// holds it, in that row's section, so the list shows every agent
+        /// where it works. Off, every such session is in the Detached group.
+        public var placesDetachedSessions: Bool
         /// The lane list shared by every Mac through the hub, when the hosts
         /// registry (``AgentHosts``) is there. On by default for an app
         /// bundle; without the registry lanes stay per-Mac. Nil turns it off.
@@ -131,7 +138,8 @@ public final class AgentLaneStore: ObservableObject {
                     findsDetachedSessions: Bool = true,
                     sharedLanes: SharedLaneSettings? = SharedLaneSettings.automatic(),
                     chooseFolder: @escaping @MainActor (_ startingAt: URL?) async -> URL? = AgentLaneStore.chooseFolderWithOpenPanel,
-                    scrollSensitivity: CGFloat = 1) {
+                    scrollSensitivity: CGFloat = 1, placesDetachedSessions: Bool = true) {
+            self.placesDetachedSessions = placesDetachedSessions
             self.scrollSensitivity = scrollSensitivity
             self.findsDetachedSessions = findsDetachedSessions
             self.sharedLanes = sharedLanes
@@ -169,6 +177,7 @@ public final class AgentLaneStore: ObservableObject {
             if lanes != oldValue {
                 scheduleRestoreWrite()
                 sharedLanes?.localChanged()
+                placeDetached()
             }
         }
     }
@@ -1004,14 +1013,30 @@ public final class AgentLaneStore: ObservableObject {
     // MARK: Detached sessions
 
     /// Rows for sessions a backend found running with no row of their own,
-    /// shown in the Detached section. They are not started until the person
+    /// each shown under the row whose folder holds it (``detachedOwners``),
+    /// else in the Detached group. They are not started until the person
     /// reattaches one, are left out of the restore snapshot and workspaces,
     /// and go when their session does. ``adopt(_:into:)`` makes one a lane
     /// of the person's own.
     @Published public private(set) var detachedIDs: Set<AgentLane.ID> = []
 
-    /// Whether a row is in the Detached section.
+    /// Whether a row is a found session no row of the person's or the
+    /// app's attaches, wherever the list shows it.
     public func isDetached(_ id: AgentLane.ID) -> Bool { detachedIDs.contains(id) }
+
+    /// The row each found session is listed under, by the found row's id:
+    /// the row whose folder holds the session's
+    /// (``DetachedSessions/owner(of:among:backends:normalize:)``). A found
+    /// row missing here is in the Detached group.
+    @Published public private(set) var detachedOwners: [AgentLane.ID: AgentLane.ID] = [:]
+    /// Paths as compared, kept because resolving one reads the disk.
+    private var normalizedPaths: [String: String] = [:]
+    /// The session ids the status feed showed last, to sweep again soon
+    /// after one starts or ends rather than at the next ten-minute ask.
+    private var seenStatusSessionIDs: Set<String> = []
+    private var lastSweep = Date.distantPast
+    /// The shortest wait between sweeps the status feed asks for.
+    static let liveSweepSpacing: TimeInterval = 20
 
     /// How often backends are asked for their sessions after launch. Each
     /// ask is at most one helper process per backend, one at a time.
@@ -1037,11 +1062,13 @@ public final class AgentLaneStore: ObservableObject {
         sweepSoon()
     }
 
-    /// One sweep a moment from now, however many times this is called.
+    /// One sweep a moment from now, however many times this is called, and
+    /// no sooner than ``liveSweepSpacing`` after the last.
     private func sweepSoon() {
         guard discoveryKick == nil else { return }
+        let wait = max(Self.firstDiscoveryDelay, Self.liveSweepSpacing - Date().timeIntervalSince(lastSweep))
         discoveryKick = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(Self.firstDiscoveryDelay))
+            try? await Task.sleep(for: .seconds(wait))
             guard let self else { return }
             self.discoveryKick = nil
             self.sweepForDetachedSessions()
@@ -1053,6 +1080,7 @@ public final class AgentLaneStore: ObservableObject {
     public func sweepForDetachedSessions() {
         guard configuration.findsDetachedSessions, !sweepingSessions else { return }
         sweepingSessions = true
+        lastSweep = Date()
         let backends = availableBackends
         Task { @MainActor [weak self] in
             var found: [DetachedSessions.Found] = []
@@ -1087,8 +1115,59 @@ public final class AgentLaneStore: ObservableObject {
             lanes.append(lane)
             makeSession(for: lane)
         }
+        placeDetached()
         apply(statusFeed?.records ?? [])
         if let presence = statusFeed?.presence { apply(presence: presence) }
+    }
+
+    /// Work out which row each found session is listed under. A found row
+    /// whose session the last sweep no longer lists (one attached here)
+    /// keeps the row it had.
+    private func placeDetached() {
+        guard configuration.placesDetachedSessions, !detachedIDs.isEmpty else {
+            if !detachedOwners.isEmpty { detachedOwners = [:] }
+            return
+        }
+        let rows = lanes.filter { !detachedIDs.contains($0.id) }
+        var found: [AgentLane.ID: DetachedSessions.Found] = [:]
+        for item in discovered { found[DetachedSessions.laneID(item)] = found[DetachedSessions.laneID(item)] ?? item }
+        let rowIDs = Set(rows.map(\.id))
+        var owners: [AgentLane.ID: AgentLane.ID] = [:]
+        for id in detachedIDs {
+            if let item = found[id] {
+                owners[id] = DetachedSessions.owner(of: item.session, among: rows, backends: backends,
+                                                    normalize: normalizedPath)
+            } else if let kept = detachedOwners[id], rowIDs.contains(kept) {
+                owners[id] = kept
+            }
+        }
+        if owners != detachedOwners { detachedOwners = owners }
+    }
+
+    private func normalizedPath(_ path: String) -> String {
+        if let known = normalizedPaths[path] { return known }
+        let normalized = LaneStatusMatch.normalizedPath(path)
+        normalizedPaths[path] = normalized
+        return normalized
+    }
+
+    /// Sweep soon when the status feed shows a session no row holds and the
+    /// last sweep did not find, or loses one the last sweep found, so a
+    /// session started or ended elsewhere shows up or goes within seconds.
+    private func noticeStatusSessions(_ records: [LaneStatus]) {
+        guard configuration.findsDetachedSessions else { return }
+        let ids = Set(records.compactMap(\.sessionID).filter { !$0.isEmpty })
+        guard ids != seenStatusSessionIDs else { return }
+        let fresh = ids.subtracting(seenStatusSessionIDs), gone = seenStatusSessionIDs.subtracting(ids)
+        seenStatusSessionIDs = ids
+        let found = discovered.compactMap(\.session.sessionID)
+        let held = heldSessionIDs.values.flatMap { $0 }
+        func known(_ id: String) -> Bool {
+            found.contains { DetachedSessions.sameSession(id, $0) } || held.contains { DetachedSessions.sameSession(id, $0) }
+        }
+        let started = fresh.contains { !known($0) }
+        let ended = gone.contains { id in found.contains { DetachedSessions.sameSession(id, $0) } }
+        if started || ended { sweepSoon() }
     }
 
     /// Drop sessions a lane's row attached from the last sweep, once the
@@ -1555,9 +1634,23 @@ public final class AgentLaneStore: ObservableObject {
         var groups = layout.groups(for: detached.isEmpty ? lanes : lanes.filter { !detached.contains($0.id) }) { [sessions] lane in
             sessions[lane.id]?.lastActivity
         }
-        let found = lanes.filter { detached.contains($0.id) }
-        if !found.isEmpty {
-            groups.append(LaneGroup(section: LaneLayout.detachedSection, lanes: found, isDetached: true))
+        guard !detached.isEmpty else { return groups }
+        // Each found session goes just under the row whose folder holds it,
+        // after any found before it; the rest make the Detached group.
+        var loose: [AgentLane] = []
+        for lane in lanes where detached.contains(lane.id) {
+            guard configuration.placesDetachedSessions, let owner = detachedOwners[lane.id],
+                  let g = groups.firstIndex(where: { $0.lanes.contains { $0.id == owner } }),
+                  let index = groups[g].lanes.firstIndex(where: { $0.id == owner }) else {
+                loose.append(lane)
+                continue
+            }
+            var at = index + 1
+            while at < groups[g].lanes.count, detached.contains(groups[g].lanes[at].id) { at += 1 }
+            groups[g].lanes.insert(lane, at: at)
+        }
+        if !loose.isEmpty {
+            groups.append(LaneGroup(section: LaneLayout.detachedSection, lanes: loose, isDetached: true))
         }
         return groups
     }
@@ -1571,7 +1664,8 @@ public final class AgentLaneStore: ObservableObject {
     /// them. A row that is not pinned has no number, so pinning is how a
     /// person chooses which rows the keys reach.
     public var numberedLanes: [AgentLane] {
-        Array((groups.first(where: \.isPinned)?.lanes ?? []).prefix(9))
+        // A found session listed under a pinned row is not pinned itself.
+        Array((groups.first(where: \.isPinned)?.lanes ?? []).filter { !detachedIDs.contains($0.id) }.prefix(9))
     }
 
     /// Open the pinned row ⌘ and `index + 1` goes to.
@@ -1803,6 +1897,7 @@ public final class AgentLaneStore: ObservableObject {
             }
         }
         objectWillChange.send()
+        defer { noticeStatusSessions(records) }
         // A row that has just picked up a session (its wrapper wrote the id,
         // or a hook reported it) takes it out of Detached now, not at the
         // next sweep. Nothing runs here: the last sweep is matched again.
