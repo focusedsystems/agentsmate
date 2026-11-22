@@ -84,10 +84,10 @@ final class UsageTests: XCTestCase {
         let fromOlder = CodexSessionUsageSource.usage(fromNewestFirst: [spent, window(82, 1_795_539_457)], now: now)
         XCTAssertEqual(fromOlder?.depletedUntil, Date(timeIntervalSince1970: 1_795_539_457))
 
-        // Nothing in the future: depleted, with no reset.
-        let none = CodexSessionUsageSource.usage(fromNewestFirst: [[older, spent].joined(separator: "\n")], now: now)
-        XCTAssertEqual(none?.isDepleted, true)
-        XCTAssertNil(none?.depletedUntil)
+        // Nothing in the future: the passed weekly reset rolls on a week.
+        let rolled = CodexSessionUsageSource.usage(fromNewestFirst: [[older, spent].joined(separator: "\n")], now: now)
+        XCTAssertEqual(rolled?.isDepleted, true)
+        XCTAssertEqual(rolled?.depletedUntil, Date(timeIntervalSince1970: 1_795_000_000 + 604_800))
         // A borrowed reset that passes is dropped.
         XCTAssertNil(usage?.current(at: Date(timeIntervalSince1970: 1_795_600_000)).depletedUntil)
 
@@ -95,6 +95,74 @@ final class UsageTests: XCTestCase {
         let fine = CodexSessionUsageSource.usage(fromNewestFirst: [window(82, 1_795_539_457)], now: now)
         XCTAssertEqual(fine?.isDepleted, false)
         XCTAssertNil(fine?.resetsAt)
+    }
+
+    func testSpentCodexCreditsAlwaysGetAReset() {
+        let now = Date(timeIntervalSince1970: 1_795_400_000)
+        let spent = #"{"rate_limits":{"limit_id":"premium","primary":null,"secondary":null,"rate_limit_reached_type":"workspace_member_credits_depleted"}}"#
+        let window = #"{"rate_limits":{"limit_id":"codex","primary":{"used_percent":82,"window_minutes":10080,"resets_at":1795539457}}}"#
+        let live = Date(timeIntervalSince1970: 1_795_539_448)
+
+        // Codex's own answer comes first.
+        let authoritative = CodexSessionUsageSource.usage(fromNewestFirst: [[window, spent].joined(separator: "\n")], now: now,
+                                                          authoritative: { live })
+        XCTAssertEqual(authoritative?.depletedUntil, live)
+
+        // A spend limit of the member's own carries its reset, and no other is asked.
+        let own = #"{"rate_limits":{"primary":null,"individual_limit":{"resets_at":1795500000},"rate_limit_reached_type":"workspace_member_credits_depleted"}}"#
+        let fromOwn = CodexSessionUsageSource.usage(fromNewestFirst: [own], now: now, authoritative: { XCTFail("asked"); return nil })
+        XCTAssertEqual(fromOwn?.depletedUntil, Date(timeIntervalSince1970: 1_795_500_000))
+
+        // A passed answer is not used; the records' future reset is.
+        let stale = CodexSessionUsageSource.usage(fromNewestFirst: [[window, spent].joined(separator: "\n")], now: now,
+                                                  authoritative: { Date(timeIntervalSince1970: 1_795_000_000) })
+        XCTAssertEqual(stale?.depletedUntil, Date(timeIntervalSince1970: 1_795_539_457))
+
+        // No window in the recent files: older ones give one, rolled forward weeks at a time.
+        let old = #"{"rate_limits":{"primary":{"used_percent":10,"window_minutes":10080,"resets_at":1794000000}}}"#
+        let fromOlder = CodexSessionUsageSource.usage(fromNewestFirst: [spent], now: now, older: { [old] })
+        XCTAssertEqual(fromOlder?.depletedUntil, Date(timeIntervalSince1970: 1_794_000_000 + 3 * 604_800))
+        XCTAssertGreaterThan(fromOlder?.current(at: now).depletedUntil ?? .distantPast, now)
+
+        // Older files are not read when the recent ones give a window.
+        _ = CodexSessionUsageSource.usage(fromNewestFirst: [[window, spent].joined(separator: "\n")], now: now,
+                                          older: { XCTFail("read older"); return [] })
+    }
+
+    func testRolledResetLandsOnTheNextPeriod() {
+        let reset = Date(timeIntervalSince1970: 1_000_000)
+        let week: TimeInterval = 604_800
+        let windows = [AgentUsage.Window(label: "Week", percent: 100, resetsAt: reset, length: week)]
+        XCTAssertEqual(CodexSessionUsageSource.nextReset(of: windows, after: reset), reset.addingTimeInterval(week))
+        XCTAssertEqual(CodexSessionUsageSource.nextReset(of: windows, after: reset.addingTimeInterval(week + 1)),
+                       reset.addingTimeInterval(2 * week))
+        XCTAssertNil(CodexSessionUsageSource.nextReset(of: [.init(label: "Week", percent: 1, resetsAt: reset)],
+                                                       after: reset.addingTimeInterval(1)), "no length, no roll")
+    }
+
+    func testCodexAccountLimitsReply() {
+        let upsell = #"{"id":2,"result":{"rateLimits":{"limitId":"codex","primary":{"usedPercent":100,"windowDurationMins":10080,"resetsAt":1795539448},"individualLimit":null},"rateLimitUpsell":{"reset_at":1795539449}}}"#
+        XCTAssertEqual(CodexLimitsReader.parse(upsell), Date(timeIntervalSince1970: 1_795_539_449))
+        let spend = #"{"id":2,"result":{"rateLimits":{"primary":null,"individualLimit":{"resetsAt":1795500000}}}}"#
+        XCTAssertEqual(CodexLimitsReader.parse(spend), Date(timeIntervalSince1970: 1_795_500_000))
+        let full = #"{"id":2,"result":{"rateLimits":{"primary":{"usedPercent":40,"resetsAt":1795000000}},"rateLimitsByLimitId":{"codex":{"primary":{"usedPercent":100,"resetsAt":1795539448}}}}}"#
+        XCTAssertEqual(CodexLimitsReader.parse(full), Date(timeIntervalSince1970: 1_795_539_448))
+        XCTAssertNil(CodexLimitsReader.parse(#"{"id":1,"result":{"userAgent":"x"}}"#))
+    }
+
+    func testCodexLimitsReaderRunsAtMostOncePerInterval() {
+        final class Count: @unchecked Sendable { var runs = 0 }
+        let count = Count()
+        let reader = CodexLimitsReader(interval: 600) {
+            count.runs += 1
+            return #"{"id":2,"result":{"rateLimits":{},"rateLimitUpsell":{"reset_at":1795539448}}}"#
+        }
+        let now = Date(timeIntervalSince1970: 1_795_400_000)
+        XCTAssertEqual(reader.depletedUntil(now: now), Date(timeIntervalSince1970: 1_795_539_448))
+        XCTAssertEqual(reader.depletedUntil(now: now.addingTimeInterval(60)), Date(timeIntervalSince1970: 1_795_539_448))
+        XCTAssertEqual(count.runs, 1)
+        XCTAssertNil(reader.depletedUntil(now: Date(timeIntervalSince1970: 1_795_600_000)), "a passed reset is not given")
+        XCTAssertEqual(count.runs, 2)
     }
 
     func testDepletedWhenAWindowIsFullOrALimitIsReached() {
