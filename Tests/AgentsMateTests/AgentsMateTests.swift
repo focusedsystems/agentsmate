@@ -154,17 +154,47 @@ final class ReopenAsTests: XCTestCase {
 }
 
 final class ClipboardRequestTests: XCTestCase {
-    func testFindsTmuxStyleWritesAcrossReads() {
+    private let payload = Data("copied text".utf8).base64EncodedString()
+
+    func testFindsEverySelectionAcrossReads() {
         var scanner = ClipboardRequests()
-        let payload = Data("copied text".utf8).base64EncodedString()
         let sequence = Array("before\u{1b}]52;;\(payload)\u{07}after".utf8)
         XCTAssertEqual(scanner.scan(sequence[0..<12]), [])
-        XCTAssertEqual(scanner.scan(sequence[12...]), ["copied text"])
-        // ST terminator, and "p" selection
-        XCTAssertEqual(scanner.scan(Array("\u{1b}]52;p;\(payload)\u{1b}\\".utf8)), ["copied text"])
-        // "c" is SwiftTerm's own, and "?" is a query
-        XCTAssertEqual(scanner.scan(Array("\u{1b}]52;c;\(payload)\u{07}".utf8)), [])
-        XCTAssertEqual(scanner.scan(Array("\u{1b}]52;;?\u{07}".utf8)), [])
+        XCTAssertEqual(scanner.scan(sequence[12...]), ["copied text"], "tmux's empty selection, split across reads")
+        XCTAssertEqual(scanner.scan(Array("\u{1b}]52;c;\(payload)\u{07}".utf8)), ["copied text"], "Claude Code and Codex send c")
+        XCTAssertEqual(scanner.scan(Array("\u{1b}]52;p;\(payload)\u{1b}\\".utf8)), ["copied text"], "ST terminator")
+        XCTAssertEqual(scanner.scan(Array("\u{1b}]52;cs0;\(payload)\u{07}".utf8)), ["copied text"])
         XCTAssertEqual(scanner.scan(Array("\u{1b}]11;?\u{07}plain".utf8)), [])
+    }
+
+    func testSplitsAnywhere() {
+        let sequence = Array("x\u{1b}]52;c;\(payload)\u{1b}\\y".utf8)
+        for cut in 1..<sequence.count {
+            var scanner = ClipboardRequests()
+            let found = scanner.scan(sequence[0..<cut]) + scanner.scan(sequence[cut...])
+            XCTAssertEqual(found, ["copied text"], "cut at \(cut)")
+        }
+    }
+
+    func testNeverAnswersAReadAndSkipsBadWrites() {
+        var scanner = ClipboardRequests()
+        XCTAssertEqual(scanner.scan(Array("\u{1b}]52;c;?\u{07}".utf8)), [], "a query is not a write")
+        XCTAssertEqual(scanner.scan(Array("\u{1b}]52;;?\u{1b}\\".utf8)), [])
+        XCTAssertEqual(scanner.scan(Array("\u{1b}]52;c;\u{07}".utf8)), [], "an empty write would only wipe the clipboard")
+        XCTAssertEqual(scanner.scan(Array("\u{1b}]52;x;\(payload)\u{07}".utf8)), [], "unknown selection")
+        XCTAssertEqual(scanner.scan(Array("\u{1b}]52;c;\(payload)\u{1b}[0m\u{07}".utf8)), [], "cut short by another escape")
+    }
+
+    func testUnwrapsTmuxPassthrough() {
+        let inner = "\u{1b}]52;c;\(payload)\u{07}".replacingOccurrences(of: "\u{1b}", with: "\u{1b}\u{1b}")
+        let wrapped = Array("\u{1b}Ptmux;\(inner)\u{1b}\\".utf8)
+        var scanner = ClipboardRequests()
+        XCTAssertEqual(scanner.scan(wrapped), ["copied text"])
+        for cut in 1..<wrapped.count {
+            var split = ClipboardRequests()
+            XCTAssertEqual(split.scan(wrapped[0..<cut]) + split.scan(wrapped[cut...]), ["copied text"], "cut at \(cut)")
+        }
+        let st = "\u{1b}]52;;\(payload)\u{1b}\\".replacingOccurrences(of: "\u{1b}", with: "\u{1b}\u{1b}")
+        XCTAssertEqual(scanner.scan(Array("\u{1b}Ptmux;\(st)\u{1b}\\".utf8)), ["copied text"], "inner ST terminator")
     }
 }

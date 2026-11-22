@@ -140,6 +140,38 @@ final class TerminalCopyPasteTests: XCTestCase {
                        "Edit › Copy copies the same text")
     }
 
+    func testProgramClipboardWritesReachThePasteboard() {
+        let view = AgentTerminalView(frame: NSRect(x: 0, y: 0, width: 400, height: 100))
+        let board = NSPasteboard(name: NSPasteboard.Name("agentsmate-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        view.pasteboard = board
+        let encoded = Data("from claude".utf8).base64EncodedString()
+        let sequence = Array("\u{1b}]52;c;\(encoded)\u{07}".utf8)
+        view.dataReceived(slice: sequence[0..<9])
+        XCTAssertNil(board.string(forType: .string))
+        view.dataReceived(slice: sequence[9...])
+        XCTAssertEqual(board.string(forType: .string), "from claude", "the c selection Claude Code sends")
+
+        let tmux = "\u{1b}]52;;\(Data("from tmux".utf8).base64EncodedString())\u{07}"
+        view.dataReceived(slice: ArraySlice(Array("\u{1b}Ptmux;\(tmux.replacingOccurrences(of: "\u{1b}", with: "\u{1b}\u{1b}"))\u{1b}\\".utf8)))
+        XCTAssertEqual(board.string(forType: .string), "from tmux", "wrapped in tmux passthrough")
+
+        view.dataReceived(slice: ArraySlice(Array("\u{1b}]52;c;?\u{07}".utf8)))
+        XCTAssertEqual(board.string(forType: .string), "from tmux", "a read request leaves the clipboard alone")
+    }
+
+    func testShiftAtThePressSelectsInTheTerminal() {
+        let view = AgentTerminalView(frame: NSRect(x: 0, y: 0, width: 400, height: 100))
+        let press = { (flags: NSEvent.ModifierFlags) in
+            NSEvent.mouseEvent(with: .leftMouseDown, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: 0,
+                               context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+        }
+        view.selectsOnShift(press(.shift))
+        XCTAssertFalse(view.allowMouseReporting, "⇧-drag selects here, not in the program")
+        view.selectsOnShift(press([]))
+        XCTAssertTrue(view.allowMouseReporting)
+    }
+
     func testCommandVIsTakenByTheTerminal() {
         let view = AgentTerminalView(frame: NSRect(x: 0, y: 0, width: 400, height: 100))
         let board = NSPasteboard(name: NSPasteboard.Name("agentsmate-test-\(UUID().uuidString)"))
