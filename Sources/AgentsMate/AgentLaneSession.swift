@@ -332,6 +332,7 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
         view.followAppearance()
         view.installInputHandling()
         view.getTerminal().changeHistorySize(configuration.scrollback)
+        view.scrollSensitivity = configuration.scrollSensitivity
         view.registerForDraggedTypes(AgentTerminalView.droppedTypes)
         view.onShortcut = { [weak self] shortcut in self?.onShortcut?(shortcut) ?? false }
         view.shortcutResolver = { [weak self] event in self?.shortcutResolver?(event) }

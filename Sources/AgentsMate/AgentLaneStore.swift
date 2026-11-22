@@ -18,6 +18,10 @@ public final class AgentLaneStore: ObservableObject {
         /// system's.
         public var baseFontSize: CGFloat
         public var scrollback: Int
+        /// How far a lane's terminal scrolls for a given trackpad travel or
+        /// wheel turn. 1 moves a line per row height of trackpad travel and
+        /// a step per wheel notch; above 1 is faster, below slower.
+        public var scrollSensitivity: CGFloat
         /// The shortcuts a focused terminal answers itself.
         public var shortcuts: TerminalShortcut.Set
         /// Prefix for the saved filters, selection and text size.
@@ -121,7 +125,9 @@ public final class AgentLaneStore: ObservableObject {
                     pullRequestLedgerFile: URL? = Configuration.defaultPullRequestLedgerFile,
                     pullRequestSeedFile: URL? = Configuration.defaultPullRequestSeedFile,
                     findsDetachedSessions: Bool = true,
-                    chooseFolder: @escaping @MainActor (_ startingAt: URL?) async -> URL? = AgentLaneStore.chooseFolderWithOpenPanel) {
+                    chooseFolder: @escaping @MainActor (_ startingAt: URL?) async -> URL? = AgentLaneStore.chooseFolderWithOpenPanel,
+                    scrollSensitivity: CGFloat = 1) {
+            self.scrollSensitivity = scrollSensitivity
             self.findsDetachedSessions = findsDetachedSessions
             self.chooseFolder = chooseFolder
             self.pullRequestResolvers = pullRequestResolvers
