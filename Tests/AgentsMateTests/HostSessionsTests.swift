@@ -40,12 +40,13 @@ final class HostSessionsParseTests: XCTestCase {
         XCTAssertNil(HostSessions.parse(twice, marks: marks), "a mark twice is no frame")
     }
 
-    func testFailedBindingsAreNotKnownAndAMissingCommandIsNone() throws {
+    func testBindingsAreKnownOnlyWhenTheCommandSucceeds() throws {
         let failed = try XCTUnwrap(HostSessions.parse(output(status: 1), marks: marks))
         XCTAssertFalse(failed.bindingsKnown)
         XCTAssertTrue(failed.bindings.isEmpty)
         let missing = try XCTUnwrap(HostSessions.parse(output(bindings: "", status: 127), marks: marks))
-        XCTAssertTrue(missing.bindingsKnown)
+        XCTAssertFalse(missing.bindingsKnown, "a missing command is a failure too")
+        XCTAssertTrue(try XCTUnwrap(HostSessions.parse(output(), marks: marks)).bindingsKnown)
     }
 
     func testRemoteListingIsReadOnlySSHInBatchMode() throws {
