@@ -190,13 +190,14 @@ public extension AgentLaneStore {
 
     /// Whether the person or the usage switch may start a session on
     /// `kind` in `folder`, where the app's default runs `appAgent`: the app
-    /// allows the agent, and another agent than the default's only when the
-    /// app judges folders and allows it in this one. Fails closed: no
-    /// predicate, or no folder, keeps the default's agent.
+    /// allows the agent, and when the app judges folders, the folder is known
+    /// and allowed for it, the default's own agent included. Without a
+    /// predicate only the default's agent may be picked. Fails closed: no
+    /// folder, or one the predicate denies, keeps the app's default.
     func mayPick(_ kind: LaneReopenChoice.Kind, in folder: URL?, appAgent: LaneAgentKind?) -> Bool {
         guard let agent = kind.agentKind, allowedAgentSet.contains(agent) else { return false }
-        if agent == appAgent { return true }
-        guard let allowed = configuration.agentAllowedForFolder, let folder else { return false }
+        guard let allowed = configuration.agentAllowedForFolder else { return agent == appAgent }
+        guard let folder else { return false }
         return allowed(agent, Self.canonicalFolder(folder))
     }
 
