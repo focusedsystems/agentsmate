@@ -101,13 +101,36 @@ public enum LaneIconLibrary {
 
     /// The Lucide licence text that ships with the bundled icons.
     static var licenceURL: URL? {
-        Bundle.module.url(forResource: "LICENSE-lucide", withExtension: "txt", subdirectory: "LaneIcons")
+        resources?.url(forResource: "LICENSE-lucide", withExtension: "txt", subdirectory: "LaneIcons")
     }
 
     static func url(forBundled name: String) -> URL? {
         guard !name.contains("/"), !name.contains(".") else { return nil }
-        return Bundle.module.url(forResource: name, withExtension: "svg", subdirectory: "LaneIcons")
+        return resources?.url(forResource: name, withExtension: "svg", subdirectory: "LaneIcons")
     }
+
+    /// The package's resource bundle, or nil when the app did not ship it.
+    ///
+    /// `Bundle.module` traps when the bundle is missing, which takes the whole
+    /// app down for want of an icon. This looks where SwiftPM and Xcode put it
+    /// (inside Contents/Resources, beside the executable, at the app's root)
+    /// and lets a missing icon fall back to a placeholder instead.
+    static let resources: Bundle? = {
+        let name = "AgentsMate_AgentsMate.bundle"
+        let candidates: [URL?] = [
+            Bundle.main.resourceURL,
+            Bundle.main.bundleURL,
+            Bundle.main.executableURL?.deletingLastPathComponent(),
+            Bundle(for: BundleToken.self).resourceURL,
+            Bundle(for: BundleToken.self).bundleURL.deletingLastPathComponent(),
+        ]
+        for base in candidates.compactMap({ $0 }) {
+            if let bundle = Bundle(url: base.appendingPathComponent(name)) { return bundle }
+        }
+        return nil
+    }()
+
+    private final class BundleToken {}
 
     private final class Cache: @unchecked Sendable {
         private let lock = NSLock()
