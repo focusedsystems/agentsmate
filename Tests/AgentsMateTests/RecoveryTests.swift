@@ -566,3 +566,78 @@ final class RestoreSnapshotTests: XCTestCase {
         XCTAssertNil(file.restore?.lanes.first?.variant)
     }
 }
+
+/// Background sessions that share a name are told apart by their short id.
+final class SharedNameSessionTests: XCTestCase {
+    private let json = #"""
+    [{"id":"1dcc92c7","sessionId":"1dcc92c7-aaaa","name":"same","cwd":"/tmp/repo","kind":"background","state":"working"},
+     {"id":"7893df00","sessionId":"7893df00-bbbb","name":"same","cwd":"/tmp/repo","kind":"background","state":"done"},
+     {"id":"ede373a7","sessionId":"ede373a7-cccc","name":"same","cwd":"/tmp/repo/wt","kind":"background","state":"blocked"},
+     {"id":"0badf00d","sessionId":"0badf00d-dddd","name":"single","cwd":"/tmp/other","kind":"background","state":"done"}]
+    """#
+
+    private var records: [LaneStatus] { ClaudeAgentsList.parse(Data(json.utf8)) }
+
+    func testEachSessionIsListedOnce() {
+        let sessions = ClaudeBackgroundLaneBackend.sessions(from: records, isLaneSession: nil)
+        XCTAssertEqual(sessions.map(\.agentID), ["1dcc92c7", "7893df00", "ede373a7", "0badf00d"])
+        XCTAssertEqual(Set(sessions.map(\.key)).count, 4, "one key per session, not per name")
+    }
+
+    func testEachSharedNameGetsItsOwnRowAttachedByID() {
+        let backend = ClaudeBackgroundLaneBackend()
+        let found = ClaudeBackgroundLaneBackend.sessions(from: records, isLaneSession: nil)
+            .map { DetachedSessions.Found(backendID: backend.id, session: $0) }
+        let left = DetachedSessions.unclaimed(found, lanes: [], backends: [backend.id: backend])
+        XCTAssertEqual(left.count, 4)
+        let shared = DetachedSessions.sharedNames(left)
+        let rows = left.map { DetachedSessions.lane(for: $0, sharesName: DetachedSessions.sharesName($0, in: shared)) }
+        XCTAssertEqual(Set(rows.map(\.id)).count, 4)
+        XCTAssertEqual(rows.map(\.title).sorted(), ["same · 1dcc92c7", "same · 7893df00", "same · ede373a7", "single"])
+        for row in rows {
+            let line = backend.launch(for: row, shell: "/bin/zsh").arguments.last ?? ""
+            XCTAssertEqual(line, "exec claude attach '\(row.agentSessionID ?? "")'", "attached by id, never by name")
+            XCTAssertEqual(backend.statusMatch(for: row), .session(row.agentSessionID ?? ""))
+        }
+        XCTAssertEqual(rows.first?.statusMatch, .session("1dcc92c7-aaaa"))
+    }
+
+    func testARowHoldsOnlyItsOwnSession() {
+        let backend = ClaudeBackgroundLaneBackend()
+        let found = ClaudeBackgroundLaneBackend.sessions(from: records, isLaneSession: nil)
+            .map { DetachedSessions.Found(backendID: backend.id, session: $0) }
+        var row = AgentLane(id: "r", title: "same", directory: URL(fileURLWithPath: "/tmp/elsewhere"), backendID: backend.id)
+        row.sessionName = "same"
+        row.agentSessionID = "7893df00"
+        let left = DetachedSessions.unclaimed(found, lanes: [row], backends: [backend.id: backend])
+        XCTAssertEqual(left.compactMap(\.session.agentID), ["1dcc92c7", "ede373a7", "0badf00d"])
+    }
+
+    func testANamedLaneResolvesItsIDOnlyWhenOneMatches() {
+        XCTAssertNil(ClaudeBackgroundLaneBackend.soleID(named: "same", in: "/tmp/repo", records: records),
+                     "two sessions of that name in the folder: no guess")
+        XCTAssertEqual(ClaudeBackgroundLaneBackend.soleID(named: "same", in: "/tmp/repo/wt", records: records), "ede373a7")
+        XCTAssertEqual(ClaudeBackgroundLaneBackend.soleID(named: "single", in: "/tmp/other/", records: records), "0badf00d")
+        XCTAssertNil(ClaudeBackgroundLaneBackend.soleID(named: "single", in: "/tmp/repo", records: records))
+    }
+
+    func testHostsAttachARowsOwnID() {
+        let backend = ClaudeBackgroundLaneBackend()
+        let listing = HostSessionListing(claude: records, bindingsKnown: true)
+        var row = AgentLane(id: "r", title: "same", directory: URL(fileURLWithPath: "/tmp/repo"), backendID: backend.id)
+        row.sessionName = "same"
+        XCTAssertNil(HostSessions.target(for: row, backend: backend, listing: listing,
+                                         config: HostSessionsConfiguration(), remoteHost: "box"),
+                     "two sessions share the name and folder: none is picked")
+        row.agentSessionID = "7893df00"
+        XCTAssertEqual(HostSessions.target(for: row, backend: backend, listing: listing,
+                                           config: HostSessionsConfiguration(), remoteHost: "box"),
+                       .claude(id: "7893df00", host: "box"))
+    }
+
+    func testAWorkspaceKeepsTheID() throws {
+        let lane = LaneWorkspace.Lane(backendID: "claude-bg", sessionName: "same", agentSessionID: "7893df00")
+        let back = try JSONDecoder().decode(LaneWorkspace.Lane.self, from: JSONEncoder().encode(lane))
+        XCTAssertEqual(back.agentSessionID, "7893df00")
+    }
+}

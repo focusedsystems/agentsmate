@@ -59,6 +59,12 @@ public struct ClaudeBackgroundLaneBackend: LaneBackend {
 
     public func launch(for lane: AgentLane, shell: String) -> TerminalLaunch {
         let claude = claude.isEmpty ? "claude" : claude
+        // Several sessions can share a name, and `claude attach <name>` then
+        // refuses, so a session whose id is known is attached by that id.
+        if let id = attachID(for: lane) {
+            let line = "exec \(claude) attach \(ShellQuote.quote(id))"
+            return TerminalLaunch(executable: shell, arguments: ["-l", "-i", "-c", line], directory: lane.path)
+        }
         let session = ShellQuote.quote(sessionName(for: lane) ?? name(lane))
         let start = ([claude, "--bg", "-n", session] + startArguments.map(ShellQuote.quote)).joined(separator: " ")
         // Attach when the session exists; otherwise start it here, then attach.
@@ -67,7 +73,31 @@ public struct ClaudeBackgroundLaneBackend: LaneBackend {
     }
 
     public func statusMatch(for lane: AgentLane) -> LaneStatusMatch {
-        .lane(sessionName(for: lane) ?? name(lane))
+        if let id = lane.agentSessionID, HostSessions.isValidAgentID(id) { return .session(id) }
+        return .lane(sessionName(for: lane) ?? name(lane))
+    }
+
+    /// The short id to attach `lane` by: the one the row knows, else the
+    /// one running session in the shared list with the lane's name and
+    /// folder. Nil when neither is known, so the name is used and a new
+    /// session started when none runs.
+    func attachID(for lane: AgentLane) -> String? {
+        if let id = lane.agentSessionID, HostSessions.isValidAgentID(id) { return id }
+        guard let data = try? Data(contentsOf: agentsListCache) else { return nil }
+        return Self.soleID(named: sessionName(for: lane) ?? name(lane), in: lane.path,
+                           records: ClaudeAgentsList.parse(data))
+    }
+
+    /// The short id of the one live session in `records` named `name` and
+    /// working in `folder`; nil when there is none or more than one.
+    static func soleID(named name: String, in folder: String, records: [LaneStatus]) -> String? {
+        let folder = LaneStatusMatch.normalizedPath(folder)
+        let found = records.filter { record in
+            record.state != .ended && record.lane == name
+                && record.directory.map(LaneStatusMatch.normalizedPath) == folder
+                && record.agentID.map(HostSessions.isValidAgentID) == true
+        }
+        return found.count == 1 ? found[0].agentID : nil
     }
 
     /// The session found by name, else the one ``name`` gives the lane.
@@ -95,21 +125,26 @@ public struct ClaudeBackgroundLaneBackend: LaneBackend {
 
     static func sessions(from records: [LaneStatus], isLaneSession: (@Sendable (String) -> Bool)?,
                          isRelevant: (@Sendable (DiscoveredSession) -> Bool)? = nil) -> [DiscoveredSession] {
+        // One per session: sessions can share a name, so they are told
+        // apart by their short id, and by name only when they have none.
         var seen = Set<String>()
         return records.compactMap { record in
             guard let name = record.lane, !name.isEmpty else { return nil }
-            let session = DiscoveredSession(kind: kind, name: name, directory: record.directory, sessionID: record.sessionID)
+            let agentID = record.agentID.flatMap { HostSessions.isValidAgentID($0) ? $0 : nil }
+            let session = DiscoveredSession(kind: kind, name: name, directory: record.directory, sessionID: record.sessionID,
+                                            agentID: agentID)
             let counts = isRelevant.map { $0(session) } ?? isLaneSession?(name) ?? true
-            guard counts, seen.insert(name).inserted else { return nil }
+            guard counts, seen.insert(agentID.map { "id:" + $0 } ?? "name:" + name).inserted else { return nil }
             return session
         }
     }
 
     public var canStop: Bool { true }
 
-    /// `claude stop` ends the session and keeps its conversation.
+    /// `claude stop` ends the session and keeps its conversation, by id
+    /// when it is known, as attaching does.
     public func stop(_ lane: AgentLane) {
-        LaneCommand.run([claude.isEmpty ? "claude" : claude, "stop", sessionName(for: lane) ?? name(lane)])
+        LaneCommand.run([claude.isEmpty ? "claude" : claude, "stop", attachID(for: lane) ?? sessionName(for: lane) ?? name(lane)])
     }
 }
 

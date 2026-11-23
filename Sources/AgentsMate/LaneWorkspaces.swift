@@ -17,6 +17,8 @@ public struct LaneWorkspace: Codable, Equatable, Sendable, Identifiable {
         public var variant: String?
         /// The session the lane attaches by name; see ``AgentLane/sessionName``.
         public var sessionName: String?
+        /// The session's short id; see ``AgentLane/agentSessionID``.
+        public var agentSessionID: String?
         /// The lane that was selected, in the restore snapshot.
         public var selected: Bool?
         /// See ``AgentLane/host``.
@@ -28,8 +30,9 @@ public struct LaneWorkspace: Codable, Equatable, Sendable, Identifiable {
 
         public init(title: String? = nil, directory: String? = nil, backendID: String,
                     section: String? = nil, pinned: Bool? = nil, variant: String? = nil,
-                    sessionName: String? = nil, selected: Bool? = nil, id: String? = nil,
+                    sessionName: String? = nil, agentSessionID: String? = nil, selected: Bool? = nil, id: String? = nil,
                     host: String? = nil, command: String? = nil, variantFlag: String? = nil) {
+            self.agentSessionID = agentSessionID
             self.id = id
             self.host = host
             self.command = command
