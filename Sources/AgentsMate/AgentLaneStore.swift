@@ -1083,9 +1083,9 @@ public final class AgentLaneStore: ObservableObject {
     /// so a session a row attaches leaves Detached whatever it is named.
     private var heldSessionIDs: [AgentLane.ID: [String]] = [:]
     /// The Claude session each row owns by the bindings, by short id
-    /// (``ownedSessionID(for:)``), as of the last status update. An owned
+    /// (``ownedSession(for:)``), as of the last status update. An owned
     /// session is the row's own and never also a found row.
-    private(set) var ownedSessionIDs: [AgentLane.ID: String] = [:]
+    private(set) var ownedSessionIDs: [AgentLane.ID: DetachedSessions.OwnedSession] = [:]
 
     private func startDiscovery() {
         discoveryTimer = CadenceTimer(interval: Self.discoveryInterval) { [weak self] in
@@ -1432,24 +1432,26 @@ public final class AgentLaneStore: ObservableObject {
     }
 
     /// The Claude background session a lane owns by the bindings
-    /// (``HostSessionsConfiguration/bindingsCommand``), by short id, from
-    /// the host its session runs on: with no hosts registry, this Mac for a
-    /// lane that runs here. Nil when the lane has no binding, or when its
-    /// host's bindings have never been known.
-    func ownedSessionID(for lane: AgentLane) -> String? {
+    /// (``HostSessionsConfiguration/bindingsCommand``): its exact short id,
+    /// on the host its session runs on (nil for this Mac). With no hosts
+    /// registry, only a lane that runs here, on this Mac. Nil when the lane
+    /// has no binding, or when its host's bindings have never been known.
+    func ownedSession(for lane: AgentLane) -> DetachedSessions.OwnedSession? {
         guard let config = configuration.hostSessions, config.bindingsCommand?.isEmpty == false,
               !detachedIDs.contains(lane.id) else { return nil }
         let host: String
-        if listingHosts != nil {
+        if let hosts = listingHosts {
             guard let found = sessionHost(for: lane) else { return nil }
             host = found
+            guard let id = knownBindings[host]?[config.bindingKey(lane)], HostSessions.isValidAgentID(id) else { return nil }
+            return .init(host: host == hosts.selfName ? nil : host, agentID: id)
         } else {
             guard lane.host == nil, let backend = backends[lane.backendID], DetachedSessions.laneHost(backend) == nil
             else { return nil }
             host = ""
         }
         guard let id = knownBindings[host]?[config.bindingKey(lane)], HostSessions.isValidAgentID(id) else { return nil }
-        return id
+        return .init(host: nil, agentID: id)
     }
 
     /// The host a lane's session runs on, as its backend runs it: a tmux
@@ -2242,26 +2244,36 @@ public final class AgentLaneStore: ObservableObject {
         return true
     }
 
-    /// How a lane's status is found: by the session it owns when the
-    /// bindings name one, so its row shows that session and no other, else
-    /// as the lane or its backend says.
-    func statusMatch(for session: AgentLaneSession) -> LaneStatusMatch {
-        if let owned = ownedSessionID(for: session.lane) { return .session(owned) }
+    /// How a lane's status is found. A lane that owns a session on this
+    /// Mac by the bindings shows that session and no other: the record
+    /// whose short id is exactly the bound one, by its full session id (so
+    /// hook events for it count too), and nothing while none is listed.
+    /// Otherwise as the lane or its backend says.
+    func statusMatch(for session: AgentLaneSession, records: [LaneStatus]? = nil) -> LaneStatusMatch {
+        if let owned = ownedSession(for: session.lane), owned.host == nil {
+            let records = records ?? statusFeed?.records ?? []
+            guard let id = records.first(where: { $0.agentID == owned.agentID })?.sessionID, !id.isEmpty else { return .none }
+            return .session(id)
+        }
         return session.lane.statusMatch ?? session.backend.statusMatch(for: session.lane)
     }
 
     private func apply(_ records: [LaneStatus]) {
         var held: [AgentLane.ID: [String]] = [:]
-        var owned: [AgentLane.ID: String] = [:]
+        var owned: [AgentLane.ID: DetachedSessions.OwnedSession] = [:]
         for session in sessions.values {
-            let match = statusMatch(for: session)
+            let match = statusMatch(for: session, records: records)
             let record = match.find(in: records)
             session.update(record: record)
-            if !detachedIDs.contains(session.id) {
-                let ids = DetachedSessions.heldSessionIDs(match: match, record: record)
-                if !ids.isEmpty { held[session.id] = ids }
-                if let id = ownedSessionID(for: session.lane) { owned[session.id] = id }
+            guard !detachedIDs.contains(session.id) else { continue }
+            if let own = ownedSession(for: session.lane) {
+                owned[session.id] = own
+                // A bound id is matched by host and exactly, below; it never
+                // joins the ids held on every host.
+                if own.host == nil { continue }
             }
+            let ids = DetachedSessions.heldSessionIDs(match: match, record: record)
+            if !ids.isEmpty { held[session.id] = ids }
         }
         objectWillChange.send()
         defer { noticeStatusSessions(records) }
