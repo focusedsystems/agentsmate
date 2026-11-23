@@ -204,8 +204,9 @@ public struct AgentLaneSidebar<Accessory: View>: View {
                         shortcutNumber: shortcutNumbers[lane.id],
                         isSplit: lane.id == store.splitID,
                         style: store.configuration.rowStyle,
-                        // A found session listed under its folder's row.
-                        isNested: !group.isDetached && store.isDetached(lane.id))
+                        // A found session listed under its folder's row; under
+                        // a repository heading every row is the heading's.
+                        isNested: group.repository == nil && !group.isDetached && store.isDetached(lane.id))
                     .tag(lane.id)
                     // A found session follows its folder's row; it moves
                     // once adopted.
@@ -283,11 +284,17 @@ public struct AgentLaneSidebar<Accessory: View>: View {
     @ViewBuilder
     private func sectionHeader(_ group: LaneGroup) -> some View {
         let title = group.title ?? labels.listTitle
-        let movable = group.section != nil && !group.isPinned && !group.isDetached
+        let repository = group.repository
+        let movable = repository == nil && group.section != nil && !group.isPinned && !group.isDetached
         let expanded = isExpanded(group)
         HStack(spacing: 4) {
             SectionDisclosure(isExpanded: expanded, title: title, isEnabled: !isFiltering) {
                 toggleExpanded(group)
+            }
+            if repository != nil, let id = group.headingLaneID, let head = store.sessions[id] {
+                LaneIconView(icon: head.icon, tintHex: head.tintHex, size: 14)
+                    .frame(width: 16)
+                    .accessibilityHidden(true)
             }
             if movable, let name = group.section, renaming == name {
                 TextField("Section Name", text: $sectionName)
@@ -318,9 +325,18 @@ public struct AgentLaneSidebar<Accessory: View>: View {
                 .accessibilityLabel("New \(labels.laneNoun) in \(title)")
             }
         }
-        .modifier(SectionDragging(name: movable ? group.section : nil, store: store))
+        .modifier(SectionDragging(name: movable ? group.section : nil, repository: repository, store: store))
         .contextMenu {
-            if group.isDetached {
+            if let repository {
+                Menu("New \(labels.laneNoun.capitalized) in \(title)") { newLaneItems(group) }
+                Divider()
+                let order = store.repositoryOrder
+                Button("Move Section Up") { store.moveRepository(repository, by: -1) }
+                    .disabled(order.first == repository)
+                Button("Move Section Down") { store.moveRepository(repository, by: 1) }
+                    .disabled(order.last == repository)
+                Divider()
+            } else if group.isDetached {
                 Button("Look for Detached Sessions Again") { store.sweepForDetachedSessions() }
                 Divider()
             } else {
@@ -1010,8 +1026,9 @@ struct LaneRow: View {
         if session.lane.isClosable, session.status == .attached || session.status == .detached {
             return session.shortDirectory
         }
-        // A lane that needs the person shows its dot, not words.
-        let title = LaneStatusFilter.wantsYou(session.status) ? "" : session.status.title
+        // Every row says what it is doing, a lane that needs the person
+        // too, beside its dot.
+        let title = session.status.title
         if isSplit { return title.isEmpty ? "split" : title + " · split" }
         return title
     }
@@ -1197,13 +1214,30 @@ struct SectionDisclosure: View {
 /// keyboard.
 private struct SectionDragging: ViewModifier {
     let name: String?
+    var repository: String?
     let store: AgentLaneStore
     @State private var targeted = false
 
     static let prefix = "agentsmate-section:"
+    static let repositoryPrefix = "agentsmate-repository:"
 
     func body(content: Content) -> some View {
-        if let name {
+        if let repository {
+            content
+                .draggable(Self.repositoryPrefix + repository) {
+                    Text((repository as NSString).lastPathComponent).padding(4)
+                }
+                .dropDestination(for: String.self) { items, _ in
+                    guard let item = items.first, item.hasPrefix(Self.repositoryPrefix) else { return false }
+                    let moved = String(item.dropFirst(Self.repositoryPrefix.count))
+                    guard moved != repository else { return false }
+                    store.moveRepository(moved, before: repository)
+                    return true
+                } isTargeted: { targeted = $0 }
+                .overlay(alignment: .top) {
+                    if targeted { Rectangle().fill(Color.accentColor).frame(height: 2).offset(y: -3) }
+                }
+        } else if let name {
             content
                 .draggable(Self.prefix + name) { Text(name).padding(4) }
                 .dropDestination(for: String.self) { items, _ in
