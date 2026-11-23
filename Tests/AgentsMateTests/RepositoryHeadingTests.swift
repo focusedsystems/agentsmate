@@ -89,31 +89,57 @@ final class RepositoryHeadingTests: XCTestCase {
         XCTAssertTrue(store.groups.allSatisfy { $0.repository == nil })
     }
 
-    func testTheSamePathOnTwoHostsHeadsTwoHeadingsAndPlusStartsOnTheHeadingsHost() async {
+    func testTheSamePathOnTwoHostsHeadsTwoHeadingsAndPlusStartsOnlyWhereItReallyRuns() async {
         var asked = 0
         let config = AgentLaneStore.Configuration(termProgram: "T", sessionFileDirectory: nil, findsDetachedSessions: false,
                                                   chooseFolder: { _ in asked += 1; return nil })
         let remote = CommandLaneBackend.tmuxLane(id: "remote", displayName: "Remote", command: "w", statusAgent: "claude",
                                                  tmuxSessions: TmuxLaneSessions(prefixes: ["lane-"], host: "build-mac"))
+        let wrapper = CommandLaneBackend(id: "wrap", displayName: "Wrap", command: "w", passesDirectory: true)
         let store = AgentLaneStore(configuration: config,
-                                   backends: [CommandLaneBackend(id: "agent", displayName: "Agent", command: "true"), remote],
+                                   backends: [CommandLaneBackend(id: "agent", displayName: "Agent", command: "true"), remote, wrapper],
                                    statusFeed: nil,
                                    defaults: UserDefaults(suiteName: "agentsmate-repos-\(UUID().uuidString)")!)
-        var other = lane("api-other", "/w/api", section: "Platform")
+        var other = AgentLane(id: "api-other", title: "API", directory: URL(fileURLWithPath: "/w/api"), backendID: "wrap")
         other.host = "other-mac"
-        store.sync(lanes: [lane("api", "/w/api", section: "Platform"), other])
-        let headings = store.groups.filter { $0.repository != nil }
-        XCTAssertEqual(headings.map(\.repository), ["/w/api", "other-mac:/w/api"])
-        XCTAssertEqual(headings.map(\.host), [nil, "other-mac"])
-        XCTAssertEqual(headings.map { $0.lanes.map(\.id) }, [["api"], ["api-other"]])
+        let wrapped = AgentLane(id: "web", title: "Web", directory: URL(fileURLWithPath: "/w/web"), backendID: "wrap")
+        store.sync(lanes: [lane("api", "/w/api", section: "Platform"), other, wrapped])
+        let found = store.groups.filter { $0.repository != nil }
+        let order = ["/w/api", "other-mac:/w/api", "/w/web"]
+        let headings = order.compactMap { key in found.first { $0.repository == key } }
+        XCTAssertEqual(headings.count, 3, "the same path on two hosts heads two headings")
+        XCTAssertEqual(headings.map(\.host), [nil, "other-mac", nil])
+        XCTAssertEqual(headings.map { $0.lanes.map(\.id) }, [["api"], ["api-other"], ["web"]])
 
-        let made = await store.newLane(in: headings[1], backendID: "agent", focus: false)
-        XCTAssertEqual(made?.lane.host, "other-mac", "the + starts the lane on the heading's host")
+        XCTAssertEqual(store.newLaneHost(in: headings[1], backendID: "wrap"), "other-mac")
+        XCTAssertNil(store.newLaneHost(in: headings[1], backendID: "agent"), "a backend that ignores the host is not shown as running there")
+        XCTAssertNil(store.newLaneHost(in: headings[0], backendID: "wrap"))
+
+        let made = await store.newLane(in: headings[1], backendID: "wrap", focus: false)
+        XCTAssertEqual(made?.lane.host, "other-mac", "the + starts a wrapper lane on the heading's host")
         XCTAssertEqual(made?.lane.path, "/w/api")
         XCTAssertEqual(asked, 0)
 
-        let elsewhere = await store.newLane(in: headings[0], backendID: "remote", focus: false)
-        XCTAssertNil(elsewhere, "a backend on another machine asks for a folder; cancelling starts nothing")
+        let local = await store.newLane(in: headings[0], backendID: "agent", focus: false)
+        XCTAssertNil(local?.lane.host)
+        XCTAssertEqual(asked, 0, "same machine as the heading's rows: no question")
+
+        let ignoresHost = await store.newLaneIfAsked(store, headings[1], "agent")
+        XCTAssertNil(ignoresHost, "a backend that ignores the heading's host asks for a folder")
         XCTAssertEqual(asked, 1)
+
+        let elsewhere = await store.newLaneIfAsked(store, headings[0], "remote")
+        XCTAssertNil(elsewhere, "a backend on another machine asks for a folder")
+        XCTAssertEqual(asked, 2)
+
+        let wrapperDefault = await store.newLaneIfAsked(store, headings[2], "agent")
+        XCTAssertNil(wrapperDefault, "a wrapper heading's default machine is not this Mac for certain")
+        XCTAssertEqual(asked, 3)
+    }
+}
+
+private extension AgentLaneStore {
+    func newLaneIfAsked(_ store: AgentLaneStore, _ group: LaneGroup, _ backendID: String) async -> AgentLaneSession? {
+        await store.newLane(in: group, backendID: backendID, focus: false)
     }
 }

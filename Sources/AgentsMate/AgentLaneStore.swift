@@ -880,9 +880,30 @@ public final class AgentLaneStore: ObservableObject {
     /// wrapper that reads the host from its environment.
     public func runOnHosts(for id: AgentLane.ID) -> [AgentHosts.Host] {
         guard let hosts = agentHosts, let lane = lanes.first(where: { $0.id == id }), lane.isClosable,
-              !detachedIDs.contains(id), let backend = backends[lane.backendID] as? CommandLaneBackend,
-              backend.passesDirectory, backend.tmuxSessions?.host == nil else { return [] }
+              !detachedIDs.contains(id), let backend = backends[lane.backendID],
+              Self.backendHonorsLaneHost(backend) else { return [] }
         return hosts.laneHosts
+    }
+
+    /// Whether `backend` runs a lane on its ``AgentLane/host``: a lane
+    /// wrapper that passes the folder and reads the host from its
+    /// environment, with no tmux host of its own. Any other backend runs
+    /// where it always does, whatever the lane's host says.
+    public nonisolated static func backendHonorsLaneHost(_ backend: any LaneBackend) -> Bool {
+        (backend as? CommandLaneBackend).map { $0.passesDirectory && $0.tmuxSessions?.host == nil } ?? false
+    }
+
+    /// The machine a lane with `host` would run on under `backend`, as a
+    /// token to compare: this Mac, a named host, or a wrapper's own
+    /// default when no host and no hub is known. A wrapper's lane with no
+    /// host runs on the hub.
+    func effectiveMachine(of backend: any LaneBackend, host: String?) -> String {
+        if Self.backendHonorsLaneHost(backend) {
+            guard let name = host.flatMap({ $0.isEmpty ? nil : $0 }) ?? agentHosts?.hub?.name else { return "wrapper-default" }
+            return name == agentHosts?.selfName ? "local" : "host:" + name
+        }
+        if let host = DetachedSessions.laneHost(backend) { return "host:" + host }
+        return "local"
     }
 
     /// The host a lane runs on: its own, else the hub.
@@ -1621,17 +1642,28 @@ public final class AgentLaneStore: ObservableObject {
 
     /// The folder a repository heading's + starts a lane running
     /// `backendID` in, without asking: the heading's own, when its lanes
-    /// all run on one host and that backend reaches the same machine. Nil
-    /// for a section, or when the host is not certain, so the folder
-    /// chooser asks instead of starting the lane on this Mac.
+    /// all run on one machine and that backend runs the new lane there too.
+    /// Nil for a section, or when that is not certain (a heading on a host
+    /// the backend does not honour, rows on several machines), so the
+    /// folder chooser asks instead of starting the lane somewhere else.
     func headingTarget(for group: LaneGroup, backendID: String) -> String? {
         guard group.repository != nil, let path = group.repositoryPath, let backend = backends[backendID] else { return nil }
+        if group.host != nil, !Self.backendHonorsLaneHost(backend) { return nil }
         let rows = group.lanes.filter { !detachedIDs.contains($0.id) }
-        let hosts = Set(rows.map { $0.host.flatMap { $0.isEmpty ? nil : $0 } ?? "" })
-        guard hosts.count == 1, hosts.first == (group.host ?? "") else { return nil }
-        let machines = Set(rows.compactMap { backends[$0.backendID] }.map { DetachedSessions.laneHost($0) ?? "" })
-        guard machines.count == 1, machines.first == (DetachedSessions.laneHost(backend) ?? "") else { return nil }
+        var machines = Set<String>()
+        for row in rows {
+            guard let rowBackend = backends[row.backendID] else { return nil }
+            machines.insert(effectiveMachine(of: rowBackend, host: row.host))
+        }
+        guard machines.count == 1, machines.first == effectiveMachine(of: backend, host: group.host) else { return nil }
         return path
+    }
+
+    /// The host a repository heading's + names for `backend`: the heading's,
+    /// only when it is not the default and the backend really runs there.
+    public func newLaneHost(in group: LaneGroup, backendID: String) -> String? {
+        guard let host = group.host, let backend = backends[backendID], Self.backendHonorsLaneHost(backend) else { return nil }
+        return host
     }
 
     /// Whether a group's + can start a lane in it: every group but Detached.
@@ -1668,7 +1700,7 @@ public final class AgentLaneStore: ObservableObject {
         let name = backends[backendID]?.displayName ?? "Lane"
         var lane = AgentLane(id: UUID().uuidString, title: "\(name) · \(folder.lastPathComponent)",
                              directory: folder, backendID: backendID, isClosable: true, section: section)
-        if target != nil { lane.host = group.host }
+        if target != nil, let backend = backends[backendID], Self.backendHonorsLaneHost(backend) { lane.host = group.host }
         lane.variant = freeVariant(for: lane)
         if let variant = lane.variant { lane.title += " \(variant)" }
         // A person's move wins over a lane's own section, so record this
