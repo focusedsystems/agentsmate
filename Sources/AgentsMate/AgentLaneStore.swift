@@ -87,7 +87,10 @@ public final class AgentLaneStore: ObservableObject {
         /// Without it nothing moves a new session to an agent other than the
         /// app's default: neither the New Sessions choice nor the usage
         /// switch. With it, they apply only to a session whose folder is
-        /// known and allowed for the agent picked.
+        /// known and allowed for the agent picked. It is handed the folder
+        /// with symlinks, `~` and `..` resolved, as an absolute path; compare
+        /// whole path components (``laneFolder(_:isInside:)``), never a raw
+        /// string prefix.
         public var agentAllowedForFolder: (@Sendable (LaneAgentKind, URL) -> Bool)? = nil
         /// The id of the app's inbox window scene (a `Window` holding
         /// ``AgentInboxView``). Set, the sidebar's foot gets an inbox button
@@ -1701,6 +1704,7 @@ public final class AgentLaneStore: ObservableObject {
     public func openNewLane(in directory: URL? = nil, backendID: String? = nil, focus: Bool = true,
                             open shouldOpen: Bool = true, section: String? = nil,
                             followsAgentChoice: Bool = true) -> AgentLaneSession? {
+        let directory = directory.map(Self.canonicalFolder)
         let id = followsAgentChoice ? newSessionPlan(preferring: backendID, in: directory).backendID
             : backendID ?? configuredNewLaneBackendID
         if backends[id] == nil, id == CommandLaneBackend.shell.id { register(CommandLaneBackend.shell) }
@@ -1845,7 +1849,9 @@ public final class AgentLaneStore: ObservableObject {
     @discardableResult
     public func newSessionLane(in group: LaneGroup, focus: Bool = true) async -> AgentLaneSession? {
         guard canAddLane(to: group) else { return nil }
-        guard let folder = await configuration.chooseFolder(startingFolder(for: group)) else { return nil }
+        guard let chosen = await configuration.chooseFolder(startingFolder(for: group)) else { return nil }
+        // One resolved folder for the check, the plan and the lane itself.
+        let folder = Self.canonicalFolder(chosen)
         return await newLane(in: group, backendID: newSessionPlan(in: folder).backendID, focus: focus,
                              folder: folder)
     }

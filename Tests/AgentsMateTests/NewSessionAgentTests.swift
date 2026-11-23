@@ -176,4 +176,36 @@ final class NewSessionAgentTests: XCTestCase {
         let lane = store.openNewLane(in: work, backendID: "cmd:claude", focus: false, open: false)
         XCTAssertEqual(lane?.backend.id, "cmd:codex-remote")
     }
+
+    func testFolderMatchingIsByWholeComponentsAfterResolvingSymlinks() throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("agentsmate-folders-\(UUID().uuidString)")
+        let work = base.appendingPathComponent("work/repo")
+        let open = base.appendingPathComponent("open/repo")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: open, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let intoWork = base.appendingPathComponent("open/link-to-work")
+        let intoOpen = base.appendingPathComponent("work/link-to-open")
+        try FileManager.default.createSymbolicLink(at: intoWork, withDestinationURL: work)
+        try FileManager.default.createSymbolicLink(at: intoOpen, withDestinationURL: open)
+
+        let workRoot = base.appendingPathComponent("work").path
+        XCTAssertTrue(laneFolder(work.path, isInside: workRoot))
+        XCTAssertFalse(laneFolder(base.appendingPathComponent("workshop").path, isInside: workRoot), "not a string prefix")
+        XCTAssertTrue(laneFolder(intoWork.path, isInside: workRoot), "a link from outside into work is work")
+        XCTAssertFalse(laneFolder(intoOpen.path, isInside: workRoot), "a link inside work to outside is not")
+        XCTAssertFalse(laneFolder(work.path + "/../../open/repo", isInside: workRoot))
+
+        // Codex only in work; Claude anywhere.
+        let (store, _) = makeStore(folders: { agent, folder in agent == .claude || laneFolder(folder.path, isInside: workRoot) })
+        store.newSessionAgent = .codexRemote
+        XCTAssertEqual(store.newSessionPlan(preferring: "cmd:claude", in: intoOpen, usages: []).backendID, "cmd:claude")
+        XCTAssertEqual(store.newSessionPlan(preferring: "cmd:claude", in: intoWork, usages: []).backendID, "cmd:codex-remote")
+        let lane = store.openNewLane(in: intoWork, backendID: "cmd:claude", focus: false, open: false)
+        XCTAssertEqual(lane?.backend.id, "cmd:codex-remote")
+        XCTAssertEqual(lane?.lane.directory?.path, LaneStatusMatch.normalizedPath(work.path),
+                       "the lane works in the folder that was checked")
+        let other = store.openNewLane(in: intoOpen, backendID: "cmd:claude", focus: false, open: false)
+        XCTAssertEqual(other?.backend.id, "cmd:claude")
+    }
 }

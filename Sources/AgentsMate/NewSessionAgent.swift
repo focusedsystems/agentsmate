@@ -1,6 +1,16 @@
 import Foundation
 import AgentsMateStatus
 
+/// Whether `path` is `root` or inside it, comparing whole path components
+/// after resolving `~`, `.`, `..` and symlinks in both, never a raw string
+/// prefix: `/a/bc` is not inside `/a/b`. For an app's
+/// ``AgentLaneStore/Configuration/agentAllowedForFolder``.
+public func laneFolder(_ path: String, isInside root: String) -> Bool {
+    let inner = URL(fileURLWithPath: LaneStatusMatch.normalizedPath(path)).pathComponents
+    let outer = URL(fileURLWithPath: LaneStatusMatch.normalizedPath(root)).pathComponents
+    return inner.count >= outer.count && Array(inner.prefix(outer.count)) == outer
+}
+
 /// An agent a new session can start on, whatever mode it runs in.
 public enum LaneAgentKind: String, CaseIterable, Codable, Hashable, Sendable {
     case claude
@@ -187,7 +197,14 @@ public extension AgentLaneStore {
         guard let agent = kind.agentKind, allowedAgentSet.contains(agent) else { return false }
         if agent == appAgent { return true }
         guard let allowed = configuration.agentAllowedForFolder, let folder else { return false }
-        return allowed(agent, folder)
+        return allowed(agent, Self.canonicalFolder(folder))
+    }
+
+    /// `folder` as one absolute path with `~`, `.`, `..` and symlinks
+    /// resolved, so the folder an agent is allowed in is the folder it works
+    /// in. New sessions are planned and stored with this value.
+    nonisolated static func canonicalFolder(_ folder: URL) -> URL {
+        URL(fileURLWithPath: LaneStatusMatch.normalizedPath(folder.path), isDirectory: true)
     }
 
     /// Whether the near-limit switch can ever move a session here: the app
