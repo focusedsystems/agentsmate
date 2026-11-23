@@ -259,3 +259,89 @@ final class HostSessionsStoreTests: XCTestCase {
     }
 }
 
+
+/// A Claude background session a lane owns by the bindings is that lane's
+/// row alone: never also a found row, and the row's status is its.
+@MainActor
+final class OwnedSessionTests: XCTestCase {
+    private let hosts = AgentHosts(hosts: [.init(name: "hub-mac", role: .hub, platform: "mac")], selfName: "hub-mac")
+    private let folder = "/w/nutrition"
+
+    private func store() -> AgentLaneStore {
+        let defaults = UserDefaults(suiteName: "agentsmate-owned-\(UUID().uuidString)")!
+        let config = AgentLaneStore.Configuration(
+            termProgram: "T", sessionFileDirectory: nil, sharedLanes: nil,
+            hostSessions: HostSessionsConfiguration(claude: "/usr/bin/true", tmux: "/usr/bin/true",
+                                                    bindingsCommand: "/usr/bin/true", ssh: "/usr/bin/true", hosts: hosts))
+        let wrapper = CommandLaneBackend.tmuxLane(id: "area", displayName: "Area", command: "wrapper", statusAgent: "claude",
+                                                  tmuxSessions: TmuxLaneSessions(sessionName: { @Sendable _ in "nutrition" }))
+        var background = ClaudeBackgroundLaneBackend(id: "claude-bg")
+        background.discoversSessions = false
+        let store = AgentLaneStore(configuration: config, backends: [wrapper, background], statusFeed: nil, defaults: defaults)
+        store.add(AgentLane(id: "Nutrition", title: "Nutrition", directory: URL(fileURLWithPath: folder), backendID: "area"),
+                  open: false)
+        return store
+    }
+
+    private func found(_ id: String, _ name: String) -> DetachedSessions.Found {
+        .init(backendID: "claude-bg", session: DiscoveredSession(kind: ClaudeBackgroundLaneBackend.kind, name: name,
+                                                                 directory: folder, sessionID: id + "-1111-2222", agentID: id))
+    }
+
+    private var bothSessions: [DetachedSessions.Found] { [found("f4eced18", "Nutrition"), found("fabb4b85", "Personal - Nutrition")] }
+
+    private func foundTitles(_ store: AgentLaneStore) -> [String] {
+        store.lanes.filter { store.isDetached($0.id) }.map(\.title).sorted()
+    }
+
+    func testAnOwnedSessionIsHiddenAndItsSiblingShown() {
+        let store = store()
+        store.received(.init(bindings: ["Nutrition": "f4eced18"]), from: "hub-mac", hosts: hosts)
+        store.received(found: bothSessions)
+        XCTAssertEqual(store.ownedSessionID(for: store.lanes[0]), "f4eced18")
+        XCTAssertEqual(foundTitles(store), ["Personal - Nutrition"],
+                       "the lane's own session is its row; the other session in the folder still shows")
+        let sibling = store.lanes.first { store.isDetached($0.id) }
+        XCTAssertEqual(sibling?.agentSessionID, "fabb4b85", "the sibling is attached by its id")
+        XCTAssertEqual(store.statusMatch(for: store.sessions["Nutrition"]!), .session("f4eced18"),
+                       "the row's status and summary come from the session it owns")
+    }
+
+    func testOwnershipIsByIDNeverByName() {
+        let left = DetachedSessions.unclaimed([found("aaaa1111", "Nutrition"), found("f4eced18", "renamed")],
+                                              lanes: [AgentLane(id: "n", title: "Other", directory: URL(fileURLWithPath: "/x"),
+                                                                backendID: "claude-bg")],
+                                              backends: ["claude-bg": ClaudeBackgroundLaneBackend(id: "claude-bg")],
+                                              ownedSessionIDs: ["n": "f4eced18"])
+        XCTAssertEqual(left.map(\.session.agentID), ["aaaa1111"])
+        XCTAssertEqual(DetachedSessions.unclaimed([found("f4eced18", "renamed")], lanes: [],
+                                                  backends: ["claude-bg": ClaudeBackgroundLaneBackend(id: "claude-bg")],
+                                                  ownedSessionIDs: ["gone": "f4eced18"]).count, 1,
+                       "a row that is not listed owns nothing")
+    }
+
+    func testUnknownBindingsHideNothingAndAKnownBindingIsKept() {
+        let store = store()
+        store.received(.init(bindingsKnown: false), from: "hub-mac", hosts: hosts)
+        store.received(found: bothSessions)
+        XCTAssertNil(store.ownedSessionID(for: store.lanes[0]))
+        XCTAssertEqual(foundTitles(store), ["Nutrition", "Personal - Nutrition"], "nothing is provably owned, so nothing is hidden")
+
+        store.received(.init(bindings: ["Nutrition": "f4eced18"]), from: "hub-mac", hosts: hosts)
+        XCTAssertEqual(foundTitles(store), ["Personal - Nutrition"])
+        store.received(.init(bindingsKnown: false), from: "hub-mac", hosts: hosts)
+        store.received(nil, from: "hub-mac", hosts: hosts)
+        XCTAssertEqual(foundTitles(store), ["Personal - Nutrition"],
+                       "a failed ask later keeps the last known binding, so the row does not flicker back")
+    }
+
+    func testNoFoundRowsUntilTheHostsFirstAnswer() {
+        let store = store()
+        XCTAssertTrue(store.awaitingFirstBindings, "the store asks its hosts as it starts")
+        store.received(found: bothSessions)
+        XCTAssertTrue(foundTitles(store).isEmpty, "a session that may be a lane's own is not shown before the bindings")
+        store.received(.init(bindings: ["Nutrition": "f4eced18"]), from: "hub-mac", hosts: hosts)
+        XCTAssertFalse(store.awaitingFirstBindings)
+        XCTAssertEqual(foundTitles(store), ["Personal - Nutrition"])
+    }
+}

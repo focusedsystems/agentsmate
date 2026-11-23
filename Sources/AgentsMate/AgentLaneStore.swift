@@ -1082,6 +1082,10 @@ public final class AgentLaneStore: ObservableObject {
     /// The agent session ids each row holds, as of the last status update,
     /// so a session a row attaches leaves Detached whatever it is named.
     private var heldSessionIDs: [AgentLane.ID: [String]] = [:]
+    /// The Claude session each row owns by the bindings, by short id
+    /// (``ownedSessionID(for:)``), as of the last status update. An owned
+    /// session is the row's own and never also a found row.
+    private(set) var ownedSessionIDs: [AgentLane.ID: String] = [:]
 
     private func startDiscovery() {
         discoveryTimer = CadenceTimer(interval: Self.discoveryInterval) { [weak self] in
@@ -1109,6 +1113,7 @@ public final class AgentLaneStore: ObservableObject {
         guard configuration.findsDetachedSessions, !sweepingSessions else { return }
         sweepingSessions = true
         lastSweep = Date()
+        refreshHostListingSoon()
         let backends = availableBackends
         Task { @MainActor [weak self] in
             var found: [DetachedSessions.Found] = []
@@ -1120,9 +1125,14 @@ public final class AgentLaneStore: ObservableObject {
             }
             guard let self else { return }
             self.sweepingSessions = false
-            self.discovered = found
-            self.reconcileDetached()
+            self.received(found: found)
         }
+    }
+
+    /// Take what a sweep found and match it against the rows.
+    func received(found: [DetachedSessions.Found]) {
+        discovered = found
+        reconcileDetached()
     }
 
     /// Match the last sweep against the rows: add a Detached row for each
@@ -1131,13 +1141,17 @@ public final class AgentLaneStore: ObservableObject {
     private func reconcileDetached() {
         guard configuration.findsDetachedSessions else { return }
         let rows = lanes.filter { !detachedIDs.contains($0.id) }
-        let wanted = DetachedSessions.unclaimed(discovered, lanes: rows, backends: backends, heldSessionIDs: heldSessionIDs)
+        let wanted = DetachedSessions.unclaimed(discovered, lanes: rows, backends: backends, heldSessionIDs: heldSessionIDs,
+                                                ownedSessionIDs: ownedSessionIDs)
         let wantedIDs = Set(wanted.map(DetachedSessions.laneID))
         for id in detachedIDs where !wantedIDs.contains(id) && sessions[id]?.isAttached != true {
             removeDetachedRow(id)
         }
         let shared = DetachedSessions.sharedNames(wanted)
-        for found in wanted where backends[found.backendID] != nil {
+        // Until the hosts first say which lane owns which session, a found
+        // row is not added: it could be a lane's own, and would go again.
+        for found in wanted where backends[found.backendID] != nil
+            && (!awaitingFirstBindings || lanes.contains { $0.id == DetachedSessions.laneID(found) }) {
             let lane = DetachedSessions.lane(for: found, sharesName: DetachedSessions.sharesName(found, in: shared))
             if let index = lanes.firstIndex(where: { $0.id == lane.id }) {
                 // A name another session took or gave up since the row was made.
@@ -1334,11 +1348,43 @@ public final class AgentLaneStore: ObservableObject {
     @Published private(set) var launchAttachPending: AgentLane.ID?
     private var listingHosts: AgentHosts?
 
-    /// Ask every hub and lane host in the registry what it has running.
+    /// What this Mac had running, when the app gives no hosts registry: the
+    /// bindings command run here, for the lanes that run here.
+    private(set) var localListing: HostSessionListing?
+    /// Hosts asked and not yet answered, by name ("" is this Mac with no
+    /// registry), so an ask still going is not started again.
+    private var hostAsksGoing: Set<String> = []
+    /// True from the first ask until every host asked has answered or timed
+    /// out once. Until then a sweep adds no found rows, so a session a lane
+    /// turns out to own is never shown apart and then taken away.
+    private(set) var awaitingFirstBindings = false
+    private var lastHostAsk = Date.distantPast
+    /// The shortest wait between asks after the first, so a busy status
+    /// feed does not run the listing on every host each sweep.
+    static let hostAskSpacing: TimeInterval = 60
+    /// The last bindings each host gave that were known, by host name ("" is
+    /// this Mac with no registry). Kept when a later ask fails, so a lane's
+    /// ownership does not come and go with one host's answer.
+    private var knownBindings: [String: [String: String]] = [:]
+
+    /// Ask every hub and lane host in the registry what it has running, or
+    /// only this Mac when there is no registry.
     private func startHostListing() {
-        guard let config = configuration.hostSessions, let hosts = config.hosts ?? agentHosts ?? AgentHosts.load() else { return }
+        guard let config = configuration.hostSessions else { return }
+        lastHostAsk = Date()
+        guard let hosts = config.hosts ?? agentHosts ?? AgentHosts.load() else {
+            guard config.bindingsCommand?.isEmpty == false, hostAsksGoing.insert("").inserted else { return }
+            if localListing == nil { awaitingFirstBindings = true }
+            Task { @MainActor [weak self] in
+                let listing = await HostSessions.list(host: nil, config: config)
+                self?.receivedLocal(listing)
+            }
+            return
+        }
         listingHosts = hosts
-        for host in HostSessions.askedHosts(hosts) {
+        let asked = HostSessions.askedHosts(hosts).filter { hostAsksGoing.insert($0.name).inserted }
+        if !asked.isEmpty, hostListings.isEmpty, unknownHosts.isEmpty { awaitingFirstBindings = true }
+        for host in asked {
             let name = host.name, local = name == hosts.selfName
             Task { @MainActor [weak self] in
                 let listing = await HostSessions.list(host: local ? nil : name, config: config)
@@ -1347,17 +1393,63 @@ public final class AgentLaneStore: ObservableObject {
         }
     }
 
+    /// Ask the hosts again, when the last ask is ``hostAskSpacing`` old, so
+    /// bindings made since launch are seen.
+    private func refreshHostListingSoon() {
+        guard configuration.hostSessions != nil, Date().timeIntervalSince(lastHostAsk) >= Self.hostAskSpacing else { return }
+        startHostListing()
+    }
+
     /// Record one host's answer, nil when it did not give one.
     func received(_ listing: HostSessionListing?, from host: String, hosts: AgentHosts? = nil) {
         if let hosts { listingHosts = hosts }
+        hostAsksGoing.remove(host)
         if let listing {
             hostListings[host] = listing
             unknownHosts.remove(host)
+            if listing.bindingsKnown { knownBindings[host] = listing.bindings }
         } else {
             hostListings[host] = nil
             unknownHosts.insert(host)
         }
         attachPendingFromHosts()
+        bindingsChanged()
+    }
+
+    /// Record this Mac's answer when there is no hosts registry.
+    func receivedLocal(_ listing: HostSessionListing?) {
+        hostAsksGoing.remove("")
+        localListing = listing ?? localListing
+        if let listing, listing.bindingsKnown { knownBindings[""] = listing.bindings }
+        bindingsChanged()
+    }
+
+    /// Match status and found sessions again with what the hosts said.
+    private func bindingsChanged() {
+        if awaitingFirstBindings, hostAsksGoing.isEmpty { awaitingFirstBindings = false }
+        apply(statusFeed?.records ?? [])
+        reconcileDetached()
+    }
+
+    /// The Claude background session a lane owns by the bindings
+    /// (``HostSessionsConfiguration/bindingsCommand``), by short id, from
+    /// the host its session runs on: with no hosts registry, this Mac for a
+    /// lane that runs here. Nil when the lane has no binding, or when its
+    /// host's bindings have never been known.
+    func ownedSessionID(for lane: AgentLane) -> String? {
+        guard let config = configuration.hostSessions, config.bindingsCommand?.isEmpty == false,
+              !detachedIDs.contains(lane.id) else { return nil }
+        let host: String
+        if listingHosts != nil {
+            guard let found = sessionHost(for: lane) else { return nil }
+            host = found
+        } else {
+            guard lane.host == nil, let backend = backends[lane.backendID], DetachedSessions.laneHost(backend) == nil
+            else { return nil }
+            host = ""
+        }
+        guard let id = knownBindings[host]?[config.bindingKey(lane)], HostSessions.isValidAgentID(id) else { return nil }
+        return id
     }
 
     /// The host a lane's session runs on, as its backend runs it: a tmux
@@ -2150,15 +2242,25 @@ public final class AgentLaneStore: ObservableObject {
         return true
     }
 
+    /// How a lane's status is found: by the session it owns when the
+    /// bindings name one, so its row shows that session and no other, else
+    /// as the lane or its backend says.
+    func statusMatch(for session: AgentLaneSession) -> LaneStatusMatch {
+        if let owned = ownedSessionID(for: session.lane) { return .session(owned) }
+        return session.lane.statusMatch ?? session.backend.statusMatch(for: session.lane)
+    }
+
     private func apply(_ records: [LaneStatus]) {
         var held: [AgentLane.ID: [String]] = [:]
+        var owned: [AgentLane.ID: String] = [:]
         for session in sessions.values {
-            let match = session.lane.statusMatch ?? session.backend.statusMatch(for: session.lane)
+            let match = statusMatch(for: session)
             let record = match.find(in: records)
             session.update(record: record)
             if !detachedIDs.contains(session.id) {
                 let ids = DetachedSessions.heldSessionIDs(match: match, record: record)
                 if !ids.isEmpty { held[session.id] = ids }
+                if let id = ownedSessionID(for: session.lane) { owned[session.id] = id }
             }
         }
         objectWillChange.send()
@@ -2166,8 +2268,9 @@ public final class AgentLaneStore: ObservableObject {
         // A row that has just picked up a session (its wrapper wrote the id,
         // or a hook reported it) takes it out of Detached now, not at the
         // next sweep. Nothing runs here: the last sweep is matched again.
-        if held != heldSessionIDs {
+        if held != heldSessionIDs || owned != ownedSessionIDs {
             heldSessionIDs = held
+            ownedSessionIDs = owned
             if !discovered.isEmpty { reconcileDetached() }
         }
     }
@@ -2187,7 +2290,7 @@ public final class AgentLaneStore: ObservableObject {
 
     func apply(presence: [LanePresence]) {
         for session in sessions.values {
-            let match = session.lane.statusMatch ?? session.backend.statusMatch(for: session.lane)
+            let match = statusMatch(for: session)
             let found = presence.locate(for: session.lane, match: match)
             session.update(orphan: configuration.highlightsOrphans && found?.presence.attachedClients == 0 && !session.isAttached)
             session.update(present: found != nil, byName: found?.byName ?? false, name: found?.presence.name)

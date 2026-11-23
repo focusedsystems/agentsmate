@@ -337,10 +337,18 @@ enum DetachedSessions {
     ///   one Claude Code background session works, which a wrapper attaches
     ///   whatever it named the session.
     ///
+    /// Before any of these, a session a row owns by the bindings
+    /// (`ownedSessionIDs`, short ids by row) is that row's, by id alone and
+    /// whatever its name: it is never also listed apart, while the other
+    /// sessions in the row's folder still are.
+    ///
     /// Folders alone are not enough across backends otherwise: a Codex lane
     /// and a Claude lane share a folder.
     static func unclaimed(_ found: [Found], lanes: [AgentLane], backends: [String: any LaneBackend],
-                          heldSessionIDs: [AgentLane.ID: [String]] = [:]) -> [Found] {
+                          heldSessionIDs: [AgentLane.ID: [String]] = [:],
+                          ownedSessionIDs: [AgentLane.ID: String] = [:]) -> [Found] {
+        let rowIDs = Set(lanes.map(\.id))
+        let owned = ownedSessionIDs.filter { rowIDs.contains($0.key) && !$0.value.isEmpty }.map(\.value)
         var reporters: [String: Set<String>] = [:]
         var backgroundPerFolder: [String: Int] = [:]
         var counted = Set<String>()
@@ -365,6 +373,10 @@ enum DetachedSessions {
             let key = item.session.key
             guard seen.insert(key).inserted else { continue }
             let session = item.session
+            if session.kind == ClaudeBackgroundLaneBackend.kind,
+               owned.contains(where: { own in
+                   session.agentID.map { sameSession($0, own) } == true || session.sessionID.map { $0.hasPrefix(own) } == true
+               }) { continue }
             if let id = session.sessionID, heldIDs.contains(where: { sameSession(id, $0) }) { continue }
             if session.kind == ClaudeBackgroundLaneBackend.kind, session.host == nil, let directory = session.directory {
                 let folder = LaneStatusMatch.normalizedPath(directory)
