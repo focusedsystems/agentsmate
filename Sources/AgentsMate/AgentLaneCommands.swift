@@ -49,16 +49,21 @@ public struct AgentLaneCommands: Commands {
     public var body: some Commands {
         CommandGroup(before: .sidebar) {
             if store.configuration.showsHome {
-                Button("Agents Home") {
-                    reveal()
-                    store.showHome()
-                }
-                .laneShortcut(store.shortcuts.binding(for: .home))
-                .disabled(store.lanes.isEmpty)
+                allAgentsButton
                 Divider()
             }
         }
         CommandMenu(menuTitle) {
+            // Also here, beside the lanes it overviews; the View menu's
+            // item carries the shortcut, so one key is never listed twice.
+            if store.configuration.showsHome {
+                Button("All Agents") {
+                    reveal()
+                    store.showHome()
+                }
+                .disabled(store.lanes.isEmpty)
+                Divider()
+            }
             // The pinned rows, on ⌘1–⌘9 in the order the list shows them.
             ForEach(Array(store.numberedLanes.enumerated()), id: \.element.id) { index, lane in
                 laneButton(lane, index: index)
@@ -187,6 +192,16 @@ public struct AgentLaneCommands: Commands {
             }
             .disabled(store.selected == nil)
         }
+    }
+
+    /// All Agents, the board of every active session, on its shortcut.
+    private var allAgentsButton: some View {
+        Button("All Agents") {
+            reveal()
+            store.showHome()
+        }
+        .laneShortcut(store.shortcuts.binding(for: .home))
+        .disabled(store.lanes.isEmpty)
     }
 
     @ViewBuilder

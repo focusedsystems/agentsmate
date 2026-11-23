@@ -116,20 +116,26 @@ public final class AgentLaneStore: ObservableObject {
         /// reattach a lane whose session runs on another Mac
         /// (``HostSessionsConfiguration``). Nil, the default, reads nothing.
         public var hostSessions: HostSessionsConfiguration?
-        /// Head the list with its sections. Off, the lanes are one list
+        /// Head the list with its sections (the default; the person can
+        /// change it in ``AgentSidebarSettingsSection``). Off, the lanes are one list
         /// with no section headings, for an app with few lanes; the Pinned
         /// and Detached groups keep theirs. With only one section the
         /// heading is left out either way.
         public var showsSectionHeadings: Bool
+        /// Draw each row's icon. Off, a row shows its status dot alone.
+        public var showsLaneIcons: Bool
+        /// Where a session found for a lane (a parallel session) goes:
+        /// a top-level row like its lane's, or indented under it.
+        public var parallelSessions: ParallelSessionPlacement
         /// The app's order for its lanes, as folder paths, such as the
         /// order of its repository list: sections come in the order their
         /// first lane does, and lanes within a section in this order. It
         /// applies until the person moves a section or a lane; their order
         /// always wins. Folders not in it follow, in the lanes' order.
         public var defaultRepositoryOrder: [String]
-        /// Show Home (``AgentHomeView``): an overview of every active
-        /// session, reached from the top of the sidebar and View ▸ Agents
-        /// Home. Off, the detail area only ever shows terminals.
+        /// Show All Agents (``AgentHomeView``, first called Home): a board
+        /// of every active session, reached from the top of the sidebar and
+        /// View ▸ All Agents. Off, the detail area only ever shows terminals.
         public var showsHome: Bool
         /// What the detail area shows the first time Agents mode comes on
         /// screen after launch: Home, attaching nothing until the person
@@ -165,7 +171,10 @@ public final class AgentLaneStore: ObservableObject {
                     scrollSensitivity: CGFloat = 1, placesDetachedSessions: Bool = true,
                     hostSessions: HostSessionsConfiguration? = nil, showsSectionHeadings: Bool = true,
                     defaultRepositoryOrder: [String] = [], showsHome: Bool = true,
-                    launchShows: AgentsLaunchDestination = .home) {
+                    launchShows: AgentsLaunchDestination = .home, showsLaneIcons: Bool = true,
+                    parallelSessions: ParallelSessionPlacement = .topLevel) {
+            self.showsLaneIcons = showsLaneIcons
+            self.parallelSessions = parallelSessions
             self.showsHome = showsHome
             self.launchShows = launchShows
             self.hostSessions = hostSessions
@@ -2537,4 +2546,9 @@ public struct AgentsModeKeys: Sendable {
     public var summarizeSessions: String { prefix + "summarizeSessions" }
     /// The person's switch for renaming the agent's session with its lane.
     public var renameAgentSession: String { prefix + "renameAgentSession" }
+    /// The person's sidebar shape, over the app's defaults
+    /// (``AgentSidebarSettingsSection``).
+    public var showsSectionHeadings: String { prefix + "showsSectionHeadings" }
+    public var showsLaneIcons: String { prefix + "showsLaneIcons" }
+    public var parallelSessions: String { prefix + "parallelSessions" }
 }

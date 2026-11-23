@@ -40,7 +40,7 @@ public enum LaneShortcutAction: String, CaseIterable, Codable, Sendable, Identif
         case .back: "Back"
         case .forward: "Forward"
         case .reattach: "Reattach"
-        case .home: "Agents Home"
+        case .home: "All Agents"
         case .reopenSameAgent: "Reopen As Same Agent"
         case .reopenClaudeRemote: "Reopen As Claude (remote)"
         case .reopenCodexRemote: "Reopen As Codex (remote)"
@@ -180,7 +180,7 @@ public struct LaneShortcutBindings: Codable, Equatable, Sendable {
         .back: .init("[", command: true),
         .forward: .init("]", command: true),
         .reattach: .init("r", command: true, shift: true),
-        // ⇧⌘H, Home in Finder; ⌘0 is Actual Size.
+        // ⇧⌘H, as Home in Finder; ⌘0 is Actual Size, here and in the apps.
         .home: .init("h", command: true, shift: true),
         .reopenSameAgent: .init("r", command: true, option: true),
         .reopenClaudeRemote: .init("c", command: true, shift: true),

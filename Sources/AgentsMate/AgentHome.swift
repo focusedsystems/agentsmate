@@ -3,15 +3,15 @@ import AgentsMateStatus
 
 /// What Agents mode shows the first time it comes on screen after launch.
 public enum AgentsLaunchDestination: Sendable, Equatable {
-    /// Home: the overview of every active session. Nothing is attached
-    /// until the person picks a row.
+    /// All Agents: the board of every active session. Nothing is attached
+    /// until the person picks a card.
     case home
     /// The selected lane, reattached when its session already runs
     /// (``AgentLaneStore/openSelectedOnShow(focus:)``).
     case selectedLane
 }
 
-/// A section of Home.
+/// A column of the All Agents board.
 public enum AgentHomeSection: Int, CaseIterable, Sendable, Identifiable {
     /// Waiting for an answer or a permission.
     case needsYou
@@ -31,7 +31,7 @@ public enum AgentHomeSection: Int, CaseIterable, Sendable, Identifiable {
     }
 }
 
-/// What Home looks at in one row, kept apart from the session so the
+/// What All Agents looks at in one card, kept apart from the session so the
 /// grouping can be tested without terminals.
 public struct AgentHomeItem: Equatable, Sendable, Identifiable {
     public var id: AgentLane.ID
@@ -52,12 +52,13 @@ public struct AgentHomeItem: Equatable, Sendable, Identifiable {
     }
 }
 
-/// How Home sorts sessions into its sections.
+/// How All Agents sorts sessions into its columns. (Home was its first
+/// name; the types and the saved keys keep it.)
 public enum AgentHome {
-    /// How long a finished session that is no longer running stays on Home.
+    /// How long a finished session that is no longer running stays on the board.
     public static let recentWindow: TimeInterval = 24 * 60 * 60
 
-    /// The section a row belongs in, or nil when Home leaves it out: a
+    /// The column a card belongs in, or nil when the board leaves it out: a
     /// lane with nothing running and no recent news. Needs You and Working
     /// count the same rows as the sidebar's Needs You and Running filters.
     public static func section(for item: AgentHomeItem, now: Date = Date()) -> AgentHomeSection? {
@@ -94,7 +95,45 @@ public enum AgentHome {
         }
     }
 
-    /// The totals Home's header shows.
+    /// Every column in board order, empty ones included, with the same
+    /// order inside each as ``grouped(_:now:)``.
+    public static func columns(_ items: [AgentHomeItem], now: Date = Date())
+        -> [(section: AgentHomeSection, items: [AgentHomeItem])] {
+        let groups = grouped(items, now: now)
+        return AgentHomeSection.allCases.map { section in
+            (section, groups.first { $0.section == section }?.items ?? [])
+        }
+    }
+
+    /// A move on the board with the arrow keys.
+    public enum Move: Sendable { case up, down, left, right }
+
+    /// The card a move lands on. Up and down stay in the column; left and
+    /// right go to the nearest column that has cards, at the same position
+    /// or its last card. With nothing selected (or the selection filtered
+    /// away) any move lands on the first card.
+    public static func move(_ move: Move, from selection: AgentLane.ID?,
+                            in columns: [[AgentLane.ID]]) -> AgentLane.ID? {
+        guard let selection,
+              let col = columns.firstIndex(where: { $0.contains(selection) }),
+              let row = columns[col].firstIndex(of: selection) else {
+            return columns.first { !$0.isEmpty }?.first
+        }
+        switch move {
+        case .up: return columns[col][max(0, row - 1)]
+        case .down: return columns[col][min(columns[col].count - 1, row + 1)]
+        case .left, .right:
+            let step = move == .left ? -1 : 1
+            var next = col + step
+            while columns.indices.contains(next) {
+                if !columns[next].isEmpty { return columns[next][min(row, columns[next].count - 1)] }
+                next += step
+            }
+            return selection
+        }
+    }
+
+    /// The totals the board's header shows.
     public struct Totals: Equatable, Sendable {
         public var needsYou = 0
         public var working = 0
@@ -113,7 +152,7 @@ public enum AgentHome {
         return totals
     }
 
-    /// The line a row shows under its title: the question or permission
+    /// The line a card shows under its title: the question or permission
     /// the agent is waiting on, else what it is doing or did.
     @MainActor
     static func detail(for session: AgentLaneSession) -> String? {
@@ -132,7 +171,7 @@ public enum AgentHome {
     }
 }
 
-/// Whether Home is still filling in: hosts that have not answered yet, and
+/// Whether All Agents is still filling in: hosts that have not answered yet, and
 /// the first look for detached sessions.
 public struct AgentHomeLoading: Equatable, Sendable {
     public enum HostState: Equatable, Sendable { case asking, answered, unreachable }
@@ -153,10 +192,10 @@ public struct AgentHomeLoading: Equatable, Sendable {
 }
 
 extension AgentLaneStore {
-    /// Home is what the detail area shows now.
+    /// All Agents is what the detail area shows now.
     public var isHomeShown: Bool { configuration.showsHome && showingHome }
 
-    /// Every row Home could list, in the sidebar's order: the app's lanes
+    /// Every session All Agents could show, in the sidebar's order: the app's lanes
     /// and the detached sessions found in its folders.
     var homeSessions: [AgentLaneSession] { displayOrder.compactMap { sessions[$0.id] } }
 
@@ -165,7 +204,7 @@ extension AgentLaneStore {
                       unread: session.needsAttention, lastActivity: session.lastActivity)
     }
 
-    /// The section name Home shows beside a row's title.
+    /// The section name All Agents shows on a card.
     func homeArea(of lane: AgentLane) -> String? {
         if let owner = detachedOwners[lane.id], let ownerLane = lanes.first(where: { $0.id == owner }) {
             return layout.section(of: ownerLane)
@@ -191,6 +230,6 @@ extension AgentLaneStore {
 }
 
 public extension AgentsModeKeys {
-    /// Whether Home was showing, so it comes back as the person left it.
+    /// Whether All Agents was showing, so it comes back as the person left it.
     var showingHome: String { prefix + "showingHome" }
 }
