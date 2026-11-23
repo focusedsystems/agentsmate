@@ -4,13 +4,15 @@ import AgentsMateStatus
 
 @MainActor
 final class NewSessionAgentTests: XCTestCase {
+    private static let folder = URL(fileURLWithPath: "/work/repo")
     private func usage(_ agent: String, _ percent: Double) -> AgentUsage {
         AgentUsage(agent: agent, windows: [.init(label: "Week", percent: percent, resetsAt: Date().addingTimeInterval(3600))])
     }
 
     /// An app like those that offer all four agents through Reopen As.
-    private func makeStore(defaults: UserDefaults? = nil, allowed: Set<LaneAgentKind> = Set(LaneAgentKind.allCases),
-                           folders: (@Sendable (LaneAgentKind, URL) -> Bool)? = nil) -> (AgentLaneStore, UserDefaults) {
+    /// Configured to allow both agents in every folder unless told otherwise.
+    private func makeStore(defaults: UserDefaults? = nil, allowed: Set<LaneAgentKind>? = Set(LaneAgentKind.allCases),
+                           folders: (@Sendable (LaneAgentKind, URL) -> Bool)? = { _, _ in true }) -> (AgentLaneStore, UserDefaults) {
         let defaults = defaults ?? UserDefaults(suiteName: "agentsmate-new-session-\(UUID().uuidString)")!
         let backends = ["app", "cmd:claude-remote", "cmd:codex-remote", "cmd:claude", "cmd:codex"].map {
             CommandLaneBackend(id: $0, displayName: $0, command: "true")
@@ -29,10 +31,10 @@ final class NewSessionAgentTests: XCTestCase {
 
     func testTheAppsDefaultStandsUntilThePersonChooses() {
         let (store, defaults) = makeStore()
-        let plan = store.newSessionPlan(preferring: "cmd:codex", usages: [])
+        let plan = store.newSessionPlan(preferring: "cmd:codex", in: Self.folder, usages: [])
         XCTAssertEqual(plan, NewSessionPlan(backendID: "cmd:codex", kind: .codexDirect))
         defaults.set("claudeRemote", forKey: store.keys.newSessionAgent)
-        XCTAssertEqual(store.newSessionPlan(preferring: "cmd:codex", usages: []).backendID, "cmd:claude-remote")
+        XCTAssertEqual(store.newSessionPlan(preferring: "cmd:codex", in: Self.folder, usages: []).backendID, "cmd:claude-remote")
         XCTAssertEqual(store.newSessionAgent, .claudeRemote)
         store.newSessionAgent = nil
         XCTAssertNil(defaults.string(forKey: store.keys.newSessionAgent))
@@ -50,36 +52,36 @@ final class NewSessionAgentTests: XCTestCase {
         store.newSessionAgent = .claudeRemote
         XCTAssertTrue(store.switchesAgentNearLimit, "on by default")
         XCTAssertEqual(store.agentSwitchThreshold, 90)
-        let plan = store.newSessionPlan(usages: [usage("Claude", 93), usage("Codex", 20)])
+        let plan = store.newSessionPlan(in: Self.folder, usages: [usage("Claude", 93), usage("Codex", 20)])
         XCTAssertEqual(plan.backendID, "cmd:codex-remote")
         XCTAssertEqual(plan.kind, .codexRemote)
         XCTAssertEqual(plan.switchedFrom, .claudeRemote)
         XCTAssertEqual(plan.reason, "Claude at 93%, using Codex")
 
         store.newSessionAgent = .codexDirect
-        XCTAssertEqual(store.newSessionPlan(usages: [usage("Codex", 95)]).backendID, "cmd:claude",
+        XCTAssertEqual(store.newSessionPlan(in: Self.folder, usages: [usage("Codex", 95)]).backendID, "cmd:claude",
                        "unknown usage for the other agent does not stop the switch")
     }
 
     func testBelowTheThresholdOrUnknownKeepsTheChoice() {
         let (store, _) = makeStore()
         store.newSessionAgent = .claudeRemote
-        XCTAssertEqual(store.newSessionPlan(usages: [usage("Claude", 89)]), NewSessionPlan(backendID: "cmd:claude-remote", kind: .claudeRemote))
-        XCTAssertEqual(store.newSessionPlan(usages: []).backendID, "cmd:claude-remote", "unknown usage keeps the choice")
+        XCTAssertEqual(store.newSessionPlan(in: Self.folder, usages: [usage("Claude", 89)]), NewSessionPlan(backendID: "cmd:claude-remote", kind: .claudeRemote))
+        XCTAssertEqual(store.newSessionPlan(in: Self.folder, usages: []).backendID, "cmd:claude-remote", "unknown usage keeps the choice")
         store.agentSwitchThreshold = 85
-        XCTAssertEqual(store.newSessionPlan(usages: [usage("Claude", 89)]).backendID, "cmd:codex-remote")
+        XCTAssertEqual(store.newSessionPlan(in: Self.folder, usages: [usage("Claude", 89)]).backendID, "cmd:codex-remote")
     }
 
     func testNoSwitchWhenTheOtherIsAsFullOrTheSettingIsOff() {
         let (store, _) = makeStore()
         store.newSessionAgent = .claudeRemote
-        let full = store.newSessionPlan(usages: [usage("Claude", 93), usage("Codex", 97)])
+        let full = store.newSessionPlan(in: Self.folder, usages: [usage("Claude", 93), usage("Codex", 97)])
         XCTAssertEqual(full.backendID, "cmd:claude-remote")
         XCTAssertEqual(full.reason, "Claude at 93%, Codex at 97%")
         store.switchesAgentNearLimit = false
-        XCTAssertEqual(store.newSessionPlan(usages: [usage("Claude", 99)]).backendID, "cmd:claude-remote")
+        XCTAssertEqual(store.newSessionPlan(in: Self.folder, usages: [usage("Claude", 99)]).backendID, "cmd:claude-remote")
         store.switchesAgentNearLimit = true
-        XCTAssertEqual(store.newSessionPlan(switchingOnUsage: false, usages: [usage("Claude", 99)]).backendID,
+        XCTAssertEqual(store.newSessionPlan(in: Self.folder, switchingOnUsage: false, usages: [usage("Claude", 99)]).backendID,
                        "cmd:claude-remote")
     }
 
@@ -90,7 +92,7 @@ final class NewSessionAgentTests: XCTestCase {
                                resetsAt: Date().addingTimeInterval(3600))
         XCTAssertTrue(spent.isDepleted)
         XCTAssertEqual(store.usagePercent(of: "codex", in: [spent]), 100)
-        XCTAssertEqual(store.newSessionPlan(usages: [spent]).backendID, "cmd:claude-remote")
+        XCTAssertEqual(store.newSessionPlan(in: Self.folder, usages: [spent]).backendID, "cmd:claude-remote")
         let unknown = AgentUsage(agent: "Codex", windows: [], note: AgentUsage.unknownNote)
         XCTAssertNil(store.usagePercent(of: "codex", in: [unknown]))
     }
@@ -116,11 +118,33 @@ final class NewSessionAgentTests: XCTestCase {
         store.defaultNewSessionBackendID = { "app.codex" }
         XCTAssertEqual(store.agentKind(ofBackend: "app.claude"), .claudeRemote)
         XCTAssertNil(store.agentKind(ofBackend: CommandLaneBackend.shell.id))
-        XCTAssertEqual(store.availableAgentKinds, [.claudeRemote, .codexRemote])
         XCTAssertEqual(store.configuredNewLaneBackendID, "app.codex", "the app's default, not the first by name")
+        XCTAssertEqual(store.availableAgentKinds, [.codexRemote], "unconfigured: only the default's agent")
+        store.configuration.allowedAgents = [.claude, .codex]
+        store.configuration.agentAllowedForFolder = { _, _ in true }
+        XCTAssertEqual(store.availableAgentKinds, [.claudeRemote, .codexRemote])
         store.newSessionAgent = .claudeDirect
-        XCTAssertEqual(store.newSessionPlan(usages: []).backendID, "app.claude", "no direct Claude here: the remote one")
-        XCTAssertEqual(store.newSessionPlan(usages: [usage("Claude", 95)]).backendID, "app.codex")
+        XCTAssertEqual(store.newSessionPlan(in: Self.folder, usages: []).backendID, "app.claude",
+                       "no direct Claude here: the remote one")
+        XCTAssertEqual(store.newSessionPlan(in: Self.folder, usages: [usage("Claude", 95)]).backendID, "app.codex")
+    }
+
+    func testAnUnconfiguredAppFailsClosed() {
+        let (store, _) = makeStore(allowed: nil, folders: nil)
+        XCTAssertFalse(store.canSwitchAgents)
+        store.newSessionAgent = .codexRemote
+        let plan = store.newSessionPlan(preferring: "cmd:claude-remote", in: Self.folder,
+                                        usages: [usage("Claude", 95), usage("Codex", 5)])
+        XCTAssertEqual(plan, NewSessionPlan(backendID: "cmd:claude-remote", kind: .claudeRemote),
+                       "neither the saved Codex choice nor the switch moves it off the app's default")
+        store.newSessionAgent = .claudeDirect
+        XCTAssertEqual(store.newSessionPlan(preferring: "cmd:claude-remote", in: Self.folder, usages: []).backendID,
+                       "cmd:claude", "the default's own agent in the other mode still applies")
+        let (both, _) = makeStore(folders: nil)
+        both.newSessionAgent = .claudeRemote
+        XCTAssertEqual(both.newSessionPlan(preferring: "cmd:claude-remote", in: Self.folder,
+                                           usages: [usage("Claude", 95)]).backendID, "cmd:claude-remote",
+                       "both agents allowed but no folder predicate: no switch")
     }
 
     func testAnAppWithOneAgentNeverPicksOrSwitchesToTheOther() {
@@ -131,7 +155,7 @@ final class NewSessionAgentTests: XCTestCase {
         XCTAssertEqual(store.newSessionPlan(preferring: "cmd:claude-remote", usages: []).backendID, "cmd:claude-remote",
                        "a saved Codex choice is ignored")
         store.newSessionAgent = .claudeRemote
-        let plan = store.newSessionPlan(usages: [usage("Claude", 99), usage("Codex", 1)])
+        let plan = store.newSessionPlan(in: Self.folder, usages: [usage("Claude", 99), usage("Codex", 1)])
         XCTAssertEqual(plan, NewSessionPlan(backendID: "cmd:claude-remote", kind: .claudeRemote))
     }
 

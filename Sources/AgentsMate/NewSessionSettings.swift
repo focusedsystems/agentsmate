@@ -28,7 +28,9 @@ public struct AgentNewSessionsSettingsSection: View {
     private var footer: String {
         var text = "Applies to new sessions on this Mac; sessions already open keep their agent."
         if store.configuration.agentAllowedForFolder != nil {
-            text += " This app allows each agent only in some folders; elsewhere a new session starts on the app’s default."
+            text += " Each agent works only in the folders this app allows it; elsewhere a new session starts on the app’s default."
+        } else {
+            text += " This app keeps new sessions on its own agent; only the mode can change."
         }
         if !store.canSwitchAgents {
             return text

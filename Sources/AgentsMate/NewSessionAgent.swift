@@ -151,11 +151,21 @@ public extension AgentLaneStore {
             .first { agentKind(ofBackend: $0) == kind }
     }
 
-    /// The agents a new session can start on here, in menu order: those
-    /// the app allows (``Configuration/allowedAgents``) with a backend.
+    /// The agent of the app's own default for a new session.
+    var appDefaultAgent: LaneAgentKind? { agentKind(ofBackend: configuredNewLaneBackendID)?.agentKind }
+
+    /// The agents the app lets the person or the switch pick at all.
+    private var allowedAgentSet: Set<LaneAgentKind> { configuration.allowedAgents ?? Set(LaneAgentKind.allCases) }
+
+    /// The agents a new session can start on here, in menu order: the app
+    /// default's agent in either mode, and the other agent only when the
+    /// app allows it and judges folders (``Configuration/agentAllowedForFolder``).
     var availableAgentKinds: [LaneReopenChoice.Kind] {
-        LaneReopenChoice.Kind.agentKinds.filter { kind in
-            kind.agentKind.map(configuration.allowedAgents.contains) == true && backendID(forAgent: kind) != nil
+        let own = appDefaultAgent
+        return LaneReopenChoice.Kind.agentKinds.filter { kind in
+            guard let agent = kind.agentKind, allowedAgentSet.contains(agent) else { return false }
+            guard agent == own || configuration.agentAllowedForFolder != nil else { return false }
+            return backendID(forAgent: kind) != nil
         }
     }
 
@@ -169,23 +179,28 @@ public extension AgentLaneStore {
     }
 
     /// Whether the person or the usage switch may start a session on
-    /// `kind` in `folder`: the app allows the agent, and when it limits
-    /// agents by folder, the folder is known and allowed.
-    func mayPick(_ kind: LaneReopenChoice.Kind, in folder: URL?) -> Bool {
-        guard let agent = kind.agentKind, configuration.allowedAgents.contains(agent) else { return false }
-        guard let allowed = configuration.agentAllowedForFolder else { return true }
-        guard let folder else { return false }
+    /// `kind` in `folder`, where the app's default runs `appAgent`: the app
+    /// allows the agent, and another agent than the default's only when the
+    /// app judges folders and allows it in this one. Fails closed: no
+    /// predicate, or no folder, keeps the default's agent.
+    func mayPick(_ kind: LaneReopenChoice.Kind, in folder: URL?, appAgent: LaneAgentKind?) -> Bool {
+        guard let agent = kind.agentKind, allowedAgentSet.contains(agent) else { return false }
+        if agent == appAgent { return true }
+        guard let allowed = configuration.agentAllowedForFolder, let folder else { return false }
         return allowed(agent, folder)
     }
 
     /// Whether the near-limit switch can ever move a session here: the app
-    /// allows both agents.
-    var canSwitchAgents: Bool { configuration.allowedAgents.count > 1 }
+    /// set ``Configuration/allowedAgents`` to both agents and gave
+    /// ``Configuration/agentAllowedForFolder``.
+    var canSwitchAgents: Bool {
+        (configuration.allowedAgents?.count ?? 0) > 1 && configuration.agentAllowedForFolder != nil
+    }
 
     /// What a new session in `folder` starts on. `preferred` is the app's
     /// default backend (else what Settings › Runs says, else the first
     /// installed one); the person's New Sessions choice wins over it when
-    /// the app allows that agent there (``mayPick(_:in:)``). When
+    /// the app allows that agent there (``mayPick(_:in:appAgent:)``). When
     /// `switchingOnUsage` and the setting are on and that agent has used
     /// ``agentSwitchThreshold`` or more of any limit, the session starts on
     /// the other agent in the same mode, unless the app does not allow it
@@ -198,7 +213,8 @@ public extension AgentLaneStore {
         let fallback = preferred.flatMap { backend(id: $0) == nil ? nil : $0 } ?? configuredNewLaneBackendID
         var chosen: LaneReopenChoice.Kind?
         var backendID = fallback
-        if let wanted = newSessionAgent, mayPick(wanted, in: folder) {
+        let appAgent = agentKind(ofBackend: fallback)?.agentKind
+        if let wanted = newSessionAgent, mayPick(wanted, in: folder, appAgent: appAgent) {
             // A mode the app does not offer falls back to the same agent's other one.
             let candidates = [wanted, LaneReopenChoice.Kind(agent: wanted.agent ?? "", remote: !wanted.isRemote)]
             if let (kind, id) = candidates.compactMap({ kind in kind.flatMap { k in self.backendID(forAgent: k).map { (k, $0) } } }).first {
@@ -210,7 +226,7 @@ public extension AgentLaneStore {
         guard let kind = chosen else { return NewSessionPlan(backendID: backendID) }
         var plan = NewSessionPlan(backendID: backendID, kind: kind)
         guard switchingOnUsage, switchesAgentNearLimit, canSwitchAgents, let agent = kind.agent,
-              let other = kind.otherAgent, mayPick(other, in: folder) else { return plan }
+              let other = kind.otherAgent, mayPick(other, in: folder, appAgent: appAgent) else { return plan }
         if usages == nil { usage?.start() }
         let threshold = agentSwitchThreshold
         guard let used = usagePercent(of: agent, in: usages), used >= threshold else { return plan }

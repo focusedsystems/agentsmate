@@ -76,16 +76,18 @@ public final class AgentLaneStore: ObservableObject {
         /// a choice's ``LaneReopenChoice/kind`` gives it that kind's shortcut.
         public var reopenChoices: [LaneReopenChoice]
         /// The agents a new session may start on when the person or the
-        /// usage switch picks one: the New Sessions choice, its menu and the
-        /// near-limit switch never leave this set. With one agent the switch
-        /// does nothing. Both by default. The app's own default backend is
-        /// not checked against it.
-        public var allowedAgents: Set<LaneAgentKind> = Set(LaneAgentKind.allCases)
+        /// usage switch picks one. Nil until the app says: then only the
+        /// agent of the app's own default is picked. The near-limit switch
+        /// works only when the app sets both agents here and
+        /// ``agentAllowedForFolder``. The app's default backend is not
+        /// checked against it.
+        public var allowedAgents: Set<LaneAgentKind>? = nil
         /// Whether an agent may work in a folder, for an app whose agents
         /// are each signed in to an account that may only see some folders.
-        /// Set, the New Sessions choice and the usage switch apply only to a
-        /// session whose folder is known and allowed for the agent picked;
-        /// otherwise it starts on the app's default. Nil allows every folder.
+        /// Without it nothing moves a new session to an agent other than the
+        /// app's default: neither the New Sessions choice nor the usage
+        /// switch. With it, they apply only to a session whose folder is
+        /// known and allowed for the agent picked.
         public var agentAllowedForFolder: (@Sendable (LaneAgentKind, URL) -> Bool)? = nil
         /// The id of the app's inbox window scene (a `Window` holding
         /// ``AgentInboxView``). Set, the sidebar's foot gets an inbox button
