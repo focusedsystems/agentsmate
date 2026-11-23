@@ -1619,6 +1619,21 @@ public final class AgentLaneStore: ObservableObject {
         groups.first { $0.lanes.contains { $0.id == id } }
     }
 
+    /// The folder a repository heading's + starts a lane running
+    /// `backendID` in, without asking: the heading's own, when its lanes
+    /// all run on one host and that backend reaches the same machine. Nil
+    /// for a section, or when the host is not certain, so the folder
+    /// chooser asks instead of starting the lane on this Mac.
+    func headingTarget(for group: LaneGroup, backendID: String) -> String? {
+        guard group.repository != nil, let path = group.repositoryPath, let backend = backends[backendID] else { return nil }
+        let rows = group.lanes.filter { !detachedIDs.contains($0.id) }
+        let hosts = Set(rows.map { $0.host.flatMap { $0.isEmpty ? nil : $0 } ?? "" })
+        guard hosts.count == 1, hosts.first == (group.host ?? "") else { return nil }
+        let machines = Set(rows.compactMap { backends[$0.backendID] }.map { DetachedSessions.laneHost($0) ?? "" })
+        guard machines.count == 1, machines.first == (DetachedSessions.laneHost(backend) ?? "") else { return nil }
+        return path
+    }
+
     /// Whether a group's + can start a lane in it: every group but Detached.
     public func canAddLane(to group: LaneGroup) -> Bool { !group.isDetached }
 
@@ -1640,9 +1655,11 @@ public final class AgentLaneStore: ObservableObject {
     @discardableResult
     public func newLane(in group: LaneGroup, backendID: String, focus: Bool = true) async -> AgentLaneSession? {
         guard canAddLane(to: group), backends[backendID] != nil else { return nil }
-        // A repository heading's + starts the lane in that folder.
-        let chosen: URL? = if let repository = group.repository {
-            URL(fileURLWithPath: repository, isDirectory: true)
+        // A repository heading's + starts the lane in that folder on the
+        // heading's host, when that is certain; otherwise the person picks.
+        let target = headingTarget(for: group, backendID: backendID)
+        let chosen: URL? = if let target {
+            URL(fileURLWithPath: target, isDirectory: true)
         } else {
             await configuration.chooseFolder(startingFolder(for: group))
         }
@@ -1651,6 +1668,7 @@ public final class AgentLaneStore: ObservableObject {
         let name = backends[backendID]?.displayName ?? "Lane"
         var lane = AgentLane(id: UUID().uuidString, title: "\(name) · \(folder.lastPathComponent)",
                              directory: folder, backendID: backendID, isClosable: true, section: section)
+        if target != nil { lane.host = group.host }
         lane.variant = freeVariant(for: lane)
         if let variant = lane.variant { lane.title += " \(variant)" }
         // A person's move wins over a lane's own section, so record this

@@ -88,4 +88,32 @@ final class RepositoryHeadingTests: XCTestCase {
         XCTAssertEqual(store.groups.compactMap(\.section), ["Platform", "Cloud"])
         XCTAssertTrue(store.groups.allSatisfy { $0.repository == nil })
     }
+
+    func testTheSamePathOnTwoHostsHeadsTwoHeadingsAndPlusStartsOnTheHeadingsHost() async {
+        var asked = 0
+        let config = AgentLaneStore.Configuration(termProgram: "T", sessionFileDirectory: nil, findsDetachedSessions: false,
+                                                  chooseFolder: { _ in asked += 1; return nil })
+        let remote = CommandLaneBackend.tmuxLane(id: "remote", displayName: "Remote", command: "w", statusAgent: "claude",
+                                                 tmuxSessions: TmuxLaneSessions(prefixes: ["lane-"], host: "build-mac"))
+        let store = AgentLaneStore(configuration: config,
+                                   backends: [CommandLaneBackend(id: "agent", displayName: "Agent", command: "true"), remote],
+                                   statusFeed: nil,
+                                   defaults: UserDefaults(suiteName: "agentsmate-repos-\(UUID().uuidString)")!)
+        var other = lane("api-other", "/w/api", section: "Platform")
+        other.host = "other-mac"
+        store.sync(lanes: [lane("api", "/w/api", section: "Platform"), other])
+        let headings = store.groups.filter { $0.repository != nil }
+        XCTAssertEqual(headings.map(\.repository), ["/w/api", "other-mac:/w/api"])
+        XCTAssertEqual(headings.map(\.host), [nil, "other-mac"])
+        XCTAssertEqual(headings.map { $0.lanes.map(\.id) }, [["api"], ["api-other"]])
+
+        let made = await store.newLane(in: headings[1], backendID: "agent", focus: false)
+        XCTAssertEqual(made?.lane.host, "other-mac", "the + starts the lane on the heading's host")
+        XCTAssertEqual(made?.lane.path, "/w/api")
+        XCTAssertEqual(asked, 0)
+
+        let elsewhere = await store.newLane(in: headings[0], backendID: "remote", focus: false)
+        XCTAssertNil(elsewhere, "a backend on another machine asks for a folder; cancelling starts nothing")
+        XCTAssertEqual(asked, 1)
+    }
 }

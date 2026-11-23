@@ -183,6 +183,17 @@ public struct LaneLayout: Codable, Equatable, Sendable {
     /// The key a folder's heading goes by: its path, normalized.
     public static func repositoryKey(_ path: String) -> String { LaneStatusMatch.normalizedPath(path) }
 
+    /// The key of a folder's heading on `host` (``AgentLane/host``): the
+    /// path alone for the default host, else the host and the path, so the
+    /// same path on two machines heads two headings.
+    public static func repositoryKey(_ path: String, host: String?) -> String {
+        guard let host, !host.isEmpty else { return repositoryKey(path) }
+        return host + ":" + repositoryKey(path)
+    }
+
+    /// The key of the heading a lane goes under.
+    public static func repositoryKey(for lane: AgentLane) -> String { repositoryKey(lane.path, host: lane.host) }
+
     /// The key ``collapsed`` uses for a repository heading, which no section
     /// name can be.
     public static func repositoryCollapseKey(_ key: String) -> String { "\u{2}" + key }
@@ -208,7 +219,7 @@ public struct LaneLayout: Codable, Equatable, Sendable {
         unpinned.sort = .manual
         var seen = Set<String>()
         let firstSeen = unpinned.groups(for: lanes) { _ in nil }.flatMap(\.lanes)
-            .map { Self.repositoryKey($0.path) }.filter { seen.insert($0).inserted }
+            .map(Self.repositoryKey(for:)).filter { seen.insert($0).inserted }
         return orderedRepositories(firstSeen, defaultOrder: defaultOrder)
     }
 
@@ -245,13 +256,16 @@ public struct LaneLayout: Codable, Equatable, Sendable {
         var groups = sectioned.filter(\.isPinned)
         var members: [String: [AgentLane]] = [:]
         for group in sectioned where !group.isPinned {
-            for lane in group.lanes { members[Self.repositoryKey(lane.path), default: []].append(lane) }
+            for lane in group.lanes { members[Self.repositoryKey(for: lane), default: []].append(lane) }
         }
         for key in repositoryKeys(for: lanes, defaultOrder: defaultOrder) {
             let lanes = members[key] ?? []
             guard let head = lanes.first(where: { !$0.isClosable }) ?? lanes.first else { continue }
-            groups.append(LaneGroup(section: section(of: head), lanes: lanes, repository: key,
-                                    headingLaneID: head.id, heading: head.isClosable ? (head.path as NSString).lastPathComponent : head.title))
+            var group = LaneGroup(section: section(of: head), lanes: lanes, repository: key,
+                                  headingLaneID: head.id, heading: head.isClosable ? (head.path as NSString).lastPathComponent : head.title)
+            group.repositoryPath = Self.repositoryKey(head.path)
+            group.host = head.host.flatMap { $0.isEmpty ? nil : $0 }
+            groups.append(group)
         }
         return groups
     }
@@ -307,6 +321,11 @@ public struct LaneGroup: Identifiable, Equatable, Sendable {
     public var headingLaneID: String?
     /// The repository heading's name when no lane names it.
     public var heading: String?
+    /// The repository heading's folder.
+    public var repositoryPath: String?
+    /// The host every lane under the repository heading runs on
+    /// (``AgentLane/host``); nil is the default host.
+    public var host: String?
 
     public init(section: String?, lanes: [AgentLane], isPinned: Bool = false, isDetached: Bool = false,
                 repository: String? = nil, headingLaneID: String? = nil, heading: String? = nil) {
