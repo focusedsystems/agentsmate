@@ -75,6 +75,11 @@ public final class AgentLaneStore: ObservableObject {
         /// What Reopen As offers, in order. Each names a registered backend;
         /// a choice's ``LaneReopenChoice/kind`` gives it that kind's shortcut.
         public var reopenChoices: [LaneReopenChoice]
+        /// The agent a new session starts on when the person has chosen
+        /// neither a New Sessions agent nor a Runs backend in Settings. Nil
+        /// keeps the first installed backend. Set it to the app's own default
+        /// so the New Session menus name the agent the app starts.
+        public var defaultNewSessionAgent: LaneReopenChoice.Kind? = nil
         /// The id of the app's inbox window scene (a `Window` holding
         /// ``AgentInboxView``). Set, the sidebar's foot gets an inbox button
         /// with a badge, and the Agent menu an Agent Inbox item.
@@ -322,10 +327,11 @@ public final class AgentLaneStore: ObservableObject {
     }
 
     private var backends: [String: any LaneBackend] = [:]
-    private let defaults: UserDefaults
+    let defaults: UserDefaults
     private var feedSubscription: AnyCancellable?
     private var presenceSubscription: AnyCancellable?
     private var notesSubscription: AnyCancellable?
+    private var usageSubscription: AnyCancellable?
 
     public init(configuration: Configuration, backends: [any LaneBackend],
                 statusFeed: LaneStatusFeed? = LaneStatusFeed(), defaults: UserDefaults = .standard) {
@@ -362,7 +368,14 @@ public final class AgentLaneStore: ObservableObject {
         if configuration.notifies { notifier = LaneNotifier(store: self) }
         startSummaries()
         startPullRequestLedger()
-        if !configuration.usageSources.isEmpty { usage = AgentUsageModel(sources: configuration.usageSources) }
+        if !configuration.usageSources.isEmpty {
+            let model = AgentUsageModel(sources: configuration.usageSources)
+            usage = model
+            // Menus that say which agent a new session starts on follow the figures.
+            usageSubscription = model.$usages.dropFirst().removeDuplicates().sink { [weak self] _ in
+                MainActor.assumeIsolated { self?.objectWillChange.send() }
+            }
+        }
         if configuration.findsDetachedSessions { startDiscovery() }
         if let settings = configuration.sharedLanes, let resolved = settings.resolve() {
             agentHosts = resolved.hosts
@@ -1641,9 +1654,14 @@ public final class AgentLaneStore: ObservableObject {
     /// The id of the backend built from the person's own command in Settings.
     public static let customBackendID = "agentsmate.custom"
 
-    /// What a new lane runs: the person's choice in Settings, else the first
-    /// installed backend.
-    public var newLaneBackendID: String {
+    /// What a new lane runs: ``newSessionPlan(preferring:switchingOnUsage:usages:)``
+    /// for what Settings says, so the person's New Sessions agent and the
+    /// usage switch apply.
+    public var newLaneBackendID: String { newSessionPlan().backendID }
+
+    /// What Settings › Runs says a new lane runs, else the first installed
+    /// backend, before the New Sessions agent or usage have a say.
+    public var configuredNewLaneBackendID: String {
         let saved = defaults.string(forKey: keys.newLaneBackend) ?? ""
         if saved == Self.customBackendID {
             let command = defaults.string(forKey: keys.newLaneCommand)?.trimmingCharacters(in: .whitespaces) ?? ""
@@ -1654,15 +1672,21 @@ public final class AgentLaneStore: ObservableObject {
             }
         }
         if backends[saved] != nil { return saved }
+        if let kind = configuration.defaultNewSessionAgent, let id = backendID(forAgent: kind) { return id }
         return installedBackends.first?.id ?? CommandLaneBackend.shell.id
     }
 
     /// Open a lane the person can close, in `directory`, running what
-    /// Settings says a new lane runs.
+    /// Settings says a new lane runs. `backendID` is the app's default for
+    /// a new session: the person's New Sessions agent and the usage switch
+    /// win over it (``newSessionPlan(preferring:switchingOnUsage:usages:)``)
+    /// unless `followsAgentChoice` is false.
     @discardableResult
     public func openNewLane(in directory: URL? = nil, backendID: String? = nil, focus: Bool = true,
-                            open shouldOpen: Bool = true, section: String? = nil) -> AgentLaneSession? {
-        let id = backendID ?? newLaneBackendID
+                            open shouldOpen: Bool = true, section: String? = nil,
+                            followsAgentChoice: Bool = true) -> AgentLaneSession? {
+        let id = followsAgentChoice ? newSessionPlan(preferring: backendID).backendID
+            : backendID ?? configuredNewLaneBackendID
         if backends[id] == nil, id == CommandLaneBackend.shell.id { register(CommandLaneBackend.shell) }
         let name = backends[id]?.displayName ?? "Lane"
         let lane = AgentLane(id: UUID().uuidString, title: directory.map { "\(name) · \($0.lastPathComponent)" } ?? name,
@@ -2551,4 +2575,13 @@ public struct AgentsModeKeys: Sendable {
     public var showsSectionHeadings: String { prefix + "showsSectionHeadings" }
     public var showsLaneIcons: String { prefix + "showsLaneIcons" }
     public var parallelSessions: String { prefix + "parallelSessions" }
+    /// The agent new sessions start on, as a ``LaneReopenChoice/Kind`` raw
+    /// value (`claudeRemote`, `codexRemote`, `claudeDirect`, `codexDirect`);
+    /// absent follows the app's default.
+    public var newSessionAgent: String { prefix + "newSessionAgent" }
+    /// Whether a new session starts on the other agent when the chosen one
+    /// is near its usage limit. On when absent.
+    public var switchesAgentNearLimit: String { prefix + "switchesAgentNearLimit" }
+    /// The usage, in percent, at which that switch happens. 90 when absent.
+    public var agentSwitchThreshold: String { prefix + "agentSwitchThreshold" }
 }

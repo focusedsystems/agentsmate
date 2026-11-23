@@ -1,0 +1,122 @@
+import XCTest
+import AgentsMateStatus
+@testable import AgentsMate
+
+@MainActor
+final class NewSessionAgentTests: XCTestCase {
+    private func usage(_ agent: String, _ percent: Double) -> AgentUsage {
+        AgentUsage(agent: agent, windows: [.init(label: "Week", percent: percent, resetsAt: Date().addingTimeInterval(3600))])
+    }
+
+    /// An app like those that offer all four agents through Reopen As.
+    private func makeStore(defaults: UserDefaults? = nil) -> (AgentLaneStore, UserDefaults) {
+        let defaults = defaults ?? UserDefaults(suiteName: "agentsmate-new-session-\(UUID().uuidString)")!
+        let backends = ["app", "cmd:claude-remote", "cmd:codex-remote", "cmd:claude", "cmd:codex"].map {
+            CommandLaneBackend(id: $0, displayName: $0, command: "true")
+        }
+        let store = AgentLaneStore(configuration: .init(termProgram: "Test", reopenChoices: [
+            .sameAgent(),
+            LaneReopenChoice("Claude (remote)", backendID: "cmd:claude-remote", kind: .claudeRemote),
+            LaneReopenChoice("Codex (remote)", backendID: "cmd:codex-remote", kind: .codexRemote),
+            LaneReopenChoice("Claude (direct)", backendID: "cmd:claude", kind: .claudeDirect),
+            LaneReopenChoice("Codex (direct)", backendID: "cmd:codex", kind: .codexDirect),
+        ]), backends: backends, statusFeed: nil, defaults: defaults)
+        return (store, defaults)
+    }
+
+    func testTheAppsDefaultStandsUntilThePersonChooses() {
+        let (store, defaults) = makeStore()
+        let plan = store.newSessionPlan(preferring: "cmd:codex", usages: [])
+        XCTAssertEqual(plan, NewSessionPlan(backendID: "cmd:codex", kind: .codexDirect))
+        defaults.set("claudeRemote", forKey: store.keys.newSessionAgent)
+        XCTAssertEqual(store.newSessionPlan(preferring: "cmd:codex", usages: []).backendID, "cmd:claude-remote")
+        XCTAssertEqual(store.newSessionAgent, .claudeRemote)
+        store.newSessionAgent = nil
+        XCTAssertNil(defaults.string(forKey: store.keys.newSessionAgent))
+    }
+
+    func testTheKeysSitUnderTheAppsPrefix() {
+        let keys = AgentsModeKeys(prefix: "app.")
+        XCTAssertEqual(keys.newSessionAgent, "app.newSessionAgent")
+        XCTAssertEqual(keys.switchesAgentNearLimit, "app.switchesAgentNearLimit")
+        XCTAssertEqual(keys.agentSwitchThreshold, "app.agentSwitchThreshold")
+    }
+
+    func testNearTheLimitANewSessionStartsOnTheOtherAgentInTheSameMode() {
+        let (store, _) = makeStore()
+        store.newSessionAgent = .claudeRemote
+        XCTAssertTrue(store.switchesAgentNearLimit, "on by default")
+        XCTAssertEqual(store.agentSwitchThreshold, 90)
+        let plan = store.newSessionPlan(usages: [usage("Claude", 93), usage("Codex", 20)])
+        XCTAssertEqual(plan.backendID, "cmd:codex-remote")
+        XCTAssertEqual(plan.kind, .codexRemote)
+        XCTAssertEqual(plan.switchedFrom, .claudeRemote)
+        XCTAssertEqual(plan.reason, "Claude at 93%, using Codex")
+
+        store.newSessionAgent = .codexDirect
+        XCTAssertEqual(store.newSessionPlan(usages: [usage("Codex", 95)]).backendID, "cmd:claude",
+                       "unknown usage for the other agent does not stop the switch")
+    }
+
+    func testBelowTheThresholdOrUnknownKeepsTheChoice() {
+        let (store, _) = makeStore()
+        store.newSessionAgent = .claudeRemote
+        XCTAssertEqual(store.newSessionPlan(usages: [usage("Claude", 89)]), NewSessionPlan(backendID: "cmd:claude-remote", kind: .claudeRemote))
+        XCTAssertEqual(store.newSessionPlan(usages: []).backendID, "cmd:claude-remote", "unknown usage keeps the choice")
+        store.agentSwitchThreshold = 85
+        XCTAssertEqual(store.newSessionPlan(usages: [usage("Claude", 89)]).backendID, "cmd:codex-remote")
+    }
+
+    func testNoSwitchWhenTheOtherIsAsFullOrTheSettingIsOff() {
+        let (store, _) = makeStore()
+        store.newSessionAgent = .claudeRemote
+        let full = store.newSessionPlan(usages: [usage("Claude", 93), usage("Codex", 97)])
+        XCTAssertEqual(full.backendID, "cmd:claude-remote")
+        XCTAssertEqual(full.reason, "Claude at 93%, Codex at 97%")
+        store.switchesAgentNearLimit = false
+        XCTAssertEqual(store.newSessionPlan(usages: [usage("Claude", 99)]).backendID, "cmd:claude-remote")
+        store.switchesAgentNearLimit = true
+        XCTAssertEqual(store.newSessionPlan(switchingOnUsage: false, usages: [usage("Claude", 99)]).backendID,
+                       "cmd:claude-remote")
+    }
+
+    func testASpentAgentCountsAsFull() {
+        let (store, _) = makeStore()
+        store.newSessionAgent = .codexRemote
+        let spent = AgentUsage(agent: "Codex", windows: [], note: "Limit reached",
+                               resetsAt: Date().addingTimeInterval(3600))
+        XCTAssertTrue(spent.isDepleted)
+        XCTAssertEqual(store.usagePercent(of: "codex", in: [spent]), 100)
+        XCTAssertEqual(store.newSessionPlan(usages: [spent]).backendID, "cmd:claude-remote")
+        let unknown = AgentUsage(agent: "Codex", windows: [], note: AgentUsage.unknownNote)
+        XCTAssertNil(store.usagePercent(of: "codex", in: [unknown]))
+    }
+
+    func testOpenNewLaneFollowsThePlanButSessionsAlreadyOpenKeepTheirAgent() {
+        let (store, _) = makeStore()
+        store.newSessionAgent = .codexRemote
+        let lane = store.openNewLane(in: URL(fileURLWithPath: "/tmp"), backendID: "cmd:claude", focus: false, open: false)
+        XCTAssertEqual(lane?.backend.id, "cmd:codex-remote")
+        store.newSessionAgent = .claudeDirect
+        XCTAssertEqual(lane?.backend.id, "cmd:codex-remote", "an open session keeps its agent")
+        let pinned = store.openNewLane(backendID: "app", focus: false, open: false, followsAgentChoice: false)
+        XCTAssertEqual(pinned?.backend.id, "app")
+    }
+
+    func testBackendsWithoutReopenChoicesAreReadFromTheirCommand() {
+        let defaults = UserDefaults(suiteName: "agentsmate-new-session-\(UUID().uuidString)")!
+        let claude = CommandLaneBackend.tmuxLane(id: "app.claude", displayName: "Claude", command: "true", statusAgent: "claude")
+        let codex = CommandLaneBackend.tmuxLane(id: "app.codex", displayName: "Codex", command: "true", statusAgent: "codex")
+        var configuration = AgentLaneStore.Configuration(termProgram: "Test")
+        configuration.defaultNewSessionAgent = .codexRemote
+        let store = AgentLaneStore(configuration: configuration, backends: [claude, codex, CommandLaneBackend.shell],
+                                   statusFeed: nil, defaults: defaults)
+        XCTAssertEqual(store.agentKind(ofBackend: "app.claude"), .claudeRemote)
+        XCTAssertNil(store.agentKind(ofBackend: CommandLaneBackend.shell.id))
+        XCTAssertEqual(store.availableAgentKinds, [.claudeRemote, .codexRemote])
+        XCTAssertEqual(store.configuredNewLaneBackendID, "app.codex", "the app's default, not the first by name")
+        store.newSessionAgent = .claudeDirect
+        XCTAssertEqual(store.newSessionPlan(usages: []).backendID, "app.claude", "no direct Claude here: the remote one")
+        XCTAssertEqual(store.newSessionPlan(usages: [usage("Claude", 95)]).backendID, "app.codex")
+    }
+}

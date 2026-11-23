@@ -295,6 +295,9 @@ public struct AgentHomeView: View {
         let backends = store.availableBackends
         if backends.count > 1 {
             Menu("New Session") {
+                NewSessionDefaultItems(store: store) { id in
+                    Task { await store.newLane(in: LaneGroup(section: nil, lanes: []), backendID: id) }
+                }
                 ForEach(backends, id: \.id) { backend in
                     Button("\(backend.displayName)…") {
                         Task { await store.newLane(in: LaneGroup(section: nil, lanes: []), backendID: backend.id) }
@@ -303,6 +306,7 @@ public struct AgentHomeView: View {
             }
             .fixedSize()
             .controlSize(.large)
+            .help(store.newSessionPlan().reason ?? "")
         } else {
             Button("New Session") {
                 if let onNewLane = store.onNewLane {
@@ -313,6 +317,7 @@ public struct AgentHomeView: View {
             }
             .keyboardShortcut(.defaultAction)
             .controlSize(.large)
+            .help(store.newSessionPlan().reason ?? "")
         }
     }
 
