@@ -2,7 +2,8 @@ import SwiftUI
 
 /// A Launch section for an app's Agent settings: whether the app opens in
 /// Agents mode, saved under ``AgentsModeKeys/agentsModeAtLaunch`` and read by
-/// ``AgentsLaunch``. On unless the person turns it off. Put it first in a
+/// ``AgentsLaunch``. On unless the person turns it off. The New Sessions
+/// section (``AgentNewSessionsSettingsSection``) follows it. Put it first in a
 /// grouped `Form`; ``AgentLaneSettingsSection`` already leads with it.
 public struct AgentsLaunchSettingsSection: View {
     let store: AgentLaneStore
@@ -15,6 +16,7 @@ public struct AgentsLaunchSettingsSection: View {
         } header: {
             Text("Launch")
         }
+        AgentNewSessionsSettingsSection(store: store)
     }
 }
 
@@ -100,7 +102,7 @@ public struct AgentLaneSettingsSection: View {
             Text(footer).foregroundStyle(.secondary)
         }
         .onAppear {
-            if backendID.isEmpty { backendID = store.newLaneBackendID }
+            if backendID.isEmpty { backendID = store.configuredNewLaneBackendID }
         }
     }
 }

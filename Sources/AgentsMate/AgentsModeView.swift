@@ -357,6 +357,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
     /// `group` and selects it.
     @ViewBuilder
     private func newLaneItems(_ group: LaneGroup) -> some View {
+        NewSessionDefaultItems(store: store) { Task { await store.newSessionLane(in: group) } }
         ForEach(store.availableBackends, id: \.id) { backend in
             Button("\(backend.displayName)…") {
                 Task { await store.newLane(in: group, backendID: backend.id) }

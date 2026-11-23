@@ -75,6 +75,23 @@ public final class AgentLaneStore: ObservableObject {
         /// What Reopen As offers, in order. Each names a registered backend;
         /// a choice's ``LaneReopenChoice/kind`` gives it that kind's shortcut.
         public var reopenChoices: [LaneReopenChoice]
+        /// The agents a new session may start on when the person or the
+        /// usage switch picks one. Nil until the app says: then only the
+        /// agent of the app's own default is picked. The near-limit switch
+        /// works only when the app sets both agents here and
+        /// ``agentAllowedForFolder``. The app's default backend is not
+        /// checked against it.
+        public var allowedAgents: Set<LaneAgentKind>? = nil
+        /// Whether an agent may work in a folder, for an app whose agents
+        /// are each signed in to an account that may only see some folders.
+        /// Without it nothing moves a new session to an agent other than the
+        /// app's default: neither the New Sessions choice nor the usage
+        /// switch. With it, they apply only to a session whose folder is
+        /// known and allowed for the agent picked. It is handed the folder
+        /// with symlinks, `~` and `..` resolved, as an absolute path; compare
+        /// whole path components (``laneFolder(_:isInside:)``), never a raw
+        /// string prefix.
+        public var agentAllowedForFolder: (@Sendable (LaneAgentKind, URL) -> Bool)? = nil
         /// The id of the app's inbox window scene (a `Window` holding
         /// ``AgentInboxView``). Set, the sidebar's foot gets an inbox button
         /// with a badge, and the Agent menu an Agent Inbox item.
@@ -322,10 +339,11 @@ public final class AgentLaneStore: ObservableObject {
     }
 
     private var backends: [String: any LaneBackend] = [:]
-    private let defaults: UserDefaults
+    let defaults: UserDefaults
     private var feedSubscription: AnyCancellable?
     private var presenceSubscription: AnyCancellable?
     private var notesSubscription: AnyCancellable?
+    private var usageSubscription: AnyCancellable?
 
     public init(configuration: Configuration, backends: [any LaneBackend],
                 statusFeed: LaneStatusFeed? = LaneStatusFeed(), defaults: UserDefaults = .standard) {
@@ -362,7 +380,14 @@ public final class AgentLaneStore: ObservableObject {
         if configuration.notifies { notifier = LaneNotifier(store: self) }
         startSummaries()
         startPullRequestLedger()
-        if !configuration.usageSources.isEmpty { usage = AgentUsageModel(sources: configuration.usageSources) }
+        if !configuration.usageSources.isEmpty {
+            let model = AgentUsageModel(sources: configuration.usageSources)
+            usage = model
+            // Menus that say which agent a new session starts on follow the figures.
+            usageSubscription = model.$usages.dropFirst().removeDuplicates().sink { [weak self] _ in
+                MainActor.assumeIsolated { self?.objectWillChange.send() }
+            }
+        }
         if configuration.findsDetachedSessions { startDiscovery() }
         if let settings = configuration.sharedLanes, let resolved = settings.resolve() {
             agentHosts = resolved.hosts
@@ -1638,12 +1663,24 @@ public final class AgentLaneStore: ObservableObject {
         availableBackends.filter { $0.id != Self.customBackendID && (($0 as? CommandLaneBackend)?.isInstalled ?? true) }
     }
 
+    /// The app's own default for a new session, when the person has chosen
+    /// neither a New Sessions agent nor a Runs backend in Settings; nil, or
+    /// an id with no backend, keeps the first installed one. Set it to the
+    /// backend the app starts new sessions on, so the New Session menus
+    /// name the same agent.
+    public var defaultNewSessionBackendID: (() -> String?)?
+
     /// The id of the backend built from the person's own command in Settings.
     public static let customBackendID = "agentsmate.custom"
 
-    /// What a new lane runs: the person's choice in Settings, else the first
-    /// installed backend.
-    public var newLaneBackendID: String {
+    /// What a new lane runs: ``newSessionPlan(preferring:switchingOnUsage:usages:)``
+    /// for what Settings says, so the person's New Sessions agent and the
+    /// usage switch apply.
+    public var newLaneBackendID: String { newSessionPlan().backendID }
+
+    /// What Settings › Runs says a new lane runs, else the first installed
+    /// backend, before the New Sessions agent or usage have a say.
+    public var configuredNewLaneBackendID: String {
         let saved = defaults.string(forKey: keys.newLaneBackend) ?? ""
         if saved == Self.customBackendID {
             let command = defaults.string(forKey: keys.newLaneCommand)?.trimmingCharacters(in: .whitespaces) ?? ""
@@ -1654,15 +1691,22 @@ public final class AgentLaneStore: ObservableObject {
             }
         }
         if backends[saved] != nil { return saved }
+        if let id = defaultNewSessionBackendID?(), backends[id] != nil { return id }
         return installedBackends.first?.id ?? CommandLaneBackend.shell.id
     }
 
     /// Open a lane the person can close, in `directory`, running what
-    /// Settings says a new lane runs.
+    /// Settings says a new lane runs. `backendID` is the app's default for
+    /// a new session: the person's New Sessions agent and the usage switch
+    /// win over it (``newSessionPlan(preferring:switchingOnUsage:usages:)``)
+    /// unless `followsAgentChoice` is false.
     @discardableResult
     public func openNewLane(in directory: URL? = nil, backendID: String? = nil, focus: Bool = true,
-                            open shouldOpen: Bool = true, section: String? = nil) -> AgentLaneSession? {
-        let id = backendID ?? newLaneBackendID
+                            open shouldOpen: Bool = true, section: String? = nil,
+                            followsAgentChoice: Bool = true) -> AgentLaneSession? {
+        let directory = directory.map(Self.canonicalFolder)
+        let id = followsAgentChoice ? newSessionPlan(preferring: backendID, in: directory).backendID
+            : backendID ?? configuredNewLaneBackendID
         if backends[id] == nil, id == CommandLaneBackend.shell.id { register(CommandLaneBackend.shell) }
         let name = backends[id]?.displayName ?? "Lane"
         let lane = AgentLane(id: UUID().uuidString, title: directory.map { "\(name) · \($0.lastPathComponent)" } ?? name,
@@ -1778,8 +1822,14 @@ public final class AgentLaneStore: ObservableObject {
     /// its own (``AgentLane/variant``).
     @discardableResult
     public func newLane(in group: LaneGroup, backendID: String, focus: Bool = true) async -> AgentLaneSession? {
+        await newLane(in: group, backendID: backendID, focus: focus, folder: nil)
+    }
+
+    private func newLane(in group: LaneGroup, backendID: String, focus: Bool, folder chosen: URL?) async -> AgentLaneSession? {
         guard canAddLane(to: group), backends[backendID] != nil else { return nil }
-        guard let folder = await configuration.chooseFolder(startingFolder(for: group)) else { return nil }
+        var picked = chosen
+        if picked == nil { picked = await configuration.chooseFolder(startingFolder(for: group)) }
+        guard let folder = picked else { return nil }
         let section = group.isPinned ? nil : group.section
         let name = backends[backendID]?.displayName ?? "Lane"
         var lane = AgentLane(id: UUID().uuidString, title: "\(name) · \(folder.lastPathComponent)",
@@ -1791,6 +1841,19 @@ public final class AgentLaneStore: ObservableObject {
         layout.move(lane.id, to: section)
         if group.isPinned { layout.setPinned(lane.id, true) }
         return add(lane, focus: focus)
+    }
+
+    /// Ask for a folder, then open a lane in `group` there on the agent a
+    /// new session starts on for that folder
+    /// (``newSessionPlan(preferring:in:switchingOnUsage:usages:)``).
+    @discardableResult
+    public func newSessionLane(in group: LaneGroup, focus: Bool = true) async -> AgentLaneSession? {
+        guard canAddLane(to: group) else { return nil }
+        guard let chosen = await configuration.chooseFolder(startingFolder(for: group)) else { return nil }
+        // One resolved folder for the check, the plan and the lane itself.
+        let folder = Self.canonicalFolder(chosen)
+        return await newLane(in: group, backendID: newSessionPlan(in: folder).backendID, focus: focus,
+                             folder: folder)
     }
 
     /// Run a lane the person opened on another backend, keeping its name,
@@ -2551,4 +2614,13 @@ public struct AgentsModeKeys: Sendable {
     public var showsSectionHeadings: String { prefix + "showsSectionHeadings" }
     public var showsLaneIcons: String { prefix + "showsLaneIcons" }
     public var parallelSessions: String { prefix + "parallelSessions" }
+    /// The agent new sessions start on, as a ``LaneReopenChoice/Kind`` raw
+    /// value (`claudeRemote`, `codexRemote`, `claudeDirect`, `codexDirect`);
+    /// absent follows the app's default.
+    public var newSessionAgent: String { prefix + "newSessionAgent" }
+    /// Whether a new session starts on the other agent when the chosen one
+    /// is near its usage limit. On when absent.
+    public var switchesAgentNearLimit: String { prefix + "switchesAgentNearLimit" }
+    /// The usage, in percent, at which that switch happens. 90 when absent.
+    public var agentSwitchThreshold: String { prefix + "agentSwitchThreshold" }
 }
