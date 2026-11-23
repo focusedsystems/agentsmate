@@ -27,7 +27,12 @@ public struct AgentNewSessionsSettingsSection: View {
 
     private var footer: String {
         var text = "Applies to new sessions on this Mac; sessions already open keep their agent."
-        if store.usage == nil {
+        if store.configuration.agentAllowedForFolder != nil {
+            text += " This app allows each agent only in some folders; elsewhere a new session starts on the app’s default."
+        }
+        if !store.canSwitchAgents {
+            return text
+        } else if store.usage == nil {
             text += " This app reads no usage figures, so new sessions always start on the chosen agent."
         } else {
             text += " Near the limit, a new session starts on the other agent in the same mode, unless it is as full. Unknown usage keeps the chosen agent."
@@ -47,6 +52,20 @@ public struct AgentNewSessionsSettingsSection: View {
                     }
                 }
                 .help("What a new session runs: Claude or Codex, in a session that outlives the window (remote) or run in the folder (direct).")
+                if store.canSwitchAgents { switchControls }
+                if let reason = store.newSessionPlan().reason {
+                    LabeledContent("Now", value: reason)
+                }
+            } header: {
+                Text("New Sessions")
+            } footer: {
+                Text(footer).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var switchControls: some View {
                 Toggle("Switch agents near the usage limit", isOn: Binding(get: { store.switchesAgentNearLimit },
                                                                          set: { store.switchesAgentNearLimit = $0 }))
                     .disabled(store.usage == nil)
@@ -61,30 +80,22 @@ public struct AgentNewSessionsSettingsSection: View {
                     }
                 }
                 .disabled(store.usage == nil || !store.switchesAgentNearLimit)
-                if let reason = store.newSessionPlan().reason {
-                    LabeledContent("Now", value: reason)
-                }
-            } header: {
-                Text("New Sessions")
-            } footer: {
-                Text(footer).foregroundStyle(.secondary)
-            }
-        }
     }
 }
 
 /// The first items of a New Session menu: the agent a new session starts on
 /// now, headed by why when usage moved it ("Claude at 93%, using Codex").
-/// `start` gets the backend id. Nothing when no agent is in play.
+/// `start` runs it: it asks for the folder, and the agent is settled for
+/// that folder. Nothing when no agent is in play.
 struct NewSessionDefaultItems: View {
     @ObservedObject var store: AgentLaneStore
-    let start: (String) -> Void
+    let start: () -> Void
 
     var body: some View {
         let plan = store.newSessionPlan()
         if let kind = plan.kind {
             Section {
-                Button("Default Agent: \(kind.title)…") { start(plan.backendID) }
+                Button("Default Agent: \(kind.title)…") { start() }
             } header: {
                 if let reason = plan.reason { Text(reason) }
             }

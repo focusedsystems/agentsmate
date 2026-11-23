@@ -117,9 +117,9 @@ public struct AgentLaneCommands: Commands {
             }
             Divider()
             Menu("New \(noun) in Section") {
-                NewSessionDefaultItems(store: store) { id in
+                NewSessionDefaultItems(store: store) {
                     reveal()
-                    if let group = selectedGroup { Task { await store.newLane(in: group, backendID: id) } }
+                    if let group = selectedGroup { Task { await store.newSessionLane(in: group) } }
                 }
                 ForEach(store.availableBackends, id: \.id) { backend in
                     Button("\(backend.displayName)…") {

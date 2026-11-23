@@ -9,7 +9,8 @@ final class NewSessionAgentTests: XCTestCase {
     }
 
     /// An app like those that offer all four agents through Reopen As.
-    private func makeStore(defaults: UserDefaults? = nil) -> (AgentLaneStore, UserDefaults) {
+    private func makeStore(defaults: UserDefaults? = nil, allowed: Set<LaneAgentKind> = Set(LaneAgentKind.allCases),
+                           folders: (@Sendable (LaneAgentKind, URL) -> Bool)? = nil) -> (AgentLaneStore, UserDefaults) {
         let defaults = defaults ?? UserDefaults(suiteName: "agentsmate-new-session-\(UUID().uuidString)")!
         let backends = ["app", "cmd:claude-remote", "cmd:codex-remote", "cmd:claude", "cmd:codex"].map {
             CommandLaneBackend(id: $0, displayName: $0, command: "true")
@@ -21,6 +22,8 @@ final class NewSessionAgentTests: XCTestCase {
             LaneReopenChoice("Claude (direct)", backendID: "cmd:claude", kind: .claudeDirect),
             LaneReopenChoice("Codex (direct)", backendID: "cmd:codex", kind: .codexDirect),
         ]), backends: backends, statusFeed: nil, defaults: defaults)
+        store.configuration.allowedAgents = allowed
+        store.configuration.agentAllowedForFolder = folders
         return (store, defaults)
     }
 
@@ -107,10 +110,10 @@ final class NewSessionAgentTests: XCTestCase {
         let defaults = UserDefaults(suiteName: "agentsmate-new-session-\(UUID().uuidString)")!
         let claude = CommandLaneBackend.tmuxLane(id: "app.claude", displayName: "Claude", command: "true", statusAgent: "claude")
         let codex = CommandLaneBackend.tmuxLane(id: "app.codex", displayName: "Codex", command: "true", statusAgent: "codex")
-        var configuration = AgentLaneStore.Configuration(termProgram: "Test")
-        configuration.defaultNewSessionAgent = .codexRemote
-        let store = AgentLaneStore(configuration: configuration, backends: [claude, codex, CommandLaneBackend.shell],
+        let store = AgentLaneStore(configuration: .init(termProgram: "Test"), backends: [claude, codex, CommandLaneBackend.shell],
                                    statusFeed: nil, defaults: defaults)
+        XCTAssertEqual(store.configuredNewLaneBackendID, "app.claude", "the first by name")
+        store.defaultNewSessionBackendID = { "app.codex" }
         XCTAssertEqual(store.agentKind(ofBackend: "app.claude"), .claudeRemote)
         XCTAssertNil(store.agentKind(ofBackend: CommandLaneBackend.shell.id))
         XCTAssertEqual(store.availableAgentKinds, [.claudeRemote, .codexRemote])
@@ -118,5 +121,35 @@ final class NewSessionAgentTests: XCTestCase {
         store.newSessionAgent = .claudeDirect
         XCTAssertEqual(store.newSessionPlan(usages: []).backendID, "app.claude", "no direct Claude here: the remote one")
         XCTAssertEqual(store.newSessionPlan(usages: [usage("Claude", 95)]).backendID, "app.codex")
+    }
+
+    func testAnAppWithOneAgentNeverPicksOrSwitchesToTheOther() {
+        let (store, _) = makeStore(allowed: [.claude])
+        XCTAssertEqual(store.availableAgentKinds, [.claudeRemote, .claudeDirect], "the picker hides Codex")
+        XCTAssertFalse(store.canSwitchAgents)
+        store.newSessionAgent = .codexRemote
+        XCTAssertEqual(store.newSessionPlan(preferring: "cmd:claude-remote", usages: []).backendID, "cmd:claude-remote",
+                       "a saved Codex choice is ignored")
+        store.newSessionAgent = .claudeRemote
+        let plan = store.newSessionPlan(usages: [usage("Claude", 99), usage("Codex", 1)])
+        XCTAssertEqual(plan, NewSessionPlan(backendID: "cmd:claude-remote", kind: .claudeRemote))
+    }
+
+    func testAFolderPredicateDecidesAndDoubtKeepsTheDefault() {
+        let work = URL(fileURLWithPath: "/work/repo")
+        let other = URL(fileURLWithPath: "/elsewhere/repo")
+        let (store, _) = makeStore(folders: { agent, folder in agent == .claude || folder.path.hasPrefix("/work/") })
+        store.newSessionAgent = .claudeRemote
+        let full = [usage("Claude", 95), usage("Codex", 10)]
+        XCTAssertEqual(store.newSessionPlan(in: work, usages: full).backendID, "cmd:codex-remote")
+        XCTAssertEqual(store.newSessionPlan(in: other, usages: full).backendID, "cmd:claude-remote",
+                       "Codex may not work there")
+        XCTAssertEqual(store.newSessionPlan(preferring: "cmd:codex", usages: full).backendID, "cmd:codex",
+                       "no folder: the app's default, not the choice or the switch")
+        store.newSessionAgent = .codexRemote
+        XCTAssertEqual(store.newSessionPlan(preferring: "cmd:claude", in: other, usages: []).backendID, "cmd:claude",
+                       "a choice the folder does not allow keeps the app's default")
+        let lane = store.openNewLane(in: work, backendID: "cmd:claude", focus: false, open: false)
+        XCTAssertEqual(lane?.backend.id, "cmd:codex-remote")
     }
 }
