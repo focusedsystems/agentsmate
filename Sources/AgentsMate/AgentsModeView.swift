@@ -819,8 +819,23 @@ struct LaneTerminalPane: View {
                 TerminalHost(session: session, store: store)
                     .id("\(session.id)#\(session.generation)")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
+            } else if store.launchAttachPending == session.id {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                // Nothing runs for this lane yet: say so and offer to start
+                // it, rather than a spinner that never ends.
+                VStack(spacing: 10) {
+                    Image(systemName: "terminal")
+                        .font(.system(size: 32))
+                        .foregroundStyle(.secondary)
+                    Text(session.title).font(.title3)
+                    Text("Not attached").foregroundStyle(.secondary)
+                    Button("Start Session") { store.open(session.id, focus: true) }
+                        .keyboardShortcut(.defaultAction)
+                        .controlSize(.large)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .accessibilityElement(children: .contain)
             }
             if session.hasExited {
                 Divider()
