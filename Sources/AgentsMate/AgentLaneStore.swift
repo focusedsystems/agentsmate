@@ -1331,7 +1331,7 @@ public final class AgentLaneStore: ObservableObject {
     @Published public private(set) var unknownHosts: Set<String> = []
     /// The lane launch shows, waiting for its host to answer so its session
     /// can be attached. Cleared when anything else opens a lane.
-    private(set) var launchAttachPending: AgentLane.ID?
+    @Published private(set) var launchAttachPending: AgentLane.ID?
     private var listingHosts: AgentHosts?
 
     /// Ask every hub and lane host in the registry what it has running.
