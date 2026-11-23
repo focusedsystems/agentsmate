@@ -366,7 +366,8 @@ public struct AgentLaneSidebar<Accessory: View>: View {
     @ViewBuilder
     private func newLaneItems(_ group: LaneGroup) -> some View {
         ForEach(store.availableBackends, id: \.id) { backend in
-            Button("\(backend.displayName)…") {
+            // A heading on another host says where the lane will run.
+            Button(group.host.map { "\(backend.displayName) on \($0)…" } ?? "\(backend.displayName)…") {
                 Task { await store.newLane(in: group, backendID: backend.id) }
             }
         }
