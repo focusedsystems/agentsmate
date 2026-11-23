@@ -485,10 +485,12 @@ final class DetachedPlacementStoreTests: XCTestCase {
             store.sweepForDetachedSessions()
             await waitFor { store.detachedIDs.count == 2 }
             let names = { (group: LaneGroup) in group.lanes.map { $0.sessionName ?? $0.id } }
-            let cloud = try XCTUnwrap(store.groups.first { $0.section == "Cloud" })
             // The repository's own session is its row's; the worktree's is
-            // listed just under it, once; only the stray is apart.
-            XCTAssertEqual(names(cloud), ["repo", "lane-feature", "next"], "launch \(launch)")
+            // listed just under it, under the repository's heading, once;
+            // only the stray is apart.
+            let headings = store.groups.filter { $0.repository != nil }
+            XCTAssertEqual(headings.map(names), [["repo", "lane-feature"], ["next"]], "launch \(launch)")
+            XCTAssertEqual(headings.map(\.section), ["Cloud", "Cloud"])
             XCTAssertEqual(store.groups.last.map(names), ["lane-stray"])
             XCTAssertEqual(store.groups.last?.isDetached, true)
             XCTAssertEqual(store.displayOrder.count, Set(store.displayOrder.map(\.id)).count, "no row twice")
