@@ -114,21 +114,27 @@ public enum AgentSignIn {
 /// workspace credits), the reset comes from, in order: Codex's own account
 /// read (``CodexLimitsReader``, what the Codex app shows), the latest window
 /// reset a record still gives in the future, then the latest window reset any
-/// record gives, rolled forward by its window's length until it is to come.
+/// record gives, rolled forward by its window's length until it is to come,
+/// and last the reset an earlier read found (``CodexResetCache``), rolled
+/// forward a week at a time.
 public struct CodexSessionUsageSource: AgentUsageSource {
     public let root: URL
     let signedIn: @Sendable () -> Bool
     let limits: CodexLimitsReader?
+    let cache: CodexResetCache?
 
     /// Reads nothing while Codex is signed out, so the meter leaves it out.
     /// `limits` asks Codex itself for the reset while credits are spent; nil
-    /// keeps every read to the session files.
+    /// keeps every read to the session files. `cache` keeps the last reset
+    /// found, for a read that finds none; nil keeps none.
     public init(root: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex/sessions"),
                 signedIn: @escaping @Sendable () -> Bool = { AgentSignIn.codex() },
-                limits: CodexLimitsReader? = CodexLimitsReader()) {
+                limits: CodexLimitsReader? = CodexLimitsReader(),
+                cache: CodexResetCache? = CodexResetCache()) {
         self.root = root
         self.signedIn = signedIn
         self.limits = limits
+        self.cache = cache
     }
 
     public func read() -> AgentUsage? {
@@ -137,7 +143,8 @@ public struct CodexSessionUsageSource: AgentUsageSource {
         let now = Date()
         return Self.usage(fromNewestFirst: texts, now: now,
                           authoritative: { limits?.depletedUntil(now: now) },
-                          older: { recentSessions(limit: 20, maxAge: nil).compactMap { tail(of: $0) } })
+                          older: { recentSessions(limit: 20, maxAge: nil).compactMap { tail(of: $0) } },
+                          cached: { cache?.read() }, remember: { cache?.write($0) })
     }
 
     /// The usage in session text, newest file first: the newest record's.
@@ -145,10 +152,27 @@ public struct CodexSessionUsageSource: AgentUsageSource {
     /// comes from `authoritative`, else the records' windows: the latest
     /// reset still to come, else the latest one rolled forward by its window
     /// length. `older` gives more text, read only when the first gives no
-    /// window at all.
+    /// window at all. With none of those, the `cached` reset an earlier read
+    /// found stands in, rolled forward a week at a time; every reset found
+    /// while depleted is passed to `remember` for that.
     static func usage(fromNewestFirst texts: [String], now: Date = Date(),
                       authoritative: () -> Date? = { nil },
-                      older: () -> [String] = { [] }) -> AgentUsage? {
+                      older: () -> [String] = { [] },
+                      cached: () -> Date? = { nil },
+                      remember: (Date) -> Void = { _ in }) -> AgentUsage? {
+        let usage = foundUsage(fromNewestFirst: texts, now: now, authoritative: authoritative, older: older)
+        guard var usage, usage.isDepleted else { return usage }
+        if let reset = usage.depletedUntil {
+            remember(reset)
+        } else if let saved = cached() {
+            usage.resetsAt = nextReset(of: [.init(label: "Saved", percent: 100, resetsAt: saved, length: 7 * 24 * 3600)],
+                                       after: now)
+        }
+        return usage
+    }
+
+    static func foundUsage(fromNewestFirst texts: [String], now: Date,
+                           authoritative: () -> Date?, older: () -> [String]) -> AgentUsage? {
         var latest: AgentUsage?
         var windows: [AgentUsage.Window] = []
         for text in texts {
@@ -371,6 +395,34 @@ public final class CodexLimitsReader: @unchecked Sendable {
             }
             return false
         }
+    }
+}
+
+/// The last reset a read found for Codex's spent limit, kept in a small file
+/// beside the lane status folder (`agentsmate/usage/codex-reset.json` in the
+/// state folder), so a read that can reach nothing still has a date.
+public struct CodexResetCache: Sendable {
+    public let url: URL
+
+    public init(url: URL = LaneStatusDirectory.default().url.deletingLastPathComponent()
+        .appendingPathComponent("usage/codex-reset.json")) {
+        self.url = url
+    }
+
+    struct Record: Codable { var resetsAt: Date }
+
+    public func read() -> Date? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return (try? LaneStatusDirectory.decoder.decode(Record.self, from: data))?.resetsAt
+    }
+
+    /// Saves `date` to the second, writing only when it differs from what
+    /// is kept.
+    public func write(_ date: Date) {
+        let date = Date(timeIntervalSince1970: date.timeIntervalSince1970.rounded())
+        guard read() != date else { return }
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? LaneStatusDirectory.encoder.encode(Record(resetsAt: date)).write(to: url, options: .atomic)
     }
 }
 

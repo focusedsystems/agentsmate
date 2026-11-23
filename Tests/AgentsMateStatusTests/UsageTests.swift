@@ -129,6 +129,57 @@ final class UsageTests: XCTestCase {
                                           older: { XCTFail("read older"); return [] })
     }
 
+    func testSpentCodexCreditsFallBackToTheSavedReset() throws {
+        let now = Date(timeIntervalSince1970: 1_795_400_000)
+        let spent = #"{"rate_limits":{"limit_id":"premium","primary":null,"secondary":null,"rate_limit_reached_type":"workspace_member_credits_depleted"}}"#
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("agentsmate-\(UUID().uuidString)/usage/codex-reset.json")
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent().deletingLastPathComponent()) }
+        let cache = CodexResetCache(url: url)
+        XCTAssertNil(cache.read())
+
+        // A reset found while depleted is saved.
+        let live = Date(timeIntervalSince1970: 1_795_539_448)
+        _ = CodexSessionUsageSource.usage(fromNewestFirst: [spent], now: now, authoritative: { live },
+                                          cached: { cache.read() }, remember: { cache.write($0) })
+        XCTAssertEqual(cache.read(), live)
+
+        // Nothing reachable and no window: the saved reset stands in.
+        let offline = CodexSessionUsageSource.usage(fromNewestFirst: [spent], now: now,
+                                                    cached: { cache.read() }, remember: { cache.write($0) })
+        XCTAssertEqual(offline?.depletedUntil, live)
+
+        // Passed while still depleted: rolled forward a week at a time.
+        let later = live.addingTimeInterval(8 * 24 * 3600)
+        let rolled = CodexSessionUsageSource.usage(fromNewestFirst: [spent], now: later, cached: { cache.read() })
+        XCTAssertEqual(rolled?.depletedUntil, live.addingTimeInterval(2 * 604_800))
+        XCTAssertEqual(rolled?.current(at: later).depletedUntil, live.addingTimeInterval(2 * 604_800))
+
+        // A source that gives a reset wins over the saved one.
+        let window = #"{"rate_limits":{"primary":{"used_percent":82,"window_minutes":10080,"resets_at":1795500000}}}"#
+        let fresh = CodexSessionUsageSource.usage(fromNewestFirst: [[window, spent].joined(separator: "\n")], now: now,
+                                                  cached: { cache.read() }, remember: { cache.write($0) })
+        XCTAssertEqual(fresh?.depletedUntil, Date(timeIntervalSince1970: 1_795_500_000))
+        XCTAssertEqual(cache.read(), Date(timeIntervalSince1970: 1_795_500_000))
+
+        // Not depleted: the cache is neither read nor written.
+        _ = CodexSessionUsageSource.usage(fromNewestFirst: [window], now: now,
+                                          cached: { XCTFail("read"); return nil }, remember: { _ in XCTFail("wrote") })
+    }
+
+    func testResetCacheWritesOnlyChanges() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("agentsmate-\(UUID().uuidString)/codex-reset.json")
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let cache = CodexResetCache(url: url)
+        cache.write(Date(timeIntervalSince1970: 1_795_539_448.4))
+        XCTAssertEqual(cache.read(), Date(timeIntervalSince1970: 1_795_539_448))
+        let written = try FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date
+        Thread.sleep(forTimeInterval: 1.1)
+        cache.write(Date(timeIntervalSince1970: 1_795_539_448))
+        XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date, written)
+        XCTAssertTrue(CodexResetCache().url.path.hasSuffix("agentsmate/usage/codex-reset.json") ||
+                      ProcessInfo.processInfo.environment["AGENTSMATE_STATUS_DIR"] != nil)
+    }
+
     func testRolledResetLandsOnTheNextPeriod() {
         let reset = Date(timeIntervalSince1970: 1_000_000)
         let week: TimeInterval = 604_800
