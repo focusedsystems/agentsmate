@@ -3,7 +3,7 @@ import AppKit
 
 /// The dialogs a lane's contextual menu can ask for: rename, change icon,
 /// confirm an agent switch, new section. One per view that shows lane menus
-/// (the sidebar, Home), presented by ``LaneMenuSheets`` on that view.
+/// (the sidebar, All Agents), presented by ``LaneMenuSheets`` on that view.
 @MainActor
 final class LaneMenuPresentation: ObservableObject {
     @Published var renamingLane: AgentLane.ID?
@@ -78,7 +78,7 @@ struct LaneMenuSheets: ViewModifier {
 private struct IconRequest: Identifiable { let id: AgentLane.ID }
 
 /// A lane's contextual menu: the same commands wherever a lane is listed,
-/// the sidebar and Home alike. A found (detached) session gets its own,
+/// the sidebar and All Agents alike. A found (detached) session gets its own,
 /// shorter menu.
 struct LaneContextMenu: View {
     @ObservedObject var store: AgentLaneStore

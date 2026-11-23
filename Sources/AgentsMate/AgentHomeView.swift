@@ -1,13 +1,13 @@
 import SwiftUI
 import AppKit
 
-/// Home: every active session in the app's lanes at a glance, grouped
-/// into Needs You, Working and Idle & Done. ``AgentLaneDetail`` shows it in
-/// place of the terminal while ``AgentLaneStore/isHomeShown``; an app with
-/// its own layout can show it anywhere.
+/// All Agents: every active session in the app's lanes on one board, a
+/// column each for Needs You, Working and Idle & Done. ``AgentLaneDetail``
+/// shows it in place of the terminal while ``AgentLaneStore/isHomeShown``;
+/// an app with its own layout can show it anywhere.
 ///
-/// Click a row, or move to it with the arrow keys and press Return, to open
-/// its lane exactly as the sidebar does. Typing filters the list; the
+/// Click a card, or move to it with the arrow keys and press Return, to open
+/// its lane exactly as the sidebar does. Typing filters the board; the
 /// sidebar's status filters apply here too. It fills in as hosts answer and
 /// never waits on them.
 public struct AgentHomeView: View {
@@ -18,7 +18,7 @@ public struct AgentHomeView: View {
     @StateObject private var menus = LaneMenuPresentation()
     @State private var selection: AgentLane.ID?
     @State private var query = ""
-    @FocusState private var listFocused: Bool
+    @FocusState private var boardFocused: Bool
     @FocusState private var searchFocused: Bool
 
     @AppStorage private var filterAttached: Bool
@@ -41,21 +41,21 @@ public struct AgentHomeView: View {
 
     public var body: some View {
         // Read once per update: the grouping walks every row.
-        let groups = displayedGroups
+        let columns = displayedColumns
         let totals = AgentHome.totals(allGroups)
         VStack(spacing: 0) {
             header(totals)
             Divider()
-            if groups.isEmpty {
+            if columns.allSatisfy(\.items.isEmpty) {
                 emptyState
             } else {
-                list(groups)
+                board(columns)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .controlBackgroundColor))
         .modifier(LaneMenuSheets(store: store, presentation: menus))
-        .onAppear { DispatchQueue.main.async { listFocused = true } }
+        .onAppear { DispatchQueue.main.async { boardFocused = true } }
     }
 
     // MARK: Rows
@@ -67,9 +67,9 @@ public struct AgentHomeView: View {
         AgentHome.grouped(store.homeSessions.map(AgentLaneStore.homeItem))
     }
 
-    /// The sections with only the rows the search and the sidebar's status
+    /// The columns with only the cards the search and the sidebar's status
     /// filters let through.
-    private var displayedGroups: [(section: AgentHomeSection, items: [AgentHomeItem])] {
+    private var displayedColumns: [(section: AgentHomeSection, items: [AgentHomeItem])] {
         let filters = activeFilters
         let text = query.trimmingCharacters(in: .whitespaces)
         let sessions = store.homeSessions.filter { session in
@@ -81,7 +81,7 @@ public struct AgentHomeView: View {
             let state = AgentLaneSidebar<EmptyView>.filterState(session)
             return filters.allSatisfy { $0.admits(state) }
         }
-        return AgentHome.grouped(sessions.map(AgentLaneStore.homeItem))
+        return AgentHome.columns(sessions.map(AgentLaneStore.homeItem))
     }
 
     private var activeFilters: Set<LaneStatusFilter> {
@@ -98,87 +98,89 @@ public struct AgentHomeView: View {
         !query.trimmingCharacters(in: .whitespaces).isEmpty || !activeFilters.isEmpty
     }
 
-    private func list(_ groups: [(section: AgentHomeSection, items: [AgentHomeItem])]) -> some View {
-        List(selection: selectionBinding) {
-            ForEach(groups, id: \.section) { group in
-                Section {
-                    ForEach(group.items) { item in
+    /// The board: a column per state, a card per session.
+    private func board(_ columns: [(section: AgentHomeSection, items: [AgentHomeItem])]) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            ForEach(columns, id: \.section) { column in
+                AgentHomeColumn(section: column.section, count: column.items.count, selection: selection) {
+                    ForEach(column.items) { item in
                         if let session = sessionsByID[item.id] {
-                            AgentHomeRow(session: session, area: store.homeArea(of: session.lane))
-                                .tag(item.id)
+                            AgentHomeCard(session: session, area: store.homeArea(of: session.lane),
+                                          isSelected: selection == item.id, isFocused: boardFocused)
+                                .id(item.id)
+                                .onTapGesture { open(item.id) }
+                                .contextMenu {
+                                    LaneContextMenu(store: store, session: session, presentation: menus,
+                                                    rowActions: rowActions)
+                                }
+                                .accessibilityAction { open(item.id) }
                         }
                     }
-                } header: {
-                    HStack(spacing: 6) {
-                        Text(group.section.title)
-                        Text("\(group.items.count)").monospacedDigit().foregroundStyle(.secondary)
-                    }
-                    .font(.headline)
-                    .accessibilityElement(children: .combine)
                 }
             }
         }
-        .listStyle(.inset)
-        .alternatingRowBackgrounds(.disabled)
-        .focused($listFocused)
-        .contextMenu(forSelectionType: AgentLane.ID.self) { ids in
-            if let id = ids.first, let session = store.sessions[id] {
-                LaneContextMenu(store: store, session: session, presentation: menus, rowActions: rowActions)
-            }
-        } primaryAction: { ids in
-            if let id = ids.first { store.open(id) }
-        }
-        // Typing filters the list, as in Finder's and Mail's type-to-search
-        // fields; Delete takes a character back and Escape clears it.
-        .background(HomeTypeToSearch(handle: typeToSearch))
+        .padding(12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .focusable()
+        .focusEffectDisabled()
+        .focused($boardFocused)
+        // Arrows move between cards, Return opens one, and typing filters
+        // the board, as in Finder's and Mail's type-to-search fields;
+        // Delete takes a character back and Escape clears it.
+        .onKeyPress(phases: .down) { press in handleKey(press, columns: columns) }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Sessions by state")
     }
 
-    private func typeToSearch(_ event: NSEvent) -> Bool {
-        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        guard flags.isDisjoint(with: [.command, .control, .option]) else { return false }
-        switch event.keyCode {
-        case 51, 117:
-            guard !query.isEmpty else { return false }
+    /// A click opens the card's lane, as the sidebar's rows do.
+    private func open(_ id: AgentLane.ID) {
+        selection = id
+        store.open(id)
+    }
+
+    private func handleKey(_ press: KeyPress, columns: [(section: AgentHomeSection, items: [AgentHomeItem])])
+        -> KeyPress.Result {
+        guard press.modifiers.isDisjoint(with: [.command, .control, .option]) else { return .ignored }
+        let ids = columns.map { $0.items.map(\.id) }
+        func go(_ move: AgentHome.Move) -> KeyPress.Result {
+            selection = AgentHome.move(move, from: selection, in: ids)
+            return .handled
+        }
+        switch press.key {
+        case .upArrow: return go(.up)
+        case .downArrow: return go(.down)
+        case .leftArrow: return go(.left)
+        case .rightArrow: return go(.right)
+        case .return:
+            guard let id = selection, ids.contains(where: { $0.contains(id) }) else { return .ignored }
+            store.open(id)
+            return .handled
+        case .delete, .deleteForward:
+            guard !query.isEmpty else { return .ignored }
             query.removeLast()
-            return true
-        case 53:
-            guard !query.isEmpty else { return false }
+            return .handled
+        case .escape:
+            guard !query.isEmpty else { return .ignored }
             query = ""
-            return true
+            return .handled
         default:
             break
         }
-        guard let chars = event.characters, !chars.isEmpty,
-              chars.unicodeScalars.allSatisfy({ Self.typeable.contains($0) }),
-              !(chars == " " && query.isEmpty) else { return false }
+        let chars = press.characters
+        guard !chars.isEmpty, chars.unicodeScalars.allSatisfy({ Self.typeable.contains($0) }),
+              !(chars == " " && query.isEmpty) else { return .ignored }
         query += chars
-        return true
+        return .handled
     }
 
     private static let typeable = CharacterSet.alphanumerics.union(.punctuationCharacters)
         .union(.symbols).union(.init(charactersIn: " "))
-
-    /// A click opens the row's lane, as in the sidebar; the arrow keys only
-    /// move, and Return (the list's primary action) opens.
-    private var selectionBinding: Binding<AgentLane.ID?> {
-        Binding(get: { selection },
-                set: { id in
-                    selection = id
-                    guard let id else { return }
-                    let type = NSApp.currentEvent?.type
-                    if type == .leftMouseDown || type == .leftMouseUp { store.open(id) }
-                })
-    }
 
     // MARK: Header
 
     private func header(_ totals: AgentHome.Totals) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 14) {
-                Label("Home", systemImage: "house")
-                    .font(.title2.weight(.semibold))
-                    .labelStyle(.titleAndIcon)
-                    .accessibilityAddTraits(.isHeader)
                 total(totals.needsYou, "need you", symbol: "hand.raised.fill", color: .orange)
                 total(totals.working, "working", symbol: "bolt.fill", color: .green)
                 total(totals.recent, "idle or done", symbol: "moon.fill", color: .secondary)
@@ -209,8 +211,8 @@ public struct AgentHomeView: View {
             TextField("Filter", text: $query)
                 .textFieldStyle(.plain)
                 .focused($searchFocused)
-                .onExitCommand { query = ""; listFocused = true }
-                .onSubmit { listFocused = true }
+                .onExitCommand { query = ""; boardFocused = true }
+                .onSubmit { boardFocused = true }
             if !query.isEmpty {
                 Button { query = "" } label: {
                     Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
@@ -224,7 +226,7 @@ public struct AgentHomeView: View {
         .frame(width: 200, height: 22)
         .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .textBackgroundColor)))
         .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color(nsColor: .separatorColor)))
-        .help("Filter by name, folder, section, summary or your recent prompts; or just start typing in the list")
+        .help("Filter by name, folder, section, summary or your recent prompts; or just start typing on the board")
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Filter sessions")
     }
@@ -271,7 +273,8 @@ public struct AgentHomeView: View {
     @ViewBuilder
     private var emptyState: some View {
         VStack(spacing: 10) {
-            Image(systemName: "house").font(.system(size: 32)).foregroundStyle(.secondary)
+            LaneIconView(icon: AgentHomeSidebarRow.icon, tint: .secondary, size: 32)
+                .accessibilityHidden(true)
             if isFiltering, !allGroups.isEmpty {
                 Text("No Matching Sessions").font(.title3)
                 Button("Show All") { clearFilters() }
@@ -323,50 +326,111 @@ public struct AgentHomeView: View {
     }
 }
 
-/// One session on Home: its status, title and section, what it is waiting
-/// on or doing, its pull requests and how long since it last did anything.
-struct AgentHomeRow: View {
+/// A column of the board: its title and count, and its cards scrolling
+/// under them.
+struct AgentHomeColumn<Cards: View>: View {
+    let section: AgentHomeSection
+    let count: Int
+    /// The selected card, kept in view as the arrow keys move.
+    let selection: AgentLane.ID?
+    @ViewBuilder let cards: () -> Cards
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 6) {
+                Text(section.title)
+                Text("\(count)").monospacedDigit().foregroundStyle(.secondary)
+            }
+            .font(.headline)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isHeader)
+            ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 8) {
+                    cards()
+                    if count == 0 {
+                        Text("None")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.bottom, 8)
+            }
+            .onChange(of: selection) {
+                if let selection { proxy.scrollTo(selection) }
+            }
+            }
+        }
+        .frame(minWidth: 200, maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color(nsColor: .windowBackgroundColor)))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color(nsColor: .separatorColor)))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(section.title), \(count) \(count == 1 ? "session" : "sessions")")
+    }
+}
+
+/// One session on the board: its status, title and section, what it is
+/// waiting on or doing, its pull requests and how long since it last did
+/// anything.
+struct AgentHomeCard: View {
     @ObservedObject var session: AgentLaneSession
     let area: String?
+    let isSelected: Bool
+    /// The board has the keyboard: the selection draws in the accent
+    /// colour, else in grey, as a list's selection does.
+    let isFocused: Bool
 
     static let pillLimit = 4
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            AgentHomeStatusDot(session: session)
-                .padding(.top, 5)
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(session.title)
-                        .fontWeight(.medium)
-                        .lineLimit(1)
-                        .layoutPriority(1)
-                    if let area {
-                        Text(area).font(.callout).foregroundStyle(.secondary).lineLimit(1)
-                    }
-                    if session.needsAttention {
-                        Image(systemName: "circle.fill").font(.system(size: 6)).foregroundStyle(.tint)
-                            .help("New since you last looked")
-                            .accessibilityHidden(true)
-                    }
-                    Spacer(minLength: 8)
-                    pills
-                    age
-                }
-                Text(AgentHome.detail(for: session) ?? session.status.title)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                AgentHomeStatusDot(session: session)
+                    .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }
+                Text(session.title)
+                    .fontWeight(.medium)
                     .lineLimit(2)
-                    .truncationMode(.tail)
+                    .layoutPriority(1)
+                if session.needsAttention {
+                    Image(systemName: "circle.fill").font(.system(size: 6)).foregroundStyle(.tint)
+                        .help("New since you last looked")
+                        .accessibilityHidden(true)
+                }
+                Spacer(minLength: 4)
+                age
             }
+            if let area {
+                Text(area).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Text(AgentHome.detail(for: session) ?? session.status.title)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .lineLimit(3)
+                .truncationMode(.tail)
+                .fixedSize(horizontal: false, vertical: true)
+            pills
         }
-        .padding(.vertical, 4)
-        .contentShape(Rectangle())
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .textBackgroundColor)))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(isSelected ? (isFocused ? Color.accentColor : Color.secondary)
+                              : Color(nsColor: .separatorColor),
+                              lineWidth: isSelected ? 2 : 1)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 8))
         .help(session.shortDirectory)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(session.title)
         .accessibilityValue(accessibilityValue)
         .accessibilityHint("Opens the session")
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
     }
 
     @ViewBuilder
@@ -374,7 +438,7 @@ struct AgentHomeRow: View {
         let pullRequests = session.displayedPullRequests
         if !pullRequests.isEmpty {
             let shown = Array(pullRequests.suffix(Self.pillLimit))
-            HStack(spacing: 4) {
+            AgentHomeFlow(spacing: 4) {
                 ForEach(shown) { PullRequestBadge(pullRequest: $0).fixedSize() }
                 if pullRequests.count > shown.count {
                     Text("+\(pullRequests.count - shown.count)")
@@ -383,6 +447,7 @@ struct AgentHomeRow: View {
                         .help("\(pullRequests.count) pull requests in all")
                 }
             }
+            .padding(.top, 2)
         }
     }
 
@@ -393,9 +458,9 @@ struct AgentHomeRow: View {
                 Text(Self.age(of: last, now: context.date))
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
-                    .frame(minWidth: 44, alignment: .trailing)
                     .help(last.formatted(date: .abbreviated, time: .shortened))
             }
+            .fixedSize()
         }
     }
 
@@ -422,6 +487,52 @@ struct AgentHomeRow: View {
     }
 }
 
+/// Lays its views out left to right, wrapping onto new lines: a card's
+/// pull request pills.
+struct AgentHomeFlow: Layout {
+    var spacing: CGFloat = 4
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let rows = arrange(subviews, width: proposal.width ?? .infinity)
+        let width = rows.map(\.width).max() ?? 0
+        let height = rows.map(\.height).reduce(0, +) + spacing * CGFloat(max(0, rows.count - 1))
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for row in arrange(subviews, width: bounds.width) {
+            var x = bounds.minX
+            for index in row.indices {
+                let size = subviews[index].sizeThatFits(.unspecified)
+                subviews[index].place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+                x += size.width + spacing
+            }
+            y += row.height + spacing
+        }
+    }
+
+    private struct Row { var indices: [Int] = []; var width: CGFloat = 0; var height: CGFloat = 0 }
+
+    private func arrange(_ subviews: Subviews, width: CGFloat) -> [Row] {
+        var rows: [Row] = []
+        var row = Row()
+        for index in subviews.indices {
+            let size = subviews[index].sizeThatFits(.unspecified)
+            let needed = row.indices.isEmpty ? size.width : row.width + spacing + size.width
+            if needed > width, !row.indices.isEmpty {
+                rows.append(row)
+                row = Row()
+            }
+            row.width = row.indices.isEmpty ? size.width : row.width + spacing + size.width
+            row.height = max(row.height, size.height)
+            row.indices.append(index)
+        }
+        if !row.indices.isEmpty { rows.append(row) }
+        return rows
+    }
+}
+
 /// The status colours the sidebar uses: green working, orange asking
 /// permission, blue waiting for you, grey quiet, an outline when nothing
 /// runs.
@@ -440,52 +551,5 @@ struct AgentHomeStatusDot: View {
         }
         .frame(width: 8, height: 8)
         .accessibilityHidden(true)
-    }
-}
-
-/// Hands key presses to Home's type-to-search while the list behind which
-/// it sits has the keyboard, ahead of the list's own type-select.
-struct HomeTypeToSearch: NSViewRepresentable {
-    let handle: @MainActor (NSEvent) -> Bool
-
-    func makeNSView(context: Context) -> HomeTypeToSearchView {
-        let view = HomeTypeToSearchView()
-        view.handle = handle
-        return view
-    }
-
-    func updateNSView(_ view: HomeTypeToSearchView, context: Context) { view.handle = handle }
-}
-
-final class HomeTypeToSearchView: NSView {
-    var handle: (@MainActor (NSEvent) -> Bool)?
-    private var monitor: Any?
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        if let monitor { NSEvent.removeMonitor(monitor) }
-        monitor = nil
-        guard window != nil else { return }
-        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            let handled = MainActor.assumeIsolated { self?.take(event) ?? false }
-            return handled ? nil : event
-        }
-    }
-
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-
-    private func take(_ event: NSEvent) -> Bool {
-        guard event.window === window, listHasKeyboard, let handle else { return false }
-        return handle(event)
-    }
-
-    /// Whether the window's focused view is the list this view sits behind.
-    private var listHasKeyboard: Bool {
-        guard let window, !isHiddenOrHasHiddenAncestor,
-              let focused = window.firstResponder as? NSTableView else { return false }
-        let scroll = focused.enclosingScrollView ?? focused
-        let list = scroll.convert(scroll.bounds, to: nil)
-        let mine = convert(bounds, to: nil)
-        return mine.insetBy(dx: -2, dy: -2).contains(list) || list.insetBy(dx: -2, dy: -2).contains(mine)
     }
 }

@@ -49,11 +49,30 @@ final class HomeGroupingTests: XCTestCase {
         XCTAssertTrue(AgentHome.grouped([], now: now).isEmpty)
     }
 
+    func testColumnsKeepEveryStateInBoardOrder() {
+        let columns = AgentHome.columns([item("r", .running, ago: 1)], now: now)
+        XCTAssertEqual(columns.map(\.section), [.needsYou, .working, .recent])
+        XCTAssertEqual(columns.map { $0.items.map(\.id) }, [[], ["r"], []])
+    }
+
+    func testArrowsMoveAcrossTheBoard() {
+        let board = [["a", "b"], [], ["c", "d", "e"]]
+        XCTAssertEqual(AgentHome.move(.down, from: nil, in: board), "a")
+        XCTAssertEqual(AgentHome.move(.down, from: "gone", in: board), "a")
+        XCTAssertEqual(AgentHome.move(.down, from: "a", in: board), "b")
+        XCTAssertEqual(AgentHome.move(.down, from: "b", in: board), "b")
+        XCTAssertEqual(AgentHome.move(.up, from: "a", in: board), "a")
+        XCTAssertEqual(AgentHome.move(.right, from: "b", in: board), "d", "skips the empty column, same position")
+        XCTAssertEqual(AgentHome.move(.left, from: "e", in: board), "b", "clamps to the last card")
+        XCTAssertEqual(AgentHome.move(.right, from: "e", in: board), "e")
+        XCTAssertNil(AgentHome.move(.down, from: nil, in: [[], []]))
+    }
+
     func testAgeIsShort() {
-        XCTAssertEqual(AgentHomeRow.age(of: now.addingTimeInterval(-20), now: now), "now")
-        XCTAssertEqual(AgentHomeRow.age(of: now.addingTimeInterval(-300), now: now), "5m")
-        XCTAssertEqual(AgentHomeRow.age(of: now.addingTimeInterval(-7200), now: now), "2h")
-        XCTAssertEqual(AgentHomeRow.age(of: now.addingTimeInterval(-3 * 86_400), now: now), "3d")
+        XCTAssertEqual(AgentHomeCard.age(of: now.addingTimeInterval(-20), now: now), "now")
+        XCTAssertEqual(AgentHomeCard.age(of: now.addingTimeInterval(-300), now: now), "5m")
+        XCTAssertEqual(AgentHomeCard.age(of: now.addingTimeInterval(-7200), now: now), "2h")
+        XCTAssertEqual(AgentHomeCard.age(of: now.addingTimeInterval(-3 * 86_400), now: now), "3d")
     }
 
     func testLoadingCountsHostsThatAnswered() {

@@ -157,7 +157,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         .onDeleteCommand {
             if !store.isHomeShown, let id = store.selectedID, store.selected?.lane.isClosable == true { store.close(id) }
         }
-        // Escape leaves the lane for Home, as a list's empty selection.
+        // Escape leaves the lane for All Agents, as a list's empty selection.
         .onExitCommand { store.showHome() }
         // A filter that would leave the list empty turns itself off; only a
         // search that matches nothing leaves the Show All overlay.
@@ -182,12 +182,11 @@ public struct AgentLaneSidebar<Accessory: View>: View {
                 LaneRow(session: session,
                         shortcutNumber: shortcutNumbers[lane.id],
                         isSplit: lane.id == store.splitID,
-                        style: store.configuration.rowStyle,
-                        // A found session listed under its folder's row.
-                        isNested: !group.isDetached && store.isDetached(lane.id))
+                        style: store.configuration.rowStyle)
                     .tag(lane.id)
-                    // A found session follows its folder's row; it moves
-                    // once adopted.
+                    // A found session is a row of its own, as top-level as
+                    // its folder's row, which it follows; it moves once
+                    // adopted.
                     .moveDisabled(store.isDetached(lane.id))
             }
         }
@@ -355,7 +354,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         }
     }
 
-    /// The Home row's tag in the list's selection; never a lane's id.
+    /// The All Agents row's tag in the list's selection; never a lane's id.
     static var homeTag: AgentLane.ID { "\u{0}agentsmate-home" }
 
     private var selectionBinding: Binding<AgentLane.ID?> {
@@ -570,7 +569,7 @@ public struct AgentLaneDetail<Empty: View>: View {
     let labels: AgentsModeLabels
     let rowActions: [LaneAction]
 
-    /// `labels` and `rowActions` are Home's (``AgentHomeView``), shown here
+    /// `labels` and `rowActions` are All Agents' (``AgentHomeView``), shown here
     /// while ``AgentLaneStore/isHomeShown``.
     public init(store: AgentLaneStore, labels: AgentsModeLabels = .init(), rowActions: [LaneAction] = [],
                 @ViewBuilder empty: () -> Empty) {
@@ -725,8 +724,6 @@ struct LaneRow: View {
     let shortcutNumber: Int?
     let isSplit: Bool
     var style: LaneRowStyle = .standard
-    /// Indented under the row above: a found session under its folder's row.
-    var isNested = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -769,7 +766,6 @@ struct LaneRow: View {
             }
         }
         .padding(.vertical, 2)
-        .padding(.leading, isNested ? 14 : 0)
         .help(helpText)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(session.title)
@@ -1279,16 +1275,19 @@ extension Color {
 }
 
 
-/// Home's row at the top of the sidebar: a house, and how many sessions
-/// need the person.
+/// All Agents' row at the top of the sidebar: a robot, and how many
+/// sessions need the person.
 struct AgentHomeSidebarRow: View {
     @ObservedObject var store: AgentLaneStore
+
+    /// macOS has no robot symbol, so the bundled Lucide bot.
+    static let icon = LaneIcon.bundled("bot")
 
     var body: some View {
         let waiting = store.homeSessions.filter { LaneStatusFilter.wantsYou($0.status) }.count
         HStack(spacing: 8) {
-            Image(systemName: "house").frame(width: 20)
-            Text("Home")
+            LaneIconView(icon: Self.icon, size: 16).frame(width: 20)
+            Text("All Agents")
             Spacer(minLength: 4)
             if waiting > 0 {
                 Text("\(waiting)")
@@ -1301,9 +1300,9 @@ struct AgentHomeSidebarRow: View {
             }
         }
         .padding(.vertical, 2)
-        .help("Every active session at a glance (\(store.shortcuts.binding(for: .home)?.display ?? "Escape"))")
+        .help("Every active session on one board (\(store.shortcuts.binding(for: .home)?.display ?? "Escape"))")
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Home")
+        .accessibilityLabel("All Agents")
         .accessibilityValue(waiting > 0 ? "\(waiting) need you" : "")
     }
 }

@@ -317,25 +317,30 @@ that are attached here, plus those a restore brought back that have not been
 shown yet, and marks the selected one. "Reopen the lanes open at quit" keeps
 its meaning: it decides whether that snapshot is reopened at launch.
 
-## Home
+## All Agents
 
-Agents mode opens on Home: every active session in the app's lanes at a
-glance, the detached sessions found in its folders included, in three
-sections: Needs You, Working, and Idle & Done (finished within the last day).
-Each row shows its status, title, section, the question or permission it waits
-on (else its summary), up to four pull request pills and how long since it last
-did anything. Click a row, or move with the arrow keys and press Return, to
-open its lane; the contextual menu is the sidebar row's. Typing filters the
-list, and the sidebar's status filters apply too. While hosts are still being
-asked (`Configuration.hostSessions`) or the first look for detached sessions
-runs, the header shows how far each host has got; the list fills in as they
-answer.
+Agents mode opens on All Agents: every active session in the app's lanes on
+one board, the detached sessions found in its folders included, in three
+columns: Needs You, Working, and Idle & Done (finished within the last day).
+Each card shows its status, title, section, the question or permission it
+waits on (else its summary), up to four pull request pills and how long since
+it last did anything. Click a card, or move with the arrow keys and press
+Return, to open its lane; the contextual menu is the sidebar row's. Typing
+filters the board, and the sidebar's status filters apply too. While hosts are
+still being asked (`Configuration.hostSessions`) or the first look for
+detached sessions runs, the header shows how far each host has got; the board
+fills in as they answer.
 
-Home sits at the top of the sidebar, on View > Agents Home (⇧⌘H, rebindable;
-⌘0 stays Actual Size), and on Escape in the sidebar. Launch shows Home and
-attaches nothing until the person picks a row. Set
+All Agents sits at the top of the sidebar (a robot, Lucide's `bot`, since
+macOS has no robot symbol), on View > All Agents (⇧⌘H, rebindable; ⌘0 stays
+Actual Size), at the top of the lanes' menu, and on Escape in the sidebar.
+Launch shows it and attaches nothing until the person picks a card. Set
 `Configuration.launchShows = .selectedLane` to reattach the selected lane at
-launch instead, or `showsHome = false` to leave Home out.
+launch instead, or `showsHome = false` to leave it out. The API and saved keys
+keep its first name, Home.
+
+A session found for a lane is a row of its own in the sidebar, as top-level as
+the lane's row, which it follows, with or without section headings.
 
 ## Sections and navigation
 
