@@ -23,9 +23,14 @@ public struct DiscoveredSession: Hashable, Sendable {
     /// id, when the backend knows it. A row that knows the same id holds
     /// the session whatever either is named.
     public var sessionID: String?
+    /// The short id the backend attaches the session by, when it has one,
+    /// such as a Claude Code background session's id. Names can repeat;
+    /// this cannot, so a session with one is told apart by it.
+    public var agentID: String?
 
     public init(kind: String, name: String, directory: String? = nil, attachedClients: Int? = nil, host: String? = nil,
-                sessionID: String? = nil) {
+                sessionID: String? = nil, agentID: String? = nil) {
+        self.agentID = agentID
         self.kind = kind
         self.name = name
         self.directory = directory
@@ -34,8 +39,9 @@ public struct DiscoveredSession: Hashable, Sendable {
         self.sessionID = sessionID
     }
 
-    /// The same for one session whichever backend reports it.
-    public var key: String { [kind, host ?? "", name].joined(separator: "\u{1}") }
+    /// The same for one session whichever backend reports it: its short id
+    /// when it has one, else its name.
+    public var key: String { [kind, host ?? "", agentID ?? name].joined(separator: "\u{1}") }
 
     /// Whether the session's folder is one of `folders` or inside one, so an
     /// app can keep the sessions that work in its own folders. A session with
@@ -252,20 +258,54 @@ enum DetachedSessions {
     }
 
     /// The row for a session nothing attaches: not started, not closable,
-    /// matched to its status by name.
-    static func lane(for found: Found) -> AgentLane {
+    /// matched to its status by its id when it has one, else by name. A
+    /// session with a short id is attached by that id, and when another
+    /// listed session shares its name (`sharesName`) the title carries the
+    /// id too, so the rows can be told apart.
+    static func lane(for found: Found, sharesName: Bool = false) -> AgentLane {
         let session = found.session
-        var lane = AgentLane(id: laneID(found), title: session.name,
+        let id = session.agentID
+        let match: LaneStatusMatch = id.map { .session(session.sessionID ?? $0) } ?? .lane(session.name)
+        var lane = AgentLane(id: laneID(found), title: title(for: session, sharesName: sharesName),
                              directory: session.host == nil ? session.directory.map { URL(fileURLWithPath: $0, isDirectory: true) } : nil,
-                             backendID: found.backendID, isClosable: false, statusMatch: .lane(session.name))
+                             backendID: found.backendID, isClosable: false, statusMatch: match)
         lane.sessionName = session.name
+        lane.agentSessionID = id
         return lane
+    }
+
+    /// A detached row's title: the session's name, with its short id after
+    /// it when another session shares the name.
+    static func title(for session: DiscoveredSession, sharesName: Bool) -> String {
+        guard sharesName, let id = session.agentID else { return session.name }
+        return session.name + " · " + id
+    }
+
+    /// The names more than one of `found` share on one backend and machine.
+    static func sharedNames(_ found: [Found]) -> Set<String> {
+        var counts: [String: Int] = [:]
+        for item in found {
+            counts[[item.backendID, item.session.kind, item.session.host ?? "", item.session.name].joined(separator: "\u{1}"), default: 0] += 1
+        }
+        return Set(counts.filter { $0.value > 1 }.map(\.key))
+    }
+
+    static func sharesName(_ item: Found, in shared: Set<String>) -> Bool {
+        shared.contains([item.backendID, item.session.kind, item.session.host ?? "", item.session.name].joined(separator: "\u{1}"))
+    }
+
+    /// Whether a row that knows its session's short id holds `session`: the
+    /// same id. Nil when either id is unknown, so the name decides.
+    static func sameAgent(_ lane: AgentLane, _ session: DiscoveredSession) -> Bool? {
+        guard let held = lane.agentSessionID, !held.isEmpty, let id = session.agentID else { return nil }
+        return sameSession(held, id)
     }
 
     /// Whether a lane's row already attaches the session: by the name its
     /// backend knows it by, else the name its status is matched by, else
     /// (when the backend cannot name the lane) by folder.
     static func claims(_ lane: AgentLane, backend: any LaneBackend, _ session: DiscoveredSession) -> Bool {
+        if let same = sameAgent(lane, session) { return same }
         if let name = laneName(lane, backend: backend) { return name == session.name }
         guard let directory = session.directory else { return false }
         return LaneStatusMatch.normalizedPath(directory) == LaneStatusMatch.normalizedPath(lane.path)
@@ -334,7 +374,9 @@ enum DetachedSessions {
             let claimed = lanes.contains { lane in
                 guard let backend = backends[lane.backendID] else { return false }
                 if ids.contains(lane.backendID) { return claims(lane, backend: backend, session) }
-                return laneHost(backend) == session.host && laneName(lane, backend: backend) == session.name
+                guard laneHost(backend) == session.host else { return false }
+                if let same = sameAgent(lane, session) { return same }
+                return laneName(lane, backend: backend) == session.name
             }
             if !claimed { out.append(item) }
         }

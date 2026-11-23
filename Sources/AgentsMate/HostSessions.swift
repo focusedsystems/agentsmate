@@ -213,6 +213,12 @@ enum HostSessions {
             // Bound to a session the host no longer lists: nothing to attach.
             return nil
         }
+        // A row that knows its session's short id attaches that one only.
+        if backend is ClaudeBackgroundLaneBackend, let held = lane.agentSessionID, isValidAgentID(held) {
+            let found = live.filter { $0.agentID == held }
+            if found.count == 1 { return .claude(id: held, host: remoteHost) }
+            return nil
+        }
         let name = backend.sessionName(for: lane)
         if backend is ClaudeBackgroundLaneBackend, let name {
             let folder = LaneStatusMatch.normalizedPath(lane.path)

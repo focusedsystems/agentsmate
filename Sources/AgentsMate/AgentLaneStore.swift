@@ -723,6 +723,7 @@ public final class AgentLaneStore: ObservableObject {
                                       section: layout.section(of: lane),
                                       pinned: layout.pinned.contains(lane.id) ? true : nil,
                                       variant: lane.variant, sessionName: lane.sessionName,
+                                      agentSessionID: lane.agentSessionID,
                                       selected: marksSelection && lane.id == selectedID ? true : nil,
                                       id: lane.id, host: lane.host,
                                       command: wrapper?.command, variantFlag: wrapper?.variantFlag)
@@ -791,11 +792,16 @@ public final class AgentLaneStore: ObservableObject {
                              backendID: saved.backendID, isClosable: true, section: saved.section)
         lane.variant = saved.variant
         lane.sessionName = saved.sessionName
+        lane.agentSessionID = saved.agentSessionID
         lane.host = saved.host
         // A session the restore brings back attaches here, so its
         // Detached row (if the sweep already found it) goes.
         if let name = saved.sessionName,
-           let row = lanes.first(where: { detachedIDs.contains($0.id) && $0.backendID == saved.backendID && $0.sessionName == name }),
+           let row = lanes.first(where: { row in
+               guard detachedIDs.contains(row.id), row.backendID == saved.backendID, row.sessionName == name else { return false }
+               guard let id = saved.agentSessionID, let held = row.agentSessionID else { return true }
+               return DetachedSessions.sameSession(id, held)
+           }),
            sessions[row.id]?.isAttached != true {
             removeDetachedRow(row.id)
         }
@@ -1115,9 +1121,18 @@ public final class AgentLaneStore: ObservableObject {
         for id in detachedIDs where !wantedIDs.contains(id) && sessions[id]?.isAttached != true {
             removeDetachedRow(id)
         }
+        let shared = DetachedSessions.sharedNames(wanted)
         for found in wanted where backends[found.backendID] != nil {
-            let lane = DetachedSessions.lane(for: found)
-            guard !detachedIDs.contains(lane.id), !lanes.contains(where: { $0.id == lane.id }) else { continue }
+            let lane = DetachedSessions.lane(for: found, sharesName: DetachedSessions.sharesName(found, in: shared))
+            if let index = lanes.firstIndex(where: { $0.id == lane.id }) {
+                // A name another session took or gave up since the row was made.
+                if detachedIDs.contains(lane.id), lanes[index].title != lane.title {
+                    lanes[index].title = lane.title
+                    sessions[lane.id]?.update(lane: lanes[index])
+                }
+                continue
+            }
+            guard !detachedIDs.contains(lane.id) else { continue }
             detachedIDs.insert(lane.id)
             lanes.append(lane)
             makeSession(for: lane)
@@ -1536,6 +1551,7 @@ public final class AgentLaneStore: ObservableObject {
         lane.statusMatch = nil
         // The copy is a lane of its own, not another view of the same session.
         lane.sessionName = nil
+        lane.agentSessionID = nil
         if source.directory == nil { lane.directory = URL(fileURLWithPath: session.currentDirectory) }
         // A persistent lane in the same folder would attach the same session,
         // so the copy asks for a lane of its own: the next free number.

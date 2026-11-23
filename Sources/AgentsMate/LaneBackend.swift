@@ -40,6 +40,11 @@ public struct AgentLane: Identifiable, Hashable, Sendable {
     /// adopted. A backend that can attach by name does so instead of
     /// working the session out from the folder.
     public var sessionName: String?
+    /// The agent's own short id for the persistent session this row
+    /// attaches, when it is known exactly, such as a Claude Code background
+    /// session's id. Several sessions can share a name, so a backend that
+    /// can attach by id does so rather than by ``sessionName``.
+    public var agentSessionID: String?
     /// The host the lane runs on, by its name in the hosts registry
     /// (``AgentHosts``), or nil for the default. When set, the lane's
     /// terminal gets `CLAUDE_REMOTE_HOST` and `CODEX_REMOTE_HOST` naming it,
