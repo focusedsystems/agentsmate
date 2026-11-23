@@ -208,4 +208,16 @@ final class NewSessionAgentTests: XCTestCase {
         let other = store.openNewLane(in: intoOpen, backendID: "cmd:claude", focus: false, open: false)
         XCTAssertEqual(other?.backend.id, "cmd:claude")
     }
+
+    func testTheSwitchBackToTheDefaultAgentIsCheckedToo() {
+        // The app's default runs Claude, which may not work in this folder.
+        let (store, _) = makeStore(folders: { agent, _ in agent == .codex })
+        store.newSessionAgent = .codexRemote
+        let plan = store.newSessionPlan(preferring: "cmd:claude-remote", in: Self.folder,
+                                        usages: [usage("Codex", 95), usage("Claude", 5)])
+        XCTAssertEqual(plan.backendID, "cmd:codex-remote", "stays on the chosen agent")
+        XCTAssertNil(plan.switchedFrom)
+        XCTAssertEqual(store.newSessionPlan(preferring: "cmd:claude-remote", usages: [usage("Codex", 95)]).backendID,
+                       "cmd:claude-remote", "no folder: the app's default")
+    }
 }
