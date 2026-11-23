@@ -180,8 +180,8 @@ public struct LaneShortcutBindings: Codable, Equatable, Sendable {
         .back: .init("[", command: true),
         .forward: .init("]", command: true),
         .reattach: .init("r", command: true, shift: true),
-        // ⇧⌘H, as Home in Finder; ⌘0 is Actual Size, here and in the apps.
-        .home: .init("h", command: true, shift: true),
+        // ⇧⌘A, A for Agents; ⌘0 is Actual Size, here and in the apps.
+        .home: .init("a", command: true, shift: true),
         .reopenSameAgent: .init("r", command: true, option: true),
         .reopenClaudeRemote: .init("c", command: true, shift: true),
         .reopenCodexRemote: .init("x", command: true, shift: true),
