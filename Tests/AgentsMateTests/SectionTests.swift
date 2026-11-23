@@ -34,6 +34,15 @@ final class SectionLayoutTests: XCTestCase {
         XCTAssertFalse(layout.collapsed.contains(LaneLayout.unsectionedKey))
     }
 
+    func testEmptySectionsAreNotListedButStayMoveTargets() {
+        let lanes = [lane("a"), lane("b", section: "Work")]
+        var layout = LaneLayout()
+        layout.addSection("Other")
+        let groups = layout.groups(for: lanes) { _ in nil }
+        XCTAssertEqual(groups.map(\.section), [nil, "Work"], "lanes in no section lead; the empty section is left out")
+        XCTAssertTrue(layout.orderedSections(for: lanes).contains("Other"))
+    }
+
     func testNoSectionCanTakeTheUnsectionedKey() {
         var layout = LaneLayout()
         layout.addSection(LaneLayout.unsectionedKey)

@@ -339,8 +339,27 @@ Launch shows it and attaches nothing until the person picks a card. Set
 launch instead, or `showsHome = false` to leave it out. The API and saved keys
 keep its first name, Home.
 
-A session found for a lane is a row of its own in the sidebar, as top-level as
-the lane's row, which it follows, with or without section headings.
+## Sidebar shape
+
+Three choices shape the sidebar. Each app sets the default in
+`Configuration`, and the person can change it under Settings, in
+`AgentSidebarSettingsSection` (part of `AgentLaneSettingsSection`, or
+`AgentSidebarSettingsControls` on its own). The person's choice is saved
+under the app's `AgentsModeKeys` prefix and applies at once.
+
+- **Show section headings** (`showsSectionHeadings`).
+- **Show lane icons** (`showsLaneIcons`). Off, a row shows only its status
+  dot.
+- **Parallel sessions** (`parallelSessions`). A session found for a lane is
+  either a row of its own, as top-level as the lane's row, or indented under
+  it. It follows that row either way. Unless the person gave it an icon, it
+  draws the lane's icon. Its own title tells the two apart.
+
+Rows in no section lead the list, above the first section, with no heading.
+A section with no rows is left out, though it is still offered in Move to
+Section, and New Section… on a row's menu moves that row into the new
+section. The app's sidebar accessory and the + menu sit in the bar above the
+list. Each section's heading keeps a + for that section only.
 
 ## Sections and navigation
 

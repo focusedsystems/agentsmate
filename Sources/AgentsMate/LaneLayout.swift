@@ -177,7 +177,9 @@ public struct LaneLayout: Codable, Equatable, Sendable {
     }
 
     /// The lanes in display order, grouped: pinned first, then the lanes in
-    /// no section, then each section. `activity` gives a lane's last activity
+    /// no section, then each section that has a lane. An empty section is
+    /// left out, the person's own included; it stays in ``sections`` and in
+    /// Move to Section. `activity` gives a lane's last activity
     /// for the recency sorts.
     public func groups(for lanes: [AgentLane], activity: (AgentLane) -> Date?) -> [LaneGroup] {
         let byID = Dictionary(uniqueKeysWithValues: lanes.map { ($0.id, $0) })
@@ -202,11 +204,7 @@ public struct LaneLayout: Codable, Equatable, Sendable {
         if !loose.isEmpty { groups.append(LaneGroup(section: nil, lanes: loose)) }
         for name in orderedSections(for: lanes) {
             let members = rest.filter { section(of: $0) == name }
-            // A section the person made shows even while empty, so a lane
-            // can be moved into it.
-            if !members.isEmpty || sections.contains(name) {
-                groups.append(LaneGroup(section: name, lanes: members))
-            }
+            if !members.isEmpty { groups.append(LaneGroup(section: name, lanes: members)) }
         }
         return groups
     }

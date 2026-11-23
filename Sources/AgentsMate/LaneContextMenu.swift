@@ -12,6 +12,8 @@ final class LaneMenuPresentation: ObservableObject {
     @Published var choosingIcon: AgentLane.ID?
     @Published var showingNewSection = false
     @Published var newSectionName = ""
+    /// The row a New Section… from its menu moves into the new section.
+    @Published var newSectionLane: AgentLane.ID?
 
     struct PendingSwitch: Equatable {
         var id: AgentLane.ID
@@ -24,8 +26,9 @@ final class LaneMenuPresentation: ObservableObject {
         renamingLane = session.id
     }
 
-    func newSection() {
+    func newSection(moving laneID: AgentLane.ID? = nil) {
         newSectionName = ""
+        newSectionLane = laneID
         showingNewSection = true
     }
 }
@@ -50,7 +53,16 @@ struct LaneMenuSheets: ViewModifier {
             }
             .alert("New Section", isPresented: $presentation.showingNewSection) {
                 TextField("Name", text: $presentation.newSectionName)
-                Button("Add") { store.addSection(presentation.newSectionName) }
+                Button("Add") {
+                    let name = presentation.newSectionName.trimmingCharacters(in: .whitespaces)
+                    store.addSection(name)
+                    // An empty section is not listed, so one made from a
+                    // row's menu takes that row with it.
+                    if let id = presentation.newSectionLane, store.sectionNames.contains(name) {
+                        store.move(id, to: name)
+                    }
+                    presentation.newSectionLane = nil
+                }
                 Button("Cancel", role: .cancel) {}
             }
             .alert("Rename", isPresented: Binding(get: { presentation.renamingLane != nil },
@@ -179,7 +191,7 @@ struct LaneContextMenu: View {
                     .disabled(store.layout.section(of: lane) == name)
             }
             Divider()
-            Button("New Section…") { presentation.newSection() }
+            Button("New Section…") { presentation.newSection(moving: lane.id) }
         }
         Divider()
         if store.canStop(lane.id) {

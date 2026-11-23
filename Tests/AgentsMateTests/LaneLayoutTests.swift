@@ -27,10 +27,11 @@ final class LaneLayoutTests: XCTestCase {
         XCTAssertNil(layout.section(of: lanes[1]))
     }
 
-    func testEmptySectionThePersonMadeStillShows() {
+    func testEmptySectionThePersonMadeIsLeftOutOfTheList() {
         var layout = LaneLayout()
         layout.addSection("Later")
-        XCTAssertEqual(layout.groups(for: [lane("a")]) { _ in nil }.map(\.section), [nil, "Later"])
+        XCTAssertEqual(layout.groups(for: [lane("a")]) { _ in nil }.map(\.section), [nil])
+        XCTAssertEqual(layout.sections, ["Later"])
     }
 
     func testManualOrderAndRecencySorts() {

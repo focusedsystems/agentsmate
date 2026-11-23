@@ -37,7 +37,8 @@ public struct AgentsLaunchToggle: View {
 /// (an installed backend or a command of their own), whether one opens at
 /// launch, whether the lanes open at quit come back, whether renaming a lane
 /// renames its agent's session too, and, when the app turned summaries on,
-/// whether each lane gets a one-line summary. Put it in a grouped `Form`.
+/// whether each lane gets a one-line summary. It brings the Launch and
+/// Sidebar sections with it. Put it in a grouped `Form`.
 public struct AgentLaneSettingsSection: View {
     @ObservedObject var store: AgentLaneStore
     let title: String
@@ -69,6 +70,7 @@ public struct AgentLaneSettingsSection: View {
 
     public var body: some View {
         AgentsLaunchSettingsSection(store: store)
+        AgentSidebarSettingsSection(store: store)
         Section {
             Picker("Runs", selection: $backendID) {
                 ForEach(store.installedBackends, id: \.id) { backend in

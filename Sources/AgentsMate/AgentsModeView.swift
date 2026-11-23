@@ -50,6 +50,9 @@ public struct AgentLaneSidebar<Accessory: View>: View {
     @AppStorage private var filterNeedsYou: Bool
     @AppStorage private var filterIdle: Bool
     @AppStorage private var filterUnread: Bool
+    @AppStorage private var showsHeadings: Bool
+    @AppStorage private var showsIcons: Bool
+    @AppStorage private var parallelPlacement: String
     @State private var searchText = ""
     @State private var renaming: String?
     @State private var sectionName = ""
@@ -71,6 +74,10 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         _filterNeedsYou = AppStorage(wrappedValue: false, keys.filterWaiting)
         _filterIdle = AppStorage(wrappedValue: false, keys.filterIdle)
         _filterUnread = AppStorage(wrappedValue: false, keys.filterUnread)
+        let shape = store.sidebarDefaults
+        _showsHeadings = AppStorage(wrappedValue: shape.headings, keys.showsSectionHeadings)
+        _showsIcons = AppStorage(wrappedValue: shape.icons, keys.showsLaneIcons)
+        _parallelPlacement = AppStorage(wrappedValue: shape.parallel.rawValue, keys.parallelSessions)
     }
 
     init(store: AgentLaneStore, labels: AgentsModeLabels, inDock: Bool, @ViewBuilder accessory: () -> Accessory) {
@@ -83,15 +90,15 @@ public struct AgentLaneSidebar<Accessory: View>: View {
             if store.configuration.showsHome {
                 Section { AgentHomeSidebarRow(store: store).tag(Self.homeTag) }
             }
-            // Every group folds the same way, the first included; its
-            // header keeps the app's accessory beside the + menu. The
-            // header draws its own chevron, always shown, instead of the
+            // Every group with a heading folds the same way. The header draws its own chevron, always shown, instead of the
             // sidebar's, which appears only under the pointer and moves the
             // header's buttons when it does.
             // With section headings off, or only one section, the lanes are
-            // one list with no heading; Pinned and Detached keep theirs.
+            // one list with no heading; Pinned and Detached keep theirs. The
+            // lanes in no section never have a heading: they lead the list,
+            // above the first section.
             ForEach(displayedGroups) { group in
-                if isFlat, !group.isPinned, !group.isDetached {
+                if isFlat || group.section == nil, !group.isPinned, !group.isDetached {
                     Section { rows(group) }
                 } else {
                     Section {
@@ -179,14 +186,18 @@ public struct AgentLaneSidebar<Accessory: View>: View {
     private func rows(_ group: LaneGroup) -> some View {
         ForEach(group.lanes) { lane in
             if let session = store.session(for: lane) {
+                let look = store.rowIcon(for: session)
                 LaneRow(session: session,
                         shortcutNumber: shortcutNumbers[lane.id],
                         isSplit: lane.id == store.splitID,
-                        style: store.configuration.rowStyle)
+                        style: store.configuration.rowStyle,
+                        icon: look.icon, tintHex: look.tintHex, showsIcon: showsIcons,
+                        isNested: parallelPlacement == ParallelSessionPlacement.nested.rawValue
+                            && !group.isDetached && store.parallelOwner(of: lane.id) != nil)
                     .tag(lane.id)
-                    // A found session is a row of its own, as top-level as
-                    // its folder's row, which it follows; it moves once
-                    // adopted.
+                    // A found session follows its folder's row, as a row of
+                    // its own with that row's icon (or indented under it,
+                    // if the person chose that); it moves once adopted.
                     .moveDisabled(store.isDetached(lane.id))
             }
         }
@@ -196,7 +207,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
     /// Whether the lanes show as one list with no section headings: the
     /// app turned them off, or there is only one section.
     private var isFlat: Bool {
-        !store.configuration.showsSectionHeadings
+        !showsHeadings
             || store.groups.filter { !$0.isPinned && !$0.isDetached }.count <= 1
     }
 
@@ -301,7 +312,6 @@ public struct AgentLaneSidebar<Accessory: View>: View {
                 Text(title)
             }
             Spacer(minLength: 4)
-            if !isFlat, group.id == store.groups.first?.id { accessory }
             if store.canAddLane(to: group) {
                 Menu {
                     newLaneItems(group)
@@ -481,21 +491,20 @@ public struct AgentLaneSidebar<Accessory: View>: View {
                                  isOn: filterBinding(filter))
             }
             Spacer(minLength: 0)
-            // A flat list has no heading to carry the app's accessory and
-            // the + menu, so they sit here.
-            if isFlat {
-                accessory
-                Menu {
-                    newLaneItems(LaneGroup(section: nil, lanes: []))
-                } label: {
-                    Label("New \(labels.laneNoun.capitalized)", systemImage: "plus").labelStyle(.iconOnly)
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .help("Start a \(labels.laneNoun): pick an agent, then a folder")
-                .accessibilityLabel("New \(labels.laneNoun)")
+            // The app's accessory and the + menu are the whole list's, so
+            // they sit here rather than on a section's heading; each
+            // section's heading keeps its own + for that section.
+            accessory
+            Menu {
+                newLaneItems(LaneGroup(section: nil, lanes: []))
+            } label: {
+                Label("New \(labels.laneNoun.capitalized)", systemImage: "plus").labelStyle(.iconOnly)
             }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Start a \(labels.laneNoun): pick an agent, then a folder")
+            .accessibilityLabel("New \(labels.laneNoun)")
             // The inbox sits with the other list controls at the top; the
             // foot belongs to the usage meter.
             if let inboxID = store.configuration.inboxWindowID {
@@ -724,13 +733,27 @@ struct LaneRow: View {
     let shortcutNumber: Int?
     let isSplit: Bool
     var style: LaneRowStyle = .standard
+    /// The icon to draw, when it is not the session's own: a parallel
+    /// session draws its lane's (``AgentLaneStore/rowIcon(for:)``).
+    var icon: LaneIcon? = nil
+    var tintHex: String? = nil
+    /// Off, the row shows its status dot alone.
+    var showsIcon = true
+    /// Indented under the row above: a parallel session, when the person
+    /// chose ``ParallelSessionPlacement/nested``.
+    var isNested = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
-            LaneIconView(icon: session.icon, tintHex: session.tintHex, size: 16)
-                .frame(width: 20)
-                .overlay(alignment: .bottomTrailing) { statusDot.offset(x: 3, y: 3) }
-                .padding(.top, 1)
+            if showsIcon {
+                LaneIconView(icon: icon ?? session.icon, tintHex: icon == nil ? session.tintHex : tintHex, size: 16)
+                    .frame(width: 20)
+                    .overlay(alignment: .bottomTrailing) { statusDot.offset(x: 3, y: 3) }
+                    .padding(.top, 1)
+            } else {
+                statusDot
+                    .frame(width: 10, height: 16)
+            }
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 4) {
                     Text(session.title)
@@ -766,6 +789,7 @@ struct LaneRow: View {
             }
         }
         .padding(.vertical, 2)
+        .padding(.leading, isNested ? 14 : 0)
         .help(helpText)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(session.title)

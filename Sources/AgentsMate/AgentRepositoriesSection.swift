@@ -28,7 +28,9 @@ public struct AgentRepositoryItem: Identifiable, Hashable, Sendable {
 /// section or a row there reorders this list. Reset to Default Order goes
 /// back to the app's order (``AgentLaneStore/defaultRepositoryOrder``). An
 /// app whose list has no section headings
-/// (``AgentLaneStore/Configuration/showsSectionHeadings``) gets one list.
+/// (``AgentLaneStore/Configuration/showsSectionHeadings``, or the person's
+/// choice in ``AgentSidebarSettingsSection``) gets one list. Repositories in
+/// no section come first, with no heading.
 ///
 /// The app supplies the repositories, the buttons beside Reset at the top
 /// (add, sync) and anything a row carries at its end (per-repository options).
@@ -41,6 +43,7 @@ public struct AgentRepositoriesSection<Buttons: View, RowAccessory: View>: View 
     let onReset: (() -> Void)?
     let buttons: Buttons
     let accessory: (AgentRepositoryItem) -> RowAccessory
+    @AppStorage private var showsHeadings: Bool
 
     /// `onReset` runs after the order is reset, for an app whose own reset
     /// (back to its registry, say) is the same action.
@@ -55,6 +58,7 @@ public struct AgentRepositoriesSection<Buttons: View, RowAccessory: View>: View 
         self.onReset = onReset
         self.buttons = buttons()
         self.accessory = accessory
+        _showsHeadings = AppStorage(wrappedValue: store.sidebarDefaults.headings, store.keys.showsSectionHeadings)
     }
 
     /// One section of the list: its name (nil for repositories in none) and
@@ -73,13 +77,14 @@ public struct AgentRepositoriesSection<Buttons: View, RowAccessory: View>: View 
         for item in ordered {
             if let name = store.section(ofRepository: item.path) { members[name, default: []].append(item) } else { loose.append(item) }
         }
-        var out = store.sectionNames.compactMap { name in members[name].map { Group(name: name, items: $0) } }
-        if !loose.isEmpty { out.append(Group(name: nil, items: loose)) }
+        // Repositories in no section lead, as they do in the sidebar.
+        var out = loose.isEmpty ? [] : [Group(name: nil, items: loose)]
+        out += store.sectionNames.compactMap { name in members[name].map { Group(name: name, items: $0) } }
         return out
     }
 
     private var sectioned: Bool {
-        store.configuration.showsSectionHeadings && groups.filter { $0.name != nil }.count > 1
+        showsHeadings && groups.filter { $0.name != nil }.count > 1
     }
 
     public var body: some View {
@@ -99,10 +104,14 @@ public struct AgentRepositoriesSection<Buttons: View, RowAccessory: View>: View 
             List {
                 if sectioned {
                     ForEach(groups) { group in
-                        Section {
-                            repositories(group.items)
-                        } header: {
-                            sectionHeader(group, in: groups)
+                        if group.name == nil {
+                            Section { repositories(group.items) }
+                        } else {
+                            Section {
+                                repositories(group.items)
+                            } header: {
+                                sectionHeader(group, in: groups)
+                            }
                         }
                     }
                 } else {
@@ -124,7 +133,7 @@ public struct AgentRepositoriesSection<Buttons: View, RowAccessory: View>: View 
     private func sectionHeader(_ group: Group, in groups: [Group]) -> some View {
         let names = groups.compactMap(\.name)
         HStack {
-            Text(group.name ?? "Other")
+            Text(group.name ?? "")
             Spacer()
             if let name = group.name {
                 Button { moveSection(name, by: -1, in: names) } label: {
