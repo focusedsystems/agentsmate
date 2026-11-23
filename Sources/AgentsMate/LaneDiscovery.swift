@@ -246,6 +246,13 @@ public struct TmuxLaneSessions: Sendable {
 
 /// Matching what the backends found against the rows, for the Detached section.
 enum DetachedSessions {
+    /// A Claude background session a row owns by the bindings: the host it
+    /// runs on (nil for this Mac) and its exact short id.
+    struct OwnedSession: Hashable, Sendable {
+        var host: String?
+        var agentID: String
+    }
+
     struct Found: Equatable, Sendable {
         var backendID: String
         var session: DiscoveredSession
@@ -337,18 +344,19 @@ enum DetachedSessions {
     ///   one Claude Code background session works, which a wrapper attaches
     ///   whatever it named the session.
     ///
-    /// Before any of these, a session a row owns by the bindings
-    /// (`ownedSessionIDs`, short ids by row) is that row's, by id alone and
-    /// whatever its name: it is never also listed apart, while the other
-    /// sessions in the row's folder still are.
+    /// Before any of these, a Claude background session a row owns by the
+    /// bindings (`ownedSessionIDs`) is that row's whatever its name: on the
+    /// same host, with exactly the bound short id, never a prefix. It is
+    /// not also listed apart, while the other sessions in the row's folder
+    /// still are. A row that owns a session takes no other by folder.
     ///
     /// Folders alone are not enough across backends otherwise: a Codex lane
     /// and a Claude lane share a folder.
     static func unclaimed(_ found: [Found], lanes: [AgentLane], backends: [String: any LaneBackend],
                           heldSessionIDs: [AgentLane.ID: [String]] = [:],
-                          ownedSessionIDs: [AgentLane.ID: String] = [:]) -> [Found] {
+                          ownedSessionIDs: [AgentLane.ID: OwnedSession] = [:]) -> [Found] {
         let rowIDs = Set(lanes.map(\.id))
-        let owned = ownedSessionIDs.filter { rowIDs.contains($0.key) && !$0.value.isEmpty }.map(\.value)
+        let owned = Set(ownedSessionIDs.filter { rowIDs.contains($0.key) && !$0.value.agentID.isEmpty }.values)
         var reporters: [String: Set<String>] = [:]
         var backgroundPerFolder: [String: Int] = [:]
         var counted = Set<String>()
@@ -362,7 +370,7 @@ enum DetachedSessions {
         // Rows that run Claude and know no session id, by folder, for the
         // one-session-in-the-folder rule.
         var claudeFolders = Set<String>()
-        for lane in lanes where (heldSessionIDs[lane.id] ?? []).isEmpty {
+        for lane in lanes where (heldSessionIDs[lane.id] ?? []).isEmpty && ownedSessionIDs[lane.id] == nil {
             guard let backend = backends[lane.backendID], laneHost(backend) == nil, runsClaude(backend) else { continue }
             claudeFolders.insert(LaneStatusMatch.normalizedPath(lane.path))
         }
@@ -373,10 +381,8 @@ enum DetachedSessions {
             let key = item.session.key
             guard seen.insert(key).inserted else { continue }
             let session = item.session
-            if session.kind == ClaudeBackgroundLaneBackend.kind,
-               owned.contains(where: { own in
-                   session.agentID.map { sameSession($0, own) } == true || session.sessionID.map { $0.hasPrefix(own) } == true
-               }) { continue }
+            if session.kind == ClaudeBackgroundLaneBackend.kind, let id = session.agentID,
+               owned.contains(OwnedSession(host: session.host, agentID: id)) { continue }
             if let id = session.sessionID, heldIDs.contains(where: { sameSession(id, $0) }) { continue }
             if session.kind == ClaudeBackgroundLaneBackend.kind, session.host == nil, let directory = session.directory {
                 let folder = LaneStatusMatch.normalizedPath(directory)

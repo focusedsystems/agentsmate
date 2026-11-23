@@ -298,33 +298,56 @@ final class OwnedSessionTests: XCTestCase {
         let store = store()
         store.received(.init(bindings: ["Nutrition": "f4eced18"]), from: "hub-mac", hosts: hosts)
         store.received(found: bothSessions)
-        XCTAssertEqual(store.ownedSessionID(for: store.lanes[0]), "f4eced18")
+        XCTAssertEqual(store.ownedSession(for: store.lanes[0]), .init(host: nil, agentID: "f4eced18"),
+                       "the lane runs on this Mac, so its owned session is this Mac's")
         XCTAssertEqual(foundTitles(store), ["Personal - Nutrition"],
                        "the lane's own session is its row; the other session in the folder still shows")
         let sibling = store.lanes.first { store.isDetached($0.id) }
         XCTAssertEqual(sibling?.agentSessionID, "fabb4b85", "the sibling is attached by its id")
-        XCTAssertEqual(store.statusMatch(for: store.sessions["Nutrition"]!), .session("f4eced18"),
-                       "the row's status and summary come from the session it owns")
+        let records = [LaneStatus(agent: "claude", state: .running, lane: "Nutrition", directory: folder,
+                                  sessionID: "f4eced18-1111-2222", event: ClaudeAgentsList.event, agentID: "f4eced18"),
+                       LaneStatus(agent: "claude", state: .done, lane: "Personal - Nutrition", directory: folder,
+                                  sessionID: "fabb4b85-1111-2222", event: ClaudeAgentsList.event, agentID: "fabb4b85")]
+        XCTAssertEqual(store.statusMatch(for: store.sessions["Nutrition"]!, records: records), .session("f4eced18-1111-2222"),
+                       "the row's status and summary come from the session it owns, found by its exact short id")
+        XCTAssertEqual(store.statusMatch(for: store.sessions["Nutrition"]!, records: []), LaneStatusMatch.none,
+                       "while the owned session is not listed the row shows no other")
     }
+
+    private let row = AgentLane(id: "n", title: "Other", directory: URL(fileURLWithPath: "/x"), backendID: "claude-bg")
+    private let backends: [String: any LaneBackend] = ["claude-bg": ClaudeBackgroundLaneBackend(id: "claude-bg")]
 
     func testOwnershipIsByIDNeverByName() {
         let left = DetachedSessions.unclaimed([found("aaaa1111", "Nutrition"), found("f4eced18", "renamed")],
-                                              lanes: [AgentLane(id: "n", title: "Other", directory: URL(fileURLWithPath: "/x"),
-                                                                backendID: "claude-bg")],
-                                              backends: ["claude-bg": ClaudeBackgroundLaneBackend(id: "claude-bg")],
-                                              ownedSessionIDs: ["n": "f4eced18"])
+                                              lanes: [row], backends: backends,
+                                              ownedSessionIDs: ["n": .init(host: nil, agentID: "f4eced18")])
         XCTAssertEqual(left.map(\.session.agentID), ["aaaa1111"])
-        XCTAssertEqual(DetachedSessions.unclaimed([found("f4eced18", "renamed")], lanes: [],
-                                                  backends: ["claude-bg": ClaudeBackgroundLaneBackend(id: "claude-bg")],
-                                                  ownedSessionIDs: ["gone": "f4eced18"]).count, 1,
+        XCTAssertEqual(DetachedSessions.unclaimed([found("f4eced18", "renamed")], lanes: [], backends: backends,
+                                                  ownedSessionIDs: ["gone": .init(host: nil, agentID: "f4eced18")]).count, 1,
                        "a row that is not listed owns nothing")
+    }
+
+    func testTheSameIDOnAnotherHostIsStillShown() {
+        let left = DetachedSessions.unclaimed([found("f4eced18", "Nutrition")], lanes: [row], backends: backends,
+                                              ownedSessionIDs: ["n": .init(host: "hub-mac", agentID: "f4eced18")])
+        XCTAssertEqual(left.count, 1, "the lane owns that id on another host, not this Mac's session")
+    }
+
+    func testAPrefixOnlyMatchIsStillShown() {
+        let left = DetachedSessions.unclaimed([found("f4eced18", "Nutrition"), found("f4ec", "short")],
+                                              lanes: [row], backends: backends,
+                                              ownedSessionIDs: ["n": .init(host: nil, agentID: "f4e")])
+        XCTAssertEqual(left.count, 2, "a bound id hides only the session whose short id is exactly it")
+        let longer = DetachedSessions.unclaimed([found("f4ec", "short")], lanes: [row], backends: backends,
+                                                ownedSessionIDs: ["n": .init(host: nil, agentID: "f4eced18")])
+        XCTAssertEqual(longer.count, 1)
     }
 
     func testUnknownBindingsHideNothingAndAKnownBindingIsKept() {
         let store = store()
         store.received(.init(bindingsKnown: false), from: "hub-mac", hosts: hosts)
         store.received(found: bothSessions)
-        XCTAssertNil(store.ownedSessionID(for: store.lanes[0]))
+        XCTAssertNil(store.ownedSession(for: store.lanes[0]))
         XCTAssertEqual(foundTitles(store), ["Nutrition", "Personal - Nutrition"], "nothing is provably owned, so nothing is hidden")
 
         store.received(.init(bindings: ["Nutrition": "f4eced18"]), from: "hub-mac", hosts: hosts)
