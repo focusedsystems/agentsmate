@@ -22,12 +22,13 @@ public struct AgentRepositoryItem: Identifiable, Hashable, Sendable {
     }
 }
 
-/// A Settings section listing an app's repositories in the one repository
-/// order: the order of the sidebar's repository headings, and the order the
-/// app gives any other list of repositories (``AgentLaneStore/orderedRepositories(_:)``).
-/// Dragging a row reorders the headings, and moving a heading reorders the
-/// rows. Reset to Default Order goes back to the app's order
-/// (``AgentLaneStore/defaultRepositoryOrder``).
+/// A Settings section listing an app's repositories in the list's order:
+/// by section, then within each section, the same order the sidebar shows.
+/// Dragging a section or a repository reorders the sidebar, and moving a
+/// section or a row there reorders this list. Reset to Default Order goes
+/// back to the app's order (``AgentLaneStore/defaultRepositoryOrder``). An
+/// app whose list has no section headings
+/// (``AgentLaneStore/Configuration/showsSectionHeadings``) gets one list.
 ///
 /// The app supplies the repositories, the buttons beside Reset at the top
 /// (add, sync) and anything a row carries at its end (per-repository options).
@@ -56,13 +57,34 @@ public struct AgentRepositoriesSection<Buttons: View, RowAccessory: View>: View 
         self.accessory = accessory
     }
 
-    private var ordered: [AgentRepositoryItem] {
+    /// One section of the list: its name (nil for repositories in none) and
+    /// its repositories in order.
+    struct Group: Identifiable {
+        var name: String?
+        var items: [AgentRepositoryItem]
+        var id: String { name ?? "\u{1}none" }
+    }
+
+    private var groups: [Group] {
         let byPath = Dictionary(items.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
-        return store.orderedRepositories(items.map(\.path)).compactMap { byPath[$0] }
+        let ordered = store.orderedRepositories(items.map(\.path)).compactMap { byPath[$0] }
+        var members: [String: [AgentRepositoryItem]] = [:]
+        var loose: [AgentRepositoryItem] = []
+        for item in ordered {
+            if let name = store.section(ofRepository: item.path) { members[name, default: []].append(item) } else { loose.append(item) }
+        }
+        var out = store.sectionNames.compactMap { name in members[name].map { Group(name: name, items: $0) } }
+        if !loose.isEmpty { out.append(Group(name: nil, items: loose)) }
+        return out
+    }
+
+    private var sectioned: Bool {
+        store.configuration.showsSectionHeadings && groups.filter { $0.name != nil }.count > 1
     }
 
     public var body: some View {
-        let rows = ordered
+        let groups = groups
+        let sectioned = sectioned
         Section {
             HStack(spacing: 8) {
                 buttons
@@ -72,29 +94,75 @@ public struct AgentRepositoriesSection<Buttons: View, RowAccessory: View>: View 
                     onReset?()
                 }
                 .disabled(!store.hasCustomRepositoryOrder && onReset == nil)
-                .help("Put the repositories back in the app's order")
+                .help("Put the sections and repositories back in the app's order")
             }
             List {
-                ForEach(rows) { item in
-                    row(item)
-                }
-                .onMove { source, destination in
-                    var paths = rows.map(\.path)
-                    paths.move(fromOffsets: source, toOffset: destination)
-                    store.setRepositoryOrder(paths)
+                if sectioned {
+                    ForEach(groups) { group in
+                        Section {
+                            repositories(group.items)
+                        } header: {
+                            sectionHeader(group, in: groups)
+                        }
+                    }
+                } else {
+                    repositories(groups.flatMap(\.items))
                 }
             }
-            .frame(minHeight: 160, idealHeight: CGFloat(min(rows.count, 12)) * 34 + 8)
+            .frame(minHeight: 200, idealHeight: CGFloat(min(items.count + groups.count, 14)) * 30 + 8)
         } header: {
             Text(title)
         } footer: {
-            Text(footer ?? "Drag to reorder. This order is the order of the sidebar's repository headings and of every repository list in the app.")
+            Text(footer ?? (sectioned
+                ? "Drag a repository to reorder it within its section; use a section's menu to move the section. This is the sidebar's order and the order of every repository list in the app."
+                : "Drag to reorder. This is the sidebar's order and the order of every repository list in the app."))
                 .foregroundStyle(.secondary)
         }
     }
 
-    private func row(_ item: AgentRepositoryItem) -> some View {
-        HStack(spacing: 8) {
+    @ViewBuilder
+    private func sectionHeader(_ group: Group, in groups: [Group]) -> some View {
+        let names = groups.compactMap(\.name)
+        HStack {
+            Text(group.name ?? "Other")
+            Spacer()
+            if let name = group.name {
+                Button { moveSection(name, by: -1, in: names) } label: {
+                    Label("Move \(name) Up", systemImage: "chevron.up").labelStyle(.iconOnly)
+                }
+                .buttonStyle(.borderless)
+                .disabled(names.first == name)
+                .help("Move the \(name) section up")
+                Button { moveSection(name, by: 1, in: names) } label: {
+                    Label("Move \(name) Down", systemImage: "chevron.down").labelStyle(.iconOnly)
+                }
+                .buttonStyle(.borderless)
+                .disabled(names.last == name)
+                .help("Move the \(name) section down")
+            }
+        }
+        .contextMenu {
+            if let name = group.name {
+                Button("Move Section Up") { moveSection(name, by: -1, in: names) }.disabled(names.first == name)
+                Button("Move Section Down") { moveSection(name, by: 1, in: names) }.disabled(names.last == name)
+            }
+        }
+    }
+
+    private func repositories(_ rows: [AgentRepositoryItem]) -> some View {
+        ForEach(rows) { item in
+            row(item, in: rows)
+        }
+        .onMove { source, destination in
+            var paths = rows.map(\.path)
+            paths.move(fromOffsets: source, toOffset: destination)
+            store.setRepositoryOrder(paths)
+        }
+    }
+
+    private func row(_ item: AgentRepositoryItem, in rows: [AgentRepositoryItem]) -> some View {
+        let order = rows.map(\.path)
+        return HStack(spacing: 8) {
             Image(systemName: "line.3.horizontal")
                 .foregroundStyle(.tertiary)
                 .accessibilityHidden(true)
@@ -111,19 +179,15 @@ public struct AgentRepositoriesSection<Buttons: View, RowAccessory: View>: View 
             accessory(item)
         }
         .contextMenu {
-            let order = rows(ordered)
             Button("Move Up") { move(item, by: -1, in: order) }.disabled(order.first == item.path)
             Button("Move Down") { move(item, by: 1, in: order) }.disabled(order.last == item.path)
         }
         .accessibilityElement(children: .combine)
         .accessibilityActions {
-            let order = rows(ordered)
             Button("Move Up") { move(item, by: -1, in: order) }
             Button("Move Down") { move(item, by: 1, in: order) }
         }
     }
-
-    private func rows(_ items: [AgentRepositoryItem]) -> [String] { items.map(\.path) }
 
     private func move(_ item: AgentRepositoryItem, by offset: Int, in order: [String]) {
         var paths = order
@@ -133,6 +197,16 @@ public struct AgentRepositoriesSection<Buttons: View, RowAccessory: View>: View 
         paths.remove(at: index)
         paths.insert(item.path, at: target)
         store.setRepositoryOrder(paths)
+    }
+
+    private func moveSection(_ name: String, by offset: Int, in names: [String]) {
+        var all = names
+        guard let index = all.firstIndex(of: name) else { return }
+        let target = min(max(index + offset, 0), all.count - 1)
+        guard target != index else { return }
+        all.remove(at: index)
+        all.insert(name, at: target)
+        store.setSectionOrder(all)
     }
 }
 

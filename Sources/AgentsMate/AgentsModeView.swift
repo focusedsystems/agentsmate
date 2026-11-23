@@ -91,13 +91,19 @@ public struct AgentLaneSidebar<Accessory: View>: View {
             // header draws its own chevron, always shown, instead of the
             // sidebar's, which appears only under the pointer and moves the
             // header's buttons when it does.
-            ForEach(visibleGroups) { group in
-                Section {
-                    if isExpanded(group) { rows(group) }
-                } header: {
-                    sectionHeader(group)
+            // With section headings off, or only one section, the lanes are
+            // one list with no heading; Pinned and Detached keep theirs.
+            ForEach(displayedGroups) { group in
+                if isFlat, !group.isPinned, !group.isDetached {
+                    Section { rows(group) }
+                } else {
+                    Section {
+                        if isExpanded(group) { rows(group) }
+                    } header: {
+                        sectionHeader(group)
+                    }
+                    .collapsible(false)
                 }
-                .collapsible(false)
             }
         }
         .listStyle(.sidebar)
@@ -204,9 +210,8 @@ public struct AgentLaneSidebar<Accessory: View>: View {
                         shortcutNumber: shortcutNumbers[lane.id],
                         isSplit: lane.id == store.splitID,
                         style: store.configuration.rowStyle,
-                        // A found session listed under its folder's row; under
-                        // a repository heading every row is the heading's.
-                        isNested: group.repository == nil && !group.isDetached && store.isDetached(lane.id))
+                        // A found session listed under its folder's row.
+                        isNested: !group.isDetached && store.isDetached(lane.id))
                     .tag(lane.id)
                     // A found session follows its folder's row; it moves
                     // once adopted.
@@ -214,6 +219,26 @@ public struct AgentLaneSidebar<Accessory: View>: View {
             }
         }
         .onMove { from, to in move(in: group, from: from, to: to) }
+    }
+
+    /// Whether the lanes show as one list with no section headings: the
+    /// app turned them off, or there is only one section.
+    private var isFlat: Bool {
+        !store.configuration.showsSectionHeadings
+            || store.groups.filter { !$0.isPinned && !$0.isDetached }.count <= 1
+    }
+
+    /// ``visibleGroups``, with the sections run together into one headless
+    /// group when the list is flat.
+    private var displayedGroups: [LaneGroup] {
+        let groups = visibleGroups
+        guard isFlat else { return groups }
+        let regular = groups.filter { !$0.isPinned && !$0.isDetached }
+        var out = groups.filter(\.isPinned)
+        let lanes = regular.flatMap(\.lanes)
+        if !regular.isEmpty { out.append(LaneGroup(section: nil, lanes: lanes)) }
+        out += groups.filter(\.isDetached)
+        return out
     }
 
     /// The groups with only the lanes the search and filters let through.
@@ -284,17 +309,11 @@ public struct AgentLaneSidebar<Accessory: View>: View {
     @ViewBuilder
     private func sectionHeader(_ group: LaneGroup) -> some View {
         let title = group.title ?? labels.listTitle
-        let repository = group.repository
-        let movable = repository == nil && group.section != nil && !group.isPinned && !group.isDetached
+        let movable = group.section != nil && !group.isPinned && !group.isDetached
         let expanded = isExpanded(group)
         HStack(spacing: 4) {
             SectionDisclosure(isExpanded: expanded, title: title, isEnabled: !isFiltering) {
                 toggleExpanded(group)
-            }
-            if repository != nil, let id = group.headingLaneID, let head = store.sessions[id] {
-                LaneIconView(icon: head.icon, tintHex: head.tintHex, size: 14)
-                    .frame(width: 16)
-                    .accessibilityHidden(true)
             }
             if movable, let name = group.section, renaming == name {
                 TextField("Section Name", text: $sectionName)
@@ -310,7 +329,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
                 Text(title)
             }
             Spacer(minLength: 4)
-            if group.id == store.groups.first?.id { accessory }
+            if !isFlat, group.id == store.groups.first?.id { accessory }
             if store.canAddLane(to: group) {
                 Menu {
                     newLaneItems(group)
@@ -325,18 +344,9 @@ public struct AgentLaneSidebar<Accessory: View>: View {
                 .accessibilityLabel("New \(labels.laneNoun) in \(title)")
             }
         }
-        .modifier(SectionDragging(name: movable ? group.section : nil, repository: repository, store: store))
+        .modifier(SectionDragging(name: movable ? group.section : nil, store: store))
         .contextMenu {
-            if let repository {
-                Menu("New \(labels.laneNoun.capitalized) in \(title)") { newLaneItems(group) }
-                Divider()
-                let order = store.repositoryOrder
-                Button("Move Section Up") { store.moveRepository(repository, by: -1) }
-                    .disabled(order.first == repository)
-                Button("Move Section Down") { store.moveRepository(repository, by: 1) }
-                    .disabled(order.last == repository)
-                Divider()
-            } else if group.isDetached {
+            if group.isDetached {
                 Button("Look for Detached Sessions Again") { store.sweepForDetachedSessions() }
                 Divider()
             } else {
@@ -366,9 +376,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
     @ViewBuilder
     private func newLaneItems(_ group: LaneGroup) -> some View {
         ForEach(store.availableBackends, id: \.id) { backend in
-            // A heading on another host says where the lane will run.
-            Button(store.newLaneHost(in: group, backendID: backend.id).map { "\(backend.displayName) on \($0)…" }
-                   ?? "\(backend.displayName)…") {
+            Button("\(backend.displayName)…") {
                 Task { await store.newLane(in: group, backendID: backend.id) }
             }
         }
@@ -643,6 +651,21 @@ public struct AgentLaneSidebar<Accessory: View>: View {
                                  isOn: filterBinding(filter))
             }
             Spacer(minLength: 0)
+            // A flat list has no heading to carry the app's accessory and
+            // the + menu, so they sit here.
+            if isFlat {
+                accessory
+                Menu {
+                    newLaneItems(LaneGroup(section: nil, lanes: []))
+                } label: {
+                    Label("New \(labels.laneNoun.capitalized)", systemImage: "plus").labelStyle(.iconOnly)
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("Start a \(labels.laneNoun): pick an agent, then a folder")
+                .accessibilityLabel("New \(labels.laneNoun)")
+            }
             // The inbox sits with the other list controls at the top; the
             // foot belongs to the usage meter.
             if let inboxID = store.configuration.inboxWindowID {
@@ -1216,30 +1239,13 @@ struct SectionDisclosure: View {
 /// keyboard.
 private struct SectionDragging: ViewModifier {
     let name: String?
-    var repository: String?
     let store: AgentLaneStore
     @State private var targeted = false
 
     static let prefix = "agentsmate-section:"
-    static let repositoryPrefix = "agentsmate-repository:"
 
     func body(content: Content) -> some View {
-        if let repository {
-            content
-                .draggable(Self.repositoryPrefix + repository) {
-                    Text((repository as NSString).lastPathComponent).padding(4)
-                }
-                .dropDestination(for: String.self) { items, _ in
-                    guard let item = items.first, item.hasPrefix(Self.repositoryPrefix) else { return false }
-                    let moved = String(item.dropFirst(Self.repositoryPrefix.count))
-                    guard moved != repository else { return false }
-                    store.moveRepository(moved, before: repository)
-                    return true
-                } isTargeted: { targeted = $0 }
-                .overlay(alignment: .top) {
-                    if targeted { Rectangle().fill(Color.accentColor).frame(height: 2).offset(y: -3) }
-                }
-        } else if let name {
+        if let name {
             content
                 .draggable(Self.prefix + name) { Text(name).padding(4) }
                 .dropDestination(for: String.self) { items, _ in

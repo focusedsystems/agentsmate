@@ -106,10 +106,10 @@ final class NewLaneInSectionTests: XCTestCase {
 
     private func store(_ chooser: Chooser, backends: [any LaneBackend]? = nil) -> AgentLaneStore {
         let config = AgentLaneStore.Configuration(termProgram: "T", sessionFileDirectory: nil,
-                                                  findsDetachedSessions: false, chooseFolder: { start in
+                                                  findsDetachedSessions: false) { start in
             chooser.openedAt.append(start)
             return chooser.answer
-        }, groupsByRepository: false)
+        }
         let store = AgentLaneStore(configuration: config,
                                    backends: backends ?? [CommandLaneBackend(id: "agent", displayName: "Agent", command: "true")],
                                    statusFeed: nil,

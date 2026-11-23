@@ -116,15 +116,16 @@ public final class AgentLaneStore: ObservableObject {
         /// reattach a lane whose session runs on another Mac
         /// (``HostSessionsConfiguration``). Nil, the default, reads nothing.
         public var hostSessions: HostSessionsConfiguration?
-        /// Head the list with one collapsible heading per folder (a
-        /// repository), holding its lanes and the sessions found working in
-        /// it, rather than with sections. Sections still order the folders
-        /// that have no order of their own. On by default.
-        public var groupsByRepository: Bool
-        /// The app's order for the repository headings, as folder paths,
-        /// such as the order of its repository list. It applies until the
-        /// person moves a heading; their order always wins. Folders not in
-        /// it follow, in section and lane order.
+        /// Head the list with its sections. Off, the lanes are one list
+        /// with no section headings, for an app with few lanes; the Pinned
+        /// and Detached groups keep theirs. With only one section the
+        /// heading is left out either way.
+        public var showsSectionHeadings: Bool
+        /// The app's order for its lanes, as folder paths, such as the
+        /// order of its repository list: sections come in the order their
+        /// first lane does, and lanes within a section in this order. It
+        /// applies until the person moves a section or a lane; their order
+        /// always wins. Folders not in it follow, in the lanes' order.
         public var defaultRepositoryOrder: [String]
 
         /// `~/Library/Caches/<bundle id>/agent-pull-requests.json`.
@@ -153,10 +154,10 @@ public final class AgentLaneStore: ObservableObject {
                     sharedLanes: SharedLaneSettings? = SharedLaneSettings.automatic(),
                     chooseFolder: @escaping @MainActor (_ startingAt: URL?) async -> URL? = AgentLaneStore.chooseFolderWithOpenPanel,
                     scrollSensitivity: CGFloat = 1, placesDetachedSessions: Bool = true,
-                    hostSessions: HostSessionsConfiguration? = nil, groupsByRepository: Bool = true,
+                    hostSessions: HostSessionsConfiguration? = nil, showsSectionHeadings: Bool = true,
                     defaultRepositoryOrder: [String] = []) {
             self.hostSessions = hostSessions
-            self.groupsByRepository = groupsByRepository
+            self.showsSectionHeadings = showsSectionHeadings
             self.defaultRepositoryOrder = defaultRepositoryOrder
             self.placesDetachedSessions = placesDetachedSessions
             self.scrollSensitivity = scrollSensitivity
@@ -664,9 +665,9 @@ public final class AgentLaneStore: ObservableObject {
         if sessions[lane.id] == nil {
             if let anchor, let index = lanes.firstIndex(where: { $0.id == anchor }) {
                 lanes.insert(lane, at: index + 1)
-                let ordered = layout.orderedIDs(lanes)
+                let ordered = layout.orderedIDs(orderedLanes)
                 if let at = ordered.firstIndex(of: anchor), at + 1 < ordered.count, ordered[at + 1] != lane.id {
-                    layout.moveLane(lane.id, before: ordered[at + 1], lanes: lanes)
+                    layout.moveLane(lane.id, before: ordered[at + 1], lanes: orderedLanes)
                 }
             } else {
                 lanes.append(lane)
@@ -743,7 +744,7 @@ public final class AgentLaneStore: ObservableObject {
                                       command: wrapper?.command, variantFlag: wrapper?.variantFlag)
         }
         let used = Set(lanes.compactMap(\.section))
-        return LaneWorkspace(name: name, sections: layout.orderedSections(for: self.lanes).filter { used.contains($0) || layout.sections.contains($0) },
+        return LaneWorkspace(name: name, sections: layout.orderedSections(for: orderedLanes).filter { used.contains($0) || layout.sections.contains($0) },
                              lanes: lanes)
     }
 
@@ -880,30 +881,9 @@ public final class AgentLaneStore: ObservableObject {
     /// wrapper that reads the host from its environment.
     public func runOnHosts(for id: AgentLane.ID) -> [AgentHosts.Host] {
         guard let hosts = agentHosts, let lane = lanes.first(where: { $0.id == id }), lane.isClosable,
-              !detachedIDs.contains(id), let backend = backends[lane.backendID],
-              Self.backendHonorsLaneHost(backend) else { return [] }
+              !detachedIDs.contains(id), let backend = backends[lane.backendID] as? CommandLaneBackend,
+              backend.passesDirectory, backend.tmuxSessions?.host == nil else { return [] }
         return hosts.laneHosts
-    }
-
-    /// Whether `backend` runs a lane on its ``AgentLane/host``: a lane
-    /// wrapper that passes the folder and reads the host from its
-    /// environment, with no tmux host of its own. Any other backend runs
-    /// where it always does, whatever the lane's host says.
-    public nonisolated static func backendHonorsLaneHost(_ backend: any LaneBackend) -> Bool {
-        (backend as? CommandLaneBackend).map { $0.passesDirectory && $0.tmuxSessions?.host == nil } ?? false
-    }
-
-    /// The machine a lane with `host` would run on under `backend`, as a
-    /// token to compare: this Mac, a named host, or a wrapper's own
-    /// default when no host and no hub is known. A wrapper's lane with no
-    /// host runs on the hub.
-    func effectiveMachine(of backend: any LaneBackend, host: String?) -> String {
-        if Self.backendHonorsLaneHost(backend) {
-            guard let name = host.flatMap({ $0.isEmpty ? nil : $0 }) ?? agentHosts?.hub?.name else { return "wrapper-default" }
-            return name == agentHosts?.selfName ? "local" : "host:" + name
-        }
-        if let host = DetachedSessions.laneHost(backend) { return "host:" + host }
-        return "local"
     }
 
     /// The host a lane runs on: its own, else the hub.
@@ -1640,32 +1620,6 @@ public final class AgentLaneStore: ObservableObject {
         groups.first { $0.lanes.contains { $0.id == id } }
     }
 
-    /// The folder a repository heading's + starts a lane running
-    /// `backendID` in, without asking: the heading's own, when its lanes
-    /// all run on one machine and that backend runs the new lane there too.
-    /// Nil for a section, or when that is not certain (a heading on a host
-    /// the backend does not honour, rows on several machines), so the
-    /// folder chooser asks instead of starting the lane somewhere else.
-    func headingTarget(for group: LaneGroup, backendID: String) -> String? {
-        guard group.repository != nil, let path = group.repositoryPath, let backend = backends[backendID] else { return nil }
-        if group.host != nil, !Self.backendHonorsLaneHost(backend) { return nil }
-        let rows = group.lanes.filter { !detachedIDs.contains($0.id) }
-        var machines = Set<String>()
-        for row in rows {
-            guard let rowBackend = backends[row.backendID] else { return nil }
-            machines.insert(effectiveMachine(of: rowBackend, host: row.host))
-        }
-        guard machines.count == 1, machines.first == effectiveMachine(of: backend, host: group.host) else { return nil }
-        return path
-    }
-
-    /// The host a repository heading's + names for `backend`: the heading's,
-    /// only when it is not the default and the backend really runs there.
-    public func newLaneHost(in group: LaneGroup, backendID: String) -> String? {
-        guard let host = group.host, let backend = backends[backendID], Self.backendHonorsLaneHost(backend) else { return nil }
-        return host
-    }
-
     /// Whether a group's + can start a lane in it: every group but Detached.
     public func canAddLane(to group: LaneGroup) -> Bool { !group.isDetached }
 
@@ -1687,20 +1641,11 @@ public final class AgentLaneStore: ObservableObject {
     @discardableResult
     public func newLane(in group: LaneGroup, backendID: String, focus: Bool = true) async -> AgentLaneSession? {
         guard canAddLane(to: group), backends[backendID] != nil else { return nil }
-        // A repository heading's + starts the lane in that folder on the
-        // heading's host, when that is certain; otherwise the person picks.
-        let target = headingTarget(for: group, backendID: backendID)
-        let chosen: URL? = if let target {
-            URL(fileURLWithPath: target, isDirectory: true)
-        } else {
-            await configuration.chooseFolder(startingFolder(for: group))
-        }
-        guard let folder = chosen else { return nil }
+        guard let folder = await configuration.chooseFolder(startingFolder(for: group)) else { return nil }
         let section = group.isPinned ? nil : group.section
         let name = backends[backendID]?.displayName ?? "Lane"
         var lane = AgentLane(id: UUID().uuidString, title: "\(name) · \(folder.lastPathComponent)",
                              directory: folder, backendID: backendID, isClosable: true, section: section)
-        if target != nil, let backend = backends[backendID], Self.backendHonorsLaneHost(backend) { lane.host = group.host }
         lane.variant = freeVariant(for: lane)
         if let variant = lane.variant { lane.title += " \(variant)" }
         // A person's move wins over a lane's own section, so record this
@@ -1857,10 +1802,9 @@ public final class AgentLaneStore: ObservableObject {
     /// The lanes as the list shows them, grouped.
     public var groups: [LaneGroup] {
         let detached = detachedIDs
-        let rows = detached.isEmpty ? lanes : lanes.filter { !detached.contains($0.id) }
-        var groups = configuration.groupsByRepository
-            ? layout.repositoryGroups(for: rows, defaultOrder: defaultRepositoryOrder) { [sessions] lane in sessions[lane.id]?.lastActivity }
-            : layout.groups(for: rows) { [sessions] lane in sessions[lane.id]?.lastActivity }
+        var groups = layout.groups(for: orderedLanes.filter { !detached.contains($0.id) }) { [sessions] lane in
+            sessions[lane.id]?.lastActivity
+        }
         guard !detached.isEmpty else { return groups }
         // Each found session goes just under the row whose folder holds it,
         // after any found before it; the rest make the Detached group.
@@ -1905,17 +1849,17 @@ public final class AgentLaneStore: ObservableObject {
     // MARK: Layout
 
     public func addSection(_ name: String) { layout.addSection(name) }
-    public func renameSection(_ old: String, to new: String) { layout.renameSection(old, to: new, lanes: lanes) }
+    public func renameSection(_ old: String, to new: String) { layout.renameSection(old, to: new, lanes: orderedLanes) }
     public func removeSection(_ name: String) { layout.removeSection(name, lanes: lanes) }
-    public func moveSection(_ name: String, by offset: Int) { layout.moveSection(name, by: offset, lanes: lanes) }
+    public func moveSection(_ name: String, by offset: Int) { layout.moveSection(name, by: offset, lanes: orderedLanes) }
     /// Put a section before another, or last when `target` is nil.
     public func moveSection(_ name: String, before target: String?) {
-        layout.moveSection(name, before: target, lanes: lanes)
+        layout.moveSection(name, before: target, lanes: orderedLanes)
     }
     public func move(_ id: AgentLane.ID, to section: String?) { layout.move(id, to: section) }
     public func setPinned(_ id: AgentLane.ID, _ pinned: Bool) { layout.setPinned(id, pinned) }
     public func moveLane(_ id: AgentLane.ID, before target: AgentLane.ID?) {
-        layout.moveLane(id, before: target, lanes: lanes)
+        layout.moveLane(id, before: target, lanes: orderedLanes)
     }
     public func setSort(_ sort: LaneLayout.Sort) { layout.sort = sort }
 
@@ -1925,60 +1869,8 @@ public final class AgentLaneStore: ObservableObject {
 
     public func setAllCollapsed(_ collapsed: Bool) {
         layout.collapsed = collapsed
-            ? Set(layout.orderedSections(for: lanes) + [LaneLayout.pinnedSection, LaneLayout.detachedSection,
-                                                        LaneLayout.unsectionedKey]
-                  + repositoryOrder.map(LaneLayout.repositoryCollapseKey)) : []
-    }
-
-    // MARK: Repository order
-
-    /// The app's order for the repository headings, as folder paths; see
-    /// ``Configuration/defaultRepositoryOrder``. Set it again when the app's
-    /// list changes.
-    @Published public var defaultRepositoryOrder: [String] = []
-
-    /// Every folder the rows work in (``LaneLayout/repositoryKey(_:)``), in
-    /// heading order: the person's order, else the app's default.
-    public var repositoryOrder: [String] {
-        layout.repositoryKeys(for: lanes.filter { !detachedIDs.contains($0.id) }, defaultOrder: defaultRepositoryOrder)
-    }
-
-    /// Whether the person has an order of their own, which Reset to
-    /// Default Order clears.
-    public var hasCustomRepositoryOrder: Bool { !layout.repositoryOrder.isEmpty }
-
-    /// `paths` in the repository order, for any list of repositories an app
-    /// shows; paths it does not know keep their order after the rest.
-    public func orderedRepositories(_ paths: [String]) -> [String] {
-        let known = layout.orderedRepositories(repositoryOrder + paths.map(LaneLayout.repositoryKey),
-                                               defaultOrder: defaultRepositoryOrder)
-        let rank = Dictionary(known.enumerated().map { ($1, $0) }, uniquingKeysWith: { a, _ in a })
-        return paths.enumerated().sorted { a, b in
-            let ra = rank[LaneLayout.repositoryKey(a.element)] ?? Int.max
-            let rb = rank[LaneLayout.repositoryKey(b.element)] ?? Int.max
-            return ra != rb ? ra < rb : a.offset < b.offset
-        }.map(\.element)
-    }
-
-    /// Make `paths` the person's repository order, as dragging a settings
-    /// list does. Folders it leaves out keep their place after them.
-    public func setRepositoryOrder(_ paths: [String]) {
-        var seen = Set<String>()
-        let keys = (paths.map(LaneLayout.repositoryKey) + repositoryOrder).filter { seen.insert($0).inserted }
-        layout.repositoryOrder = keys
-    }
-
-    /// Go back to the app's order.
-    public func resetRepositoryOrder() { layout.repositoryOrder = [] }
-
-    /// Put a heading before another, or last when `target` is nil.
-    public func moveRepository(_ key: String, before target: String?) {
-        layout.moveRepository(key, before: target, current: repositoryOrder)
-    }
-
-    /// Move a heading `offset` places up (negative) or down.
-    public func moveRepository(_ key: String, by offset: Int) {
-        layout.moveRepository(key, by: offset, current: repositoryOrder)
+            ? Set(layout.orderedSections(for: orderedLanes) + [LaneLayout.pinnedSection, LaneLayout.detachedSection,
+                                                        LaneLayout.unsectionedKey]) : []
     }
 
     /// Fold every group but `group`, and open it.
@@ -1997,8 +1889,102 @@ public final class AgentLaneStore: ObservableObject {
         groups.count > 1 && Set(groups.map(\.collapseKey)).subtracting([group.collapseKey]) != layout.collapsed
     }
 
+    // MARK: Repository order
+
+    /// The app's order for its lanes, as folder paths; see
+    /// ``Configuration/defaultRepositoryOrder``. Set it again when the app's
+    /// list changes.
+    @Published public var defaultRepositoryOrder: [String] = []
+
+    /// The lanes in the app's default order (``defaultRepositoryOrder``),
+    /// the rest after them as given. What the layout orders.
+    var orderedLanes: [AgentLane] {
+        guard !defaultRepositoryOrder.isEmpty else { return lanes }
+        var rank: [String: Int] = [:]
+        for (index, path) in defaultRepositoryOrder.enumerated() where rank[LaneLayout.repositoryKey(path)] == nil {
+            rank[LaneLayout.repositoryKey(path)] = index
+        }
+        return lanes.enumerated().sorted { a, b in
+            let ra = rank[LaneLayout.repositoryKey(a.element.path)] ?? Int.max
+            let rb = rank[LaneLayout.repositoryKey(b.element.path)] ?? Int.max
+            return ra != rb ? ra < rb : a.offset < b.offset
+        }.map(\.element)
+    }
+
+    /// The rows the person can order, pinned ones in their place, in list
+    /// order: sections in order, then lanes within each.
+    private var orderableRows: [AgentLane] {
+        var unpinned = layout
+        unpinned.pinned = []
+        unpinned.sort = .manual
+        return unpinned.groups(for: orderedLanes.filter { !detachedIDs.contains($0.id) }) { _ in nil }.flatMap(\.lanes)
+    }
+
+    /// Every folder the rows work in (``LaneLayout/repositoryKey(_:)``), in
+    /// list order: by section, then within each section.
+    public var repositoryOrder: [String] {
+        var seen = Set<String>()
+        return orderableRows.map { LaneLayout.repositoryKey($0.path) }.filter { seen.insert($0).inserted }
+    }
+
+    /// The section each folder's row is in, by ``LaneLayout/repositoryKey(_:)``.
+    public func section(ofRepository path: String) -> String? {
+        let key = LaneLayout.repositoryKey(path)
+        return orderableRows.first { LaneLayout.repositoryKey($0.path) == key }.flatMap { layout.section(of: $0) }
+    }
+
+    /// Whether the person has an order of their own for sections or rows,
+    /// which Reset to Default Order clears.
+    public var hasCustomRepositoryOrder: Bool {
+        !layout.order.isEmpty || layout.sections.contains { name in lanes.contains { layout.section(of: $0) == name } }
+    }
+
+    /// `paths` in the list's order, for any list of repositories an app
+    /// shows; paths it does not know keep their order after the rest.
+    public func orderedRepositories(_ paths: [String]) -> [String] {
+        var rank: [String: Int] = [:]
+        for (index, key) in repositoryOrder.enumerated() { rank[key] = index }
+        for (index, path) in defaultRepositoryOrder.enumerated() where rank[LaneLayout.repositoryKey(path)] == nil {
+            rank[LaneLayout.repositoryKey(path)] = rank.count + index
+        }
+        return paths.enumerated().sorted { a, b in
+            let ra = rank[LaneLayout.repositoryKey(a.element)] ?? Int.max
+            let rb = rank[LaneLayout.repositoryKey(b.element)] ?? Int.max
+            return ra != rb ? ra < rb : a.offset < b.offset
+        }.map(\.element)
+    }
+
+    /// Put the rows of `paths` in that order, each where one of them was,
+    /// as dragging a settings list does; every other row keeps its place.
+    public func setRepositoryOrder(_ paths: [String]) {
+        let current = layout.orderedIDs(orderedLanes)
+        var byKey: [String: [AgentLane.ID]] = [:]
+        for lane in orderedLanes where !detachedIDs.contains(lane.id) {
+            byKey[LaneLayout.repositoryKey(lane.path), default: []].append(lane.id)
+        }
+        let wanted = paths.flatMap { byKey[LaneLayout.repositoryKey($0)] ?? [] }
+        let moving = Set(wanted)
+        guard !moving.isEmpty else { return }
+        var queue = wanted[...]
+        layout.order = current.map { id in moving.contains(id) ? queue.popFirst() ?? id : id }
+        if layout.sort != .manual { layout.sort = .manual }
+    }
+
+    /// Put the sections in this order; sections it leaves out follow.
+    public func setSectionOrder(_ names: [String]) {
+        var seen = Set<String>()
+        layout.sections = (names + layout.orderedSections(for: orderedLanes)).filter { seen.insert($0).inserted }
+    }
+
+    /// Go back to the app's order for sections and rows. Sections the
+    /// person made that hold no lane stay.
+    public func resetRepositoryOrder() {
+        layout.order = []
+        layout.sections = layout.sections.filter { name in !lanes.contains { layout.section(of: $0) == name } }
+    }
+
     /// Every section a lane can be moved to.
-    public var sectionNames: [String] { layout.orderedSections(for: lanes) }
+    public var sectionNames: [String] { layout.orderedSections(for: orderedLanes) }
 
     public func detach(_ id: AgentLane.ID) { sessions[id]?.detach() }
 
