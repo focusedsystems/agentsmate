@@ -47,6 +47,17 @@ public struct AgentLaneCommands: Commands {
     private var selectedGroup: LaneGroup? { store.selectedID.flatMap { store.group(containing: $0) } }
 
     public var body: some Commands {
+        CommandGroup(before: .sidebar) {
+            if store.configuration.showsHome {
+                Button("Agents Home") {
+                    reveal()
+                    store.showHome()
+                }
+                .laneShortcut(store.shortcuts.binding(for: .home))
+                .disabled(store.lanes.isEmpty)
+                Divider()
+            }
+        }
         CommandMenu(menuTitle) {
             // The pinned rows, on ⌘1–⌘9 in the order the list shows them.
             ForEach(Array(store.numberedLanes.enumerated()), id: \.element.id) { index, lane in

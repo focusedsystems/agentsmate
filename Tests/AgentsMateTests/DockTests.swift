@@ -98,7 +98,8 @@ final class AgentsLaunchTests: XCTestCase {
 
     func testEnterAgentsModeFillsTheWindowAndStartsNothing() {
         let defaults = UserDefaults(suiteName: "agentsmate-launch-\(UUID().uuidString)")!
-        let store = AgentLaneStore(configuration: .init(termProgram: "T", sessionFileDirectory: nil),
+        let store = AgentLaneStore(configuration: .init(termProgram: "T", sessionFileDirectory: nil,
+                                                        launchShows: .selectedLane),
                                    backends: [CommandLaneBackend.shell], statusFeed: nil, defaults: defaults)
         store.add(AgentLane(id: "r", title: "Repo", backendID: "shell", isClosable: false), open: false)
         store.selectedID = "r"
@@ -194,7 +195,8 @@ private struct CountingBackend: LaneBackend {
 final class AttachOnlyLaunchTests: XCTestCase {
     private func store(_ backend: CountingBackend) -> AgentLaneStore {
         let defaults = UserDefaults(suiteName: "agentsmate-attach-\(UUID().uuidString)")!
-        let store = AgentLaneStore(configuration: .init(termProgram: "T", sessionFileDirectory: nil),
+        let store = AgentLaneStore(configuration: .init(termProgram: "T", sessionFileDirectory: nil,
+                                                        launchShows: .selectedLane),
                                    backends: [backend], statusFeed: nil, defaults: defaults)
         store.add(AgentLane(id: "r", title: "Repo", backendID: "counting", isClosable: false), open: false)
         store.selectedID = "r"

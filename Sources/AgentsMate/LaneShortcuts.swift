@@ -4,7 +4,7 @@ import AppKit
 /// A command in the lanes that has a keyboard shortcut a person can change.
 public enum LaneShortcutAction: String, CaseIterable, Codable, Sendable, Identifiable {
     case next, previous, clear, newLane, closeLane, split, maximize, togglePanel
-    case biggerFont, smallerFont, resetFont, jumpToUnread, goToLane, messageAgent, back, forward, reattach
+    case biggerFont, smallerFont, resetFont, jumpToUnread, goToLane, messageAgent, back, forward, reattach, home
     case reopenSameAgent, reopenClaudeRemote, reopenCodexRemote, reopenClaudeDirect, reopenCodexDirect
 
     /// The kind of Reopen As choice this action picks.
@@ -40,6 +40,7 @@ public enum LaneShortcutAction: String, CaseIterable, Codable, Sendable, Identif
         case .back: "Back"
         case .forward: "Forward"
         case .reattach: "Reattach"
+        case .home: "Agents Home"
         case .reopenSameAgent: "Reopen As Same Agent"
         case .reopenClaudeRemote: "Reopen As Claude (remote)"
         case .reopenCodexRemote: "Reopen As Codex (remote)"
@@ -179,6 +180,8 @@ public struct LaneShortcutBindings: Codable, Equatable, Sendable {
         .back: .init("[", command: true),
         .forward: .init("]", command: true),
         .reattach: .init("r", command: true, shift: true),
+        // ⇧⌘H, Home in Finder; ⌘0 is Actual Size.
+        .home: .init("h", command: true, shift: true),
         .reopenSameAgent: .init("r", command: true, option: true),
         .reopenClaudeRemote: .init("c", command: true, shift: true),
         .reopenCodexRemote: .init("x", command: true, shift: true),

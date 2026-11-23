@@ -192,6 +192,7 @@ final class HostSessionsStoreTests: XCTestCase {
         var config = AgentLaneStore.Configuration(termProgram: "T", sessionFileDirectory: nil, sharedLanes: nil,
                                                   hostSessions: inert)
         config.findsDetachedSessions = false
+        config.launchShows = .selectedLane
         let store = AgentLaneStore(configuration: config, backends: [backend], statusFeed: nil, defaults: defaults)
         var lane = AgentLane(id: "r", title: "Repo", directory: URL(fileURLWithPath: "/w/repo"), backendID: backend.id)
         lane.host = host

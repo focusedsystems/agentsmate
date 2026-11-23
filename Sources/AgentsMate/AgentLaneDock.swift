@@ -42,7 +42,7 @@ public struct AgentLaneDock<Accessory: View, Empty: View>: View {
                     AgentLaneSidebar(store: store, labels: labels, inDock: true) { accessory }
                         .frame(width: CGFloat(listWidth))
                     listDivider
-                    AgentLaneDetail(store: store) { empty }
+                    AgentLaneDetail(store: store, labels: labels) { empty }
                 }
                 .frame(height: store.dockMaximized ? nil : CGFloat(liveHeight ?? height))
                 .frame(maxHeight: store.dockMaximized ? .infinity : nil)

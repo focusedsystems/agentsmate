@@ -127,6 +127,15 @@ public final class AgentLaneStore: ObservableObject {
         /// applies until the person moves a section or a lane; their order
         /// always wins. Folders not in it follow, in the lanes' order.
         public var defaultRepositoryOrder: [String]
+        /// Show Home (``AgentHomeView``): an overview of every active
+        /// session, reached from the top of the sidebar and View ▸ Agents
+        /// Home. Off, the detail area only ever shows terminals.
+        public var showsHome: Bool
+        /// What the detail area shows the first time Agents mode comes on
+        /// screen after launch: Home, attaching nothing until the person
+        /// picks a row, or the selected lane, reattached when its session
+        /// already runs.
+        public var launchShows: AgentsLaunchDestination
 
         /// `~/Library/Caches/<bundle id>/agent-pull-requests.json`.
         public static var defaultPullRequestLedgerFile: URL { PullRequestLedgerCache.defaultURL() }
@@ -155,7 +164,10 @@ public final class AgentLaneStore: ObservableObject {
                     chooseFolder: @escaping @MainActor (_ startingAt: URL?) async -> URL? = AgentLaneStore.chooseFolderWithOpenPanel,
                     scrollSensitivity: CGFloat = 1, placesDetachedSessions: Bool = true,
                     hostSessions: HostSessionsConfiguration? = nil, showsSectionHeadings: Bool = true,
-                    defaultRepositoryOrder: [String] = []) {
+                    defaultRepositoryOrder: [String] = [], showsHome: Bool = true,
+                    launchShows: AgentsLaunchDestination = .home) {
+            self.showsHome = showsHome
+            self.launchShows = launchShows
             self.hostSessions = hostSessions
             self.showsSectionHeadings = showsSectionHeadings
             self.defaultRepositoryOrder = defaultRepositoryOrder
@@ -215,6 +227,15 @@ public final class AgentLaneStore: ObservableObject {
         didSet {
             updateShown()
             if splitID != oldValue { rowMetadataSelectionChanged() }
+        }
+    }
+    /// Home is showing in place of the selected lane's terminal. The
+    /// selection is kept, so leaving Home goes back to it. Saved.
+    @Published public internal(set) var showingHome = false {
+        didSet {
+            guard showingHome != oldValue else { return }
+            defaults.set(showingHome, forKey: keys.showingHome)
+            updateShown()
         }
     }
     /// Whether a lane's terminal or the lane list has the keyboard. The
@@ -306,6 +327,7 @@ public final class AgentLaneStore: ObservableObject {
         self.defaults = defaults
         for backend in backends { self.backends[backend.id] = backend }
         self.selectedID = defaults.string(forKey: keys.selectedLane)
+        self.showingHome = configuration.showsHome && defaults.bool(forKey: keys.showingHome)
         keyboard.onChange = { [weak self] in self?.updateLanesHaveKeyboard() }
         self.fontOffset = CGFloat(defaults.double(forKey: keys.fontOffset))
         if let data = defaults.data(forKey: keys.shortcuts),
@@ -1062,7 +1084,7 @@ public final class AgentLaneStore: ObservableObject {
     /// The session ids the status feed showed last, to sweep again soon
     /// after one starts or ends rather than at the next ten-minute ask.
     private var seenStatusSessionIDs: Set<String> = []
-    private var lastSweep = Date.distantPast
+    private(set) var lastSweep = Date.distantPast
     /// The shortest wait between sweeps the status feed asks for.
     static let liveSweepSpacing: TimeInterval = 20
 
@@ -1075,7 +1097,7 @@ public final class AgentLaneStore: ObservableObject {
 
     private var discoveryTimer: CadenceTimer?
     private var discoveryKick: Task<Void, Never>?
-    private var sweepingSessions = false
+    @Published private(set) var sweepingSessions = false
     /// Everything the last sweep found, kept so rows added later can claim
     /// their sessions without asking the backends again.
     private var discovered: [DetachedSessions.Found] = []
@@ -1274,7 +1296,7 @@ public final class AgentLaneStore: ObservableObject {
         dockVisible = true
         firstShowPending = false
         launchAttachPending = nil
-        if lanes.isEmpty { openNewLane(in: newLaneDirectory) } else { openSelected(focus: true) }
+        if lanes.isEmpty { openNewLane(in: newLaneDirectory) } else if !isHomeShown { openSelected(focus: true) }
     }
 
     /// Close the dock and hand the keyboard back to whatever had it before.
@@ -1313,9 +1335,22 @@ public final class AgentLaneStore: ObservableObject {
     /// an attach-only launch for it (``LaneBackend/attachLaunch(for:shell:)``).
     /// That launch never resumes or starts anything; if the session has gone
     /// the row shows Reattach. Nothing is created, and nothing new is started.
+    ///
+    /// With Home on and ``Configuration/launchShows`` at its default, the
+    /// first show is Home instead, and nothing is attached until the person
+    /// picks a row. While Home is showing, showing the lanes again leaves it.
     public func openSelectedOnShow(focus: Bool = true) {
-        guard firstShowPending else { return openSelected(focus: focus) }
+        guard firstShowPending else {
+            if isHomeShown { return }
+            return openSelected(focus: focus)
+        }
         firstShowPending = false
+        if configuration.showsHome, configuration.launchShows == .home {
+            showingHome = true
+            return
+        }
+        // Home left showing at quit comes back as it was.
+        if isHomeShown { return }
         guard let id = selectedID, let session = sessions[id] else { return }
         if session.isAttached {
             if focus { session.wantsFocus = true }
@@ -1346,7 +1381,7 @@ public final class AgentLaneStore: ObservableObject {
     /// The lane launch shows, waiting for its host to answer so its session
     /// can be attached. Cleared when anything else opens a lane.
     @Published private(set) var launchAttachPending: AgentLane.ID?
-    private var listingHosts: AgentHosts?
+    private(set) var listingHosts: AgentHosts?
 
     /// What this Mac had running, when the app gives no hosts registry: the
     /// bindings command run here, for the lanes that run here.
@@ -1849,7 +1884,7 @@ public final class AgentLaneStore: ObservableObject {
         session.pullRequests = pullRequestLedger?.pullRequests(for: id) ?? []
         sessions[lane.id] = session
         session.isSelected = id == selectedID || id == splitID
-        session.isShown = isShowing && session.isSelected
+        session.isShown = isShowing && !isHomeShown && session.isSelected
     }
 
     /// Show a lane, attaching it the first time or after it ended. Opening a
@@ -1857,6 +1892,7 @@ public final class AgentLaneStore: ObservableObject {
     public func open(_ id: AgentLane.ID, focus: Bool = true) {
         guard let session = sessions[id] else { return }
         launchAttachPending = nil
+        showingHome = false
         recordVisit(id)
         if id == splitID { splitID = selectedID == id ? nil : selectedID }
         selectedID = id
@@ -1865,6 +1901,15 @@ public final class AgentLaneStore: ObservableObject {
         if focus { session.wantsFocus = true }
         updateShown()
         if starting, !detachedIDs.contains(id) { claimAfterAttach() }
+    }
+
+    /// Show Home in place of the terminal (``AgentHomeView``), keeping the
+    /// selection so opening it again goes back to the same lane.
+    public func showHome() {
+        guard configuration.showsHome else { return }
+        launchAttachPending = nil
+        firstShowPending = false
+        showingHome = true
     }
 
     /// How long after a row attaches its wrapper is given to record the
@@ -2461,7 +2506,7 @@ public final class AgentLaneStore: ObservableObject {
     private func updateShown() {
         for (id, session) in sessions {
             session.isSelected = id == selectedID || id == splitID
-            session.isShown = isShowing && session.isSelected
+            session.isShown = isShowing && !isHomeShown && session.isSelected
             if session.isShown { notifier?.clear(id) }
         }
     }

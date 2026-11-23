@@ -51,19 +51,13 @@ public struct AgentLaneSidebar<Accessory: View>: View {
     @AppStorage private var filterIdle: Bool
     @AppStorage private var filterUnread: Bool
     @State private var searchText = ""
-    @State private var showingNewSection = false
     @State private var renaming: String?
     @State private var sectionName = ""
-    @State private var newSectionName = ""
     @FocusState private var renameFocused: Bool
-    @State private var renamingLane: AgentLane.ID?
-    @State private var laneName = ""
-    @State private var pendingSwitch: (id: AgentLane.ID, backendID: String, title: String)?
+    @StateObject private var menus = LaneMenuPresentation()
     @State private var savingWorkspace = false
     @State private var workspaceName = ""
-    @State private var choosingIcon: AgentLane.ID?
     @State private var message = ""
-    @Environment(\.openWindow) private var openWindow
 
     public init(store: AgentLaneStore, labels: AgentsModeLabels = .init(), rowActions: [LaneAction] = [],
                 @ViewBuilder accessory: () -> Accessory) {
@@ -86,6 +80,9 @@ public struct AgentLaneSidebar<Accessory: View>: View {
 
     public var body: some View {
         List(selection: selectionBinding) {
+            if store.configuration.showsHome {
+                Section { AgentHomeSidebarRow(store: store).tag(Self.homeTag) }
+            }
             // Every group folds the same way, the first included; its
             // header keeps the app's accessory beside the + menu. The
             // header draws its own chevron, always shown, instead of the
@@ -120,33 +117,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
                 .background(inDock ? AnyShapeStyle(.bar) : AnyShapeStyle(.clear))
             }
         }
-        .sheet(item: Binding(get: { choosingIcon.map(IconRequest.init) }, set: { choosingIcon = $0?.id })) { request in
-            if let session = store.sessions[request.id] {
-                LaneIconPicker(icon: session.icon, tintHex: session.tintHex, laneTitle: session.title,
-                               canReset: store.layout.icons[request.id] != nil || store.layout.tints[request.id] != nil,
-                               onReset: { store.setIcon(nil, tint: nil, for: request.id) }) { icon, tint in
-                    store.setIcon(icon, tint: tint, for: request.id)
-                }
-            }
-        }
-        .alert("New Section", isPresented: $showingNewSection) {
-            TextField("Name", text: $newSectionName)
-            Button("Add") { store.addSection(newSectionName) }
-            Button("Cancel", role: .cancel) {}
-        }
-        .alert("Rename", isPresented: Binding(get: { renamingLane != nil }, set: { if !$0 { renamingLane = nil } })) {
-            TextField("Name", text: $laneName)
-            Button("Rename") { if let id = renamingLane { store.rename(id, to: laneName) } }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Leave it empty to go back to the automatic name.")
-        }
-        .alert("Switch the agent?", isPresented: Binding(get: { pendingSwitch != nil }, set: { if !$0 { pendingSwitch = nil } })) {
-            Button("Switch") { if let p = pendingSwitch { store.switchBackend(p.id, to: p.backendID) } }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("\(pendingSwitch?.title ?? "This lane") is working. Switching restarts its terminal.")
-        }
+        .modifier(LaneMenuSheets(store: store, presentation: menus))
         .alert("Save Lanes as Workspace", isPresented: $savingWorkspace) {
             TextField("Name", text: $workspaceName)
             Button("Save") { store.saveWorkspace(named: workspaceName.trimmingCharacters(in: .whitespaces)) }
@@ -178,14 +149,16 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         }
         .contextMenu(forSelectionType: AgentLane.ID.self) { ids in
             if let id = ids.first, let session = store.sessions[id] {
-                rowMenu(session)
+                LaneContextMenu(store: store, session: session, presentation: menus, rowActions: rowActions)
             }
         } primaryAction: { ids in
-            if let id = ids.first { store.open(id) }
+            if ids.first == Self.homeTag { store.showHome() } else if let id = ids.first { store.open(id) }
         }
         .onDeleteCommand {
-            if let id = store.selectedID, store.selected?.lane.isClosable == true { store.close(id) }
+            if !store.isHomeShown, let id = store.selectedID, store.selected?.lane.isClosable == true { store.close(id) }
         }
+        // Escape leaves the lane for Home, as a list's empty selection.
+        .onExitCommand { store.showHome() }
         // A filter that would leave the list empty turns itself off; only a
         // search that matches nothing leaves the Show All overlay.
         .onChange(of: statusFilteredCount) { settleFilters(newest: nil) }
@@ -362,7 +335,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
                     Divider()
                 }
             }
-            Button("New Section…") { newSectionName = ""; showingNewSection = true }
+            Button("New Section…") { menus.newSection() }
             Divider()
             Button("Collapse Other Sections") { store.collapseOtherSections(than: group) }
                 .disabled(!store.canCollapseOtherSections(than: group))
@@ -382,9 +355,13 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         }
     }
 
+    /// The Home row's tag in the list's selection; never a lane's id.
+    static var homeTag: AgentLane.ID { "\u{0}agentsmate-home" }
+
     private var selectionBinding: Binding<AgentLane.ID?> {
-        Binding(get: { store.selectedID },
+        Binding(get: { store.isHomeShown ? Self.homeTag : store.selectedID },
                 set: { id in
+                    if id == Self.homeTag { return store.showHome() }
                     // A click hands the keyboard to the lane's terminal so
                     // typing goes straight to the agent. Moving through the
                     // list with the arrow keys attaches each lane but leaves
@@ -392,152 +369,6 @@ public struct AgentLaneSidebar<Accessory: View>: View {
                     let fromKeyboard = NSApp.currentEvent?.type == .keyDown
                     if let id { store.open(id, focus: !fromKeyboard) }
                 })
-    }
-
-    /// A session found running with no row: reattach it here, adopt it
-    /// into a section, or end it.
-    @ViewBuilder
-    private func detachedRowMenu(_ session: AgentLaneSession) -> some View {
-        let lane = session.lane
-        Button("Reattach") { store.reattach(lane.id) }
-            .help("Attach this session here; the row stays where it is listed")
-        DetachedAdoptMenu(store: store, id: lane.id)
-        Divider()
-        Button("Stop Session") { store.stop(lane.id) }
-            .disabled(!store.canStop(lane.id))
-            .help("End the session; its row goes with it")
-        Divider()
-        if lane.directory != nil {
-            Button("Copy Path") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(session.currentDirectory, forType: .string)
-            }
-            Button("Show in Finder") {
-                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: session.currentDirectory)])
-            }
-        }
-        Button("Copy Session Name") {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(lane.sessionName ?? lane.title, forType: .string)
-        }
-    }
-
-    @ViewBuilder
-    private func rowMenu(_ session: AgentLaneSession) -> some View {
-        if store.isDetached(session.id) {
-            detachedRowMenu(session)
-        } else {
-            laneRowMenu(session)
-        }
-    }
-
-    @ViewBuilder
-    private func laneRowMenu(_ session: AgentLaneSession) -> some View {
-        let lane = session.lane
-        Button("Open \(session.title)") { store.open(lane.id) }
-        Button("Reattach") { store.reattach(lane.id) }
-            .disabled(!session.isStarted)
-        if !store.configuration.reopenChoices.isEmpty {
-            Menu("Reopen As") {
-                ForEach(store.configuration.reopenChoices, id: \.self) { choice in
-                    Button(choice.title) { store.reopen(lane.id, choice: choice) }
-                        .disabled(choice.kind != .sameAgent && choice.backendID == lane.backendID && session.isAttached)
-                }
-            }
-        }
-        Button("Detach") { store.detach(lane.id) }
-            .disabled(!session.isAttached)
-        Button("Message…") { store.showMessageAgent(to: lane.id, openWindow: openWindow) }
-        if session.needsAttention {
-            Button("Mark Read") { store.markRead(lane.id) }
-        }
-        Button("Change Icon…") { choosingIcon = lane.id }
-        Button("Rename…") { laneName = session.customTitle ?? session.title; renamingLane = lane.id }
-        if session.customTitle != nil {
-            Button("Use Automatic Name") { store.rename(lane.id, to: nil) }
-        }
-        Menu("Duplicate") {
-            Button("Same Agent") { store.duplicate(lane.id) }
-            Divider()
-            ForEach(store.availableBackends, id: \.id) { backend in
-                Button(backend.displayName) { store.duplicate(lane.id, backendID: backend.id) }
-            }
-        }
-        if lane.isClosable {
-            Menu("Switch Agent") {
-                ForEach(store.availableBackends, id: \.id) { backend in
-                    Button(backend.displayName) {
-                        if session.status == .running {
-                            pendingSwitch = (lane.id, backend.id, session.title)
-                        } else {
-                            store.switchBackend(lane.id, to: backend.id)
-                        }
-                    }
-                    .disabled(backend.id == lane.backendID)
-                }
-            }
-        }
-        if !store.runOnHosts(for: lane.id).isEmpty {
-            LaneRunOnMenu(store: store, id: lane.id)
-        }
-        Divider()
-        Button(store.layout.pinned.contains(lane.id) ? "Unpin" : "Pin") {
-            store.setPinned(lane.id, !store.layout.pinned.contains(lane.id))
-        }
-        Menu("Move to Section") {
-            Button("None") { store.move(lane.id, to: nil) }
-                .disabled(store.layout.section(of: lane) == nil)
-            if !store.sectionNames.isEmpty { Divider() }
-            ForEach(store.sectionNames, id: \.self) { name in
-                Button(name) { store.move(lane.id, to: name) }
-                    .disabled(store.layout.section(of: lane) == name)
-            }
-            Divider()
-            Button("New Section…") { newSectionName = ""; showingNewSection = true }
-        }
-        Divider()
-        if store.canStop(lane.id) {
-            Button("Stop Lane") { store.stop(lane.id) }
-                .help("End the session; its conversation resumes when the lane is opened again")
-        }
-        if lane.isClosable {
-            Button("Close") { store.close(lane.id) }
-        }
-        Divider()
-        if !session.displayedPullRequests.isEmpty {
-            PullRequestsMenu(pullRequests: session.displayedPullRequests, store: store)
-        }
-        ForEach(session.rowMetadata.ports, id: \.self) { port in
-            Button("Open localhost:\(port)") {
-                if let url = URL(string: "http://localhost:\(port)") { NSWorkspace.shared.open(url) }
-            }
-        }
-        if session.rowMetadata.branch != nil {
-            Button("Copy Branch Name") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(session.rowMetadata.branch ?? "", forType: .string)
-            }
-        }
-        Button("Copy Path") {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(session.currentDirectory, forType: .string)
-        }
-        if store.summariesAvailable {
-            Button("Copy Summary") { store.copySummary(of: lane.id) }
-                .disabled(session.summary?.isEmpty ?? true)
-        }
-        Button("Copy Last Prompt") { store.copyLastPrompt(of: lane.id) }
-            .disabled(session.recentPrompts.isEmpty)
-        Button("Show in Finder") {
-            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: session.currentDirectory)])
-        }
-        if !rowActions.isEmpty {
-            Divider()
-            ForEach(rowActions) { action in
-                Button(action.title) { action.perform(lane) }
-                    .disabled(!action.isEnabled(lane))
-            }
-        }
     }
 
     /// The lanes the search and status filters let through. A search that
@@ -684,7 +515,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
                     }
                 }
                 Divider()
-                Button("New Section…") { newSectionName = ""; showingNewSection = true }
+                Button("New Section…") { menus.newSection() }
                 Button("Collapse Other Sections") { store.collapseOtherSectionsThanSelected() }
                     .disabled(store.selectedID.flatMap { store.group(containing: $0) }
                         .map { !store.canCollapseOtherSections(than: $0) } ?? true)
@@ -736,9 +567,16 @@ public extension AgentLaneSidebar where Accessory == EmptyView {
 public struct AgentLaneDetail<Empty: View>: View {
     @ObservedObject var store: AgentLaneStore
     let empty: Empty
+    let labels: AgentsModeLabels
+    let rowActions: [LaneAction]
 
-    public init(store: AgentLaneStore, @ViewBuilder empty: () -> Empty) {
+    /// `labels` and `rowActions` are Home's (``AgentHomeView``), shown here
+    /// while ``AgentLaneStore/isHomeShown``.
+    public init(store: AgentLaneStore, labels: AgentsModeLabels = .init(), rowActions: [LaneAction] = [],
+                @ViewBuilder empty: () -> Empty) {
         self.store = store
+        self.labels = labels
+        self.rowActions = rowActions
         self.empty = empty()
     }
 
@@ -746,6 +584,8 @@ public struct AgentLaneDetail<Empty: View>: View {
         Group {
             if store.lanes.isEmpty {
                 empty
+            } else if store.isHomeShown {
+                AgentHomeView(store: store, labels: labels, rowActions: rowActions)
             } else {
                 HStack(spacing: 0) {
                     if let session = store.selected {
@@ -796,7 +636,7 @@ public struct AgentsModeView<Accessory: View, Empty: View>: View {
             AgentLaneSidebar(store: store, labels: labels, rowActions: rowActions) { accessory }
                 .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 420)
         } detail: {
-            AgentLaneDetail(store: store) { empty }
+            AgentLaneDetail(store: store, labels: labels, rowActions: rowActions) { empty }
         }
     }
 }
@@ -858,8 +698,6 @@ struct LaneTerminalPane: View {
         }
     }
 }
-
-private struct IconRequest: Identifiable { let id: AgentLane.ID }
 
 /// Adopt ▸ No Section, then each section: the same submenu on a Detached
 /// row and in the menu bar.
@@ -1440,3 +1278,32 @@ extension Color {
     }
 }
 
+
+/// Home's row at the top of the sidebar: a house, and how many sessions
+/// need the person.
+struct AgentHomeSidebarRow: View {
+    @ObservedObject var store: AgentLaneStore
+
+    var body: some View {
+        let waiting = store.homeSessions.filter { LaneStatusFilter.wantsYou($0.status) }.count
+        HStack(spacing: 8) {
+            Image(systemName: "house").frame(width: 20)
+            Text("Home")
+            Spacer(minLength: 4)
+            if waiting > 0 {
+                Text("\(waiting)")
+                    .font(.caption.monospacedDigit().weight(.semibold))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .background(Capsule().fill(Color.orange.opacity(0.2)))
+                    .foregroundStyle(.orange)
+                    .help("\(waiting) waiting for you")
+            }
+        }
+        .padding(.vertical, 2)
+        .help("Every active session at a glance (\(store.shortcuts.binding(for: .home)?.display ?? "Escape"))")
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Home")
+        .accessibilityValue(waiting > 0 ? "\(waiting) need you" : "")
+    }
+}
