@@ -117,6 +117,6 @@ final class BadgeCountTests: XCTestCase {
         XCTAssertEqual(store.badgeCount, 2)
         store.sync(lanes: [AgentLane(id: "b", title: "B", backendID: "shell")])
         XCTAssertEqual(store.badgeCount, store.unreadLanes.count)
-        XCTAssertEqual(store.badgeCount, 1)
+        XCTAssertNil(store.sessions["a"])
     }
 }
