@@ -1,30 +1,30 @@
 import SwiftUI
 
+/// Names what the field searches; clicking it switches the scope.
+public struct AgentsToolbarSearchScope {
+    public var title: String
+    public var help: String
+    public var action: () -> Void
+
+    public init(title: String, help: String, action: @escaping () -> Void) {
+        self.title = title
+        self.help = help
+        self.action = action
+    }
+}
+
 /// The window's one search field, in the toolbar's right: a magnifier, an
 /// optional chip naming what it searches, the text, and the shortcut that
 /// reaches it. What it searches and what it finds belong to the app, which
 /// supplies the text, the results and their popover.
 public struct AgentsToolbarSearchField<Results: View>: View {
-    /// Names what the field searches; clicking it switches the scope.
-    public struct Scope {
-        public var title: String
-        public var help: String
-        public var action: () -> Void
-
-        public init(title: String, help: String, action: @escaping () -> Void) {
-            self.title = title
-            self.help = help
-            self.action = action
-        }
-    }
-
     private let text: Binding<String>
     private let prompt: String
     private let hint: String
     private let help: String
     private let width: CGFloat
     private let isSearching: Bool
-    private let scope: Scope?
+    private let scope: AgentsToolbarSearchScope?
     private let focusRequest: Int
     private let showResults: Binding<Bool>
     private let fontScale: Double
@@ -41,7 +41,7 @@ public struct AgentsToolbarSearchField<Results: View>: View {
     /// `focusRequest` puts the cursor in the field whenever it changes, which
     /// is how ⌘K and ⌘F reach it from anywhere in the window.
     public init(text: Binding<String>, prompt: String, hint: String = "⌘K", help: String? = nil,
-                width: CGFloat = 300, isSearching: Bool = false, scope: Scope? = nil, focusRequest: Int = 0,
+                width: CGFloat = 300, isSearching: Bool = false, scope: AgentsToolbarSearchScope? = nil, focusRequest: Int = 0,
                 showResults: Binding<Bool> = .constant(false), fontScale: Double = 1,
                 identifier: String = "AgentsToolbarSearchField",
                 onSubmit: @escaping () -> Void = {}, onClear: (() -> Void)? = nil,
@@ -66,7 +66,7 @@ public struct AgentsToolbarSearchField<Results: View>: View {
 
     /// A field drawn without its popover, for offscreen checks.
     init(offscreen text: Binding<String>, prompt: String, hint: String = "⌘K", width: CGFloat = 300,
-         scope: Scope? = nil, fontScale: Double = 1) where Results == EmptyView {
+         scope: AgentsToolbarSearchScope? = nil, fontScale: Double = 1) where Results == EmptyView {
         self.init(text: text, prompt: prompt, hint: hint, width: width, scope: scope, fontScale: fontScale) { EmptyView() }
         showsPopover = false
     }
