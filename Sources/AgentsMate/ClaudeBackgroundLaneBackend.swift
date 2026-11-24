@@ -212,9 +212,10 @@ public struct ClaudeBackgroundLaneBackend: LaneBackend {
         guard let binary else { return [] }
         let cache = agentsListCache, filter = isLaneSession, relevant = isRelevant
         let records = await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .background).async {
-                LaneRowMetadataReader.processSlots.wait()
-                defer { LaneRowMetadataReader.processSlots.signal() }
+            // Not in the row metadata's queue: every row's git reads wait
+            // there, and the list of sessions is what the window waits on.
+            // The shared list's own lock keeps this to one process.
+            DispatchQueue.global(qos: .utility).async {
                 continuation.resume(returning: ClaudeAgentsList.shared(binary: binary, cache: cache))
             }
         }

@@ -223,8 +223,7 @@ extension AgentLaneStore {
                 return .init(name: host.name, state: state)
             }
         }
-        loading.findingSessions = configuration.findsDetachedSessions
-            && (sweepingSessions || lastSweep == .distantPast)
+        loading.findingSessions = configuration.findsDetachedSessions && !firstSweepFinished
         return loading
     }
 }

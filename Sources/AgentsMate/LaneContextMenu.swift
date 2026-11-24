@@ -100,6 +100,10 @@ struct LaneContextMenu: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
+        if let host = store.laneLoadStages[session.id]?.unreachableHost {
+            Button("Retry \(host)") { store.retryHost(host) }
+            Divider()
+        }
         if store.isDetached(session.id) {
             detachedMenu
         } else {

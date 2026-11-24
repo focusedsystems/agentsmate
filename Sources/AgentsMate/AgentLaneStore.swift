@@ -159,6 +159,11 @@ public final class AgentLaneStore: ObservableObject {
         /// picks a row, or the selected lane, reattached when its session
         /// already runs.
         public var launchShows: AgentsLaunchDestination
+        /// Whether a session in a folder, on a host (nil for this Mac), is this
+        /// app's to list. Nil lists everything its backends find. Applied to
+        /// found sessions and to saved or shared lanes before they get a row,
+        /// so a list written by an older version cannot bring one back.
+        public var sessionScope: (@Sendable (_ directory: String?, _ host: String?) -> Bool)?
 
         /// `~/Library/Caches/<bundle id>/agent-pull-requests.json`.
         public static var defaultPullRequestLedgerFile: URL { PullRequestLedgerCache.defaultURL() }
@@ -846,6 +851,7 @@ public final class AgentLaneStore: ObservableObject {
     @discardableResult
     func addSaved(_ saved: LaneWorkspace.Lane, resume: Bool) -> AgentLane.ID? {
         let path = saved.directory.map { ($0 as NSString).expandingTildeInPath }
+        if let scope = configuration.sessionScope, !scope(path, saved.host) { return nil }
         let already: Bool
         if let id = saved.id {
             already = lanes.contains { $0.id == id }
@@ -1120,6 +1126,9 @@ public final class AgentLaneStore: ObservableObject {
     /// after one starts or ends rather than at the next ten-minute ask.
     private var seenStatusSessionIDs: Set<String> = []
     private(set) var lastSweep = Date.distantPast
+    /// The first sweep since launch has come back. Later sweeps refresh the
+    /// list quietly, so they never put the rows back into a loading state.
+    @Published private(set) var firstSweepFinished = false
     /// The shortest wait between sweeps the status feed asks for.
     static let liveSweepSpacing: TimeInterval = 20
 
@@ -1128,7 +1137,7 @@ public final class AgentLaneStore: ObservableObject {
     static let discoveryInterval: TimeInterval = 600
     /// How long after launch (or a backend registering) the first ask
     /// waits, so the app's own lanes and the restore are in first.
-    static let firstDiscoveryDelay: TimeInterval = 3
+    static let firstDiscoveryDelay: TimeInterval = 0.5
 
     private var discoveryTimer: CadenceTimer?
     private var discoveryKick: Task<Void, Never>?
@@ -1182,6 +1191,7 @@ public final class AgentLaneStore: ObservableObject {
             }
             guard let self else { return }
             self.sweepingSessions = false
+            self.firstSweepFinished = true
             self.received(found: found)
         }
     }
@@ -1198,7 +1208,10 @@ public final class AgentLaneStore: ObservableObject {
     private func reconcileDetached() {
         guard configuration.findsDetachedSessions else { return }
         let rows = lanes.filter { !detachedIDs.contains($0.id) }
-        let wanted = DetachedSessions.unclaimed(discovered, lanes: rows, backends: backends, heldSessionIDs: heldSessionIDs,
+        let inScope = configuration.sessionScope.map { scope in
+            discovered.filter { scope($0.session.directory, $0.session.host) }
+        } ?? discovered
+        let wanted = DetachedSessions.unclaimed(inScope, lanes: rows, backends: backends, heldSessionIDs: heldSessionIDs,
                                                 ownedSessionIDs: ownedSessionIDs)
         let wantedIDs = Set(wanted.map(DetachedSessions.laneID))
         for id in detachedIDs where !wantedIDs.contains(id) && sessions[id]?.isAttached != true {
@@ -1208,7 +1221,7 @@ public final class AgentLaneStore: ObservableObject {
         // Until the hosts first say which lane owns which session, a found
         // row is not added: it could be a lane's own, and would go again.
         for found in wanted where backends[found.backendID] != nil
-            && (!awaitingFirstBindings || lanes.contains { $0.id == DetachedSessions.laneID(found) }) {
+            && (!awaitingBindings(for: found) || lanes.contains { $0.id == DetachedSessions.laneID(found) }) {
             let lane = DetachedSessions.lane(for: found, sharesName: DetachedSessions.sharesName(found, in: shared))
             if let index = lanes.firstIndex(where: { $0.id == lane.id }) {
                 // A name another session took or gave up since the row was made.
@@ -1460,6 +1473,28 @@ public final class AgentLaneStore: ObservableObject {
                 let listing = await HostSessions.list(host: local ? nil : name, config: config)
                 self?.received(listing, from: name)
             }
+        }
+    }
+
+    /// Whether a found session's host has yet to say which lane owns it. Only
+    /// that host holds its rows back, so a slow or offline Mac delays no other.
+    private func awaitingBindings(for found: DetachedSessions.Found) -> Bool {
+        guard awaitingFirstBindings else { return false }
+        guard let hosts = listingHosts else { return true }
+        return hostAsksGoing.contains(found.session.host ?? hosts.selfName)
+    }
+
+    /// Ask one host again, after it did not answer. Its rows go back to
+    /// checking until it does.
+    public func retryHost(_ name: String) {
+        guard let config = configuration.hostSessions, let hosts = listingHosts,
+              HostSessions.askedHosts(hosts).contains(where: { $0.name == name }),
+              hostAsksGoing.insert(name).inserted else { return }
+        unknownHosts.remove(name)
+        let local = name == hosts.selfName
+        Task { @MainActor [weak self] in
+            let listing = await HostSessions.list(host: local ? nil : name, config: config)
+            self?.received(listing, from: name)
         }
     }
 
