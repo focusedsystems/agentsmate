@@ -307,6 +307,8 @@ enum DetachedSessions {
                              backendID: found.backendID, isClosable: false, statusMatch: match)
         lane.sessionName = session.name
         lane.agentSessionID = id
+        if let full = session.sessionID, session.kind == ClaudeBackgroundLaneBackend.kind,
+           ClaudeBackgroundLaneBackend.isValidConversationID(full) { lane.agentConversationID = full }
         return lane
     }
 
@@ -340,10 +342,11 @@ enum DetachedSessions {
     /// Whether a lane's row already attaches the session: by the name its
     /// backend knows it by, else the name its status is matched by, else
     /// (when the backend cannot name the lane) by folder.
-    static func claims(_ lane: AgentLane, backend: any LaneBackend, _ session: DiscoveredSession) -> Bool {
+    static func claims(_ lane: AgentLane, backend: any LaneBackend, _ session: DiscoveredSession,
+                       byFolder: Bool = true) -> Bool {
         if let same = sameAgent(lane, session) { return same }
         if let name = laneName(lane, backend: backend) { return name == session.name }
-        guard let directory = session.directory else { return false }
+        guard byFolder, let directory = session.directory else { return false }
         return LaneStatusMatch.normalizedPath(directory) == LaneStatusMatch.normalizedPath(lane.path)
     }
 
@@ -388,8 +391,13 @@ enum DetachedSessions {
         let owned = Set(ownedSessionIDs.filter { rowIDs.contains($0.key) && !$0.value.agentID.isEmpty }.values)
         var reporters: [String: Set<String>] = [:]
         var backgroundPerFolder: [String: Int] = [:]
+        var tmuxPerFolder: [String: Int] = [:]
         var counted = Set<String>()
         for item in found {
+            if item.session.kind == TmuxLaneSessions.kind, item.session.host == nil, let directory = item.session.directory,
+               counted.insert(item.session.key).inserted {
+                tmuxPerFolder[LaneStatusMatch.normalizedPath(directory), default: 0] += 1
+            }
             reporters[item.session.key, default: []].insert(item.backendID)
             if item.session.kind == ClaudeBackgroundLaneBackend.kind, item.session.host == nil,
                let directory = item.session.directory, counted.insert(item.session.key).inserted {
@@ -420,7 +428,12 @@ enum DetachedSessions {
             let ids = reporters[key] ?? []
             let claimed = lanes.contains { lane in
                 guard let backend = backends[lane.backendID] else { return false }
-                if ids.contains(lane.backendID) { return claims(lane, backend: backend, session) }
+                if ids.contains(lane.backendID) {
+                    // Sessions that share a folder are told apart by name alone.
+                    let crowded = session.kind == TmuxLaneSessions.kind && session.host == nil
+                        && session.directory.map { tmuxPerFolder[LaneStatusMatch.normalizedPath($0)] ?? 0 > 1 } == true
+                    return claims(lane, backend: backend, session, byFolder: !crowded)
+                }
                 guard laneHost(backend) == session.host else { return false }
                 if let same = sameAgent(lane, session) { return same }
                 return laneName(lane, backend: backend) == session.name

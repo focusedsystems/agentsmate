@@ -135,6 +135,16 @@ public struct AgentLaneCommands: Commands {
             }
             .laneShortcut(store.shortcuts.binding(for: .reattach))
             .disabled(store.selectedID == nil)
+            Button("Resume") {
+                reveal()
+                if let id = store.selectedID { store.resumeBackground(id, stoppingBackground: false) }
+            }
+            .disabled(store.selectedID.map { !store.canResumeBackground($0) || store.isBackgroundLive($0) } ?? true)
+            Button("Resume Here (Stop Background)") {
+                reveal()
+                if let id = store.selectedID { store.resumeBackground(id, stoppingBackground: true) }
+            }
+            .disabled(store.selectedID.map { !store.canResumeBackground($0) || !store.isBackgroundLive($0) } ?? true)
             LaneReopenMenu(store: store, reveal: reveal)
             LaneRunOnMenu(store: store, id: store.selectedID, reveal: reveal)
             Button("Detach") {

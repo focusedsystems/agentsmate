@@ -816,6 +816,7 @@ public final class AgentLaneStore: ObservableObject {
                                       pinned: layout.pinned.contains(lane.id) ? true : nil,
                                       variant: lane.variant, sessionName: lane.sessionName,
                                       agentSessionID: lane.agentSessionID,
+                                      agentConversationID: lane.agentConversationID,
                                       selected: marksSelection && lane.id == selectedID ? true : nil,
                                       id: lane.id, host: lane.host,
                                       command: wrapper?.command, variantFlag: wrapper?.variantFlag)
@@ -886,6 +887,7 @@ public final class AgentLaneStore: ObservableObject {
         lane.variant = saved.variant
         lane.sessionName = saved.sessionName
         lane.agentSessionID = saved.agentSessionID
+        lane.agentConversationID = saved.agentConversationID
         lane.host = saved.host
         // A session the restore brings back attaches here, so its
         // Detached row (if the sweep already found it) goes.
@@ -2676,6 +2678,17 @@ public final class AgentLaneStore: ObservableObject {
         defer { syncSessionHolders() }
         let listed = records.filter { $0.event == ClaudeAgentsList.event }
         var holding = Set(lanes.compactMap(\.agentSessionID))
+        // A row that holds a short id learns the full session id behind it
+        // from that id's own record, never from a name or folder.
+        for index in lanes.indices {
+            guard let id = lanes[index].agentSessionID, lanes[index].host == nil,
+                  backends[lanes[index].backendID] is ClaudeBackgroundLaneBackend,
+                  let full = listed.first(where: { $0.agentID == id })?.sessionID,
+                  ClaudeBackgroundLaneBackend.isValidConversationID(full),
+                  lanes[index].agentConversationID != full else { continue }
+            lanes[index].agentConversationID = full
+            sessions[lanes[index].id]?.update(lane: lanes[index])
+        }
         for index in lanes.indices {
             let lane = lanes[index]
             guard lane.agentSessionID == nil, lane.host == nil, !detachedIDs.contains(lane.id),
@@ -2701,6 +2714,36 @@ public final class AgentLaneStore: ObservableObject {
         }
     }
 
+    /// Whether a Claude background row is a session this Mac can resume in
+    /// its own pane.
+    public func canResumeBackground(_ id: AgentLane.ID) -> Bool {
+        guard let session = sessions[id], session.lane.host == nil, session.lane.agentSessionID != nil else { return false }
+        return session.backend is ClaudeBackgroundLaneBackend
+    }
+
+    /// Whether the row's background session is running, per the daemon's
+    /// list. Unknown counts as running, so nothing is resumed over it.
+    public func isBackgroundLive(_ id: AgentLane.ID) -> Bool {
+        guard let session = sessions[id], let backend = session.backend as? ClaudeBackgroundLaneBackend,
+              let short = session.lane.agentSessionID else { return false }
+        return backend.liveness(of: short) != .stopped
+    }
+
+    /// Run `claude --resume <full session id>` in the row's own pane. With
+    /// `stoppingBackground`, `claude stop <id>` runs first and finishes
+    /// before it. Never starts a new session.
+    public func resumeBackground(_ id: AgentLane.ID, stoppingBackground: Bool) {
+        guard canResumeBackground(id), let session = sessions[id],
+              let backend = session.backend as? ClaudeBackgroundLaneBackend else { return }
+        if !stoppingBackground, isBackgroundLive(id) { return }
+        let launch = backend.resumeLaunch(for: session.lane, shell: AgentLaneSession.loginShell,
+                                          stoppingBackground: stoppingBackground)
+        session.detach()
+        session.resumeOnStart = false
+        session.attachOnlyLaunch = launch
+        open(id)
+    }
+
     /// Tell each Claude background backend which row holds which id.
     func syncSessionHolders() {
         var byID: [String: String] = [:]
@@ -2724,7 +2767,12 @@ public final class AgentLaneStore: ObservableObject {
     func apply(presence: [LanePresence]) {
         for session in sessions.values {
             let match = statusMatch(for: session)
-            let found = presence.locate(for: session.lane, match: match)
+            var found = presence.locate(for: session.lane, match: match)
+            // A pane with no Claude or Codex process is not a running agent.
+            if found?.presence.hasAgent == false { found = nil }
+            // A background session's row is its own session, never a tmux
+            // session that merely works in the same folder.
+            if session.backend is ClaudeBackgroundLaneBackend, found?.byName != true { found = nil }
             session.update(orphan: configuration.highlightsOrphans && found?.presence.attachedClients == 0 && !session.isAttached)
             session.update(present: found != nil, byName: found?.byName ?? false, name: found?.presence.name)
         }

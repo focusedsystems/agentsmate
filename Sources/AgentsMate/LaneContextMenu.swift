@@ -111,6 +111,20 @@ struct LaneContextMenu: View {
         }
     }
 
+    /// Resume and Resume Here for a Claude background row.
+    @ViewBuilder
+    private func resumeItems(_ id: AgentLane.ID) -> some View {
+        if store.canResumeBackground(id) {
+            let live = store.isBackgroundLive(id)
+            Button("Resume") { store.resumeBackground(id, stoppingBackground: false) }
+                .disabled(live)
+                .help("Continue this stopped session's conversation in this pane")
+            Button("Resume Here (Stop Background)") { store.resumeBackground(id, stoppingBackground: true) }
+                .disabled(!live)
+                .help("Stop the background session, then continue its conversation in this pane")
+        }
+    }
+
     /// A session found running with no row: reattach it here, adopt it
     /// into a section, or end it.
     @ViewBuilder
@@ -118,6 +132,7 @@ struct LaneContextMenu: View {
         let lane = session.lane
         Button("Reattach") { store.reattach(lane.id) }
             .help("Attach this session here; the row stays where it is listed")
+        resumeItems(lane.id)
         DetachedAdoptMenu(store: store, id: lane.id)
         Divider()
         Button("Stop Session") { store.stop(lane.id) }
@@ -139,6 +154,7 @@ struct LaneContextMenu: View {
         Button("Open \(session.title)") { store.open(lane.id) }
         Button("Reattach") { store.reattach(lane.id) }
             .disabled(!session.isStarted)
+        resumeItems(lane.id)
         if !store.configuration.reopenChoices.isEmpty {
             Menu("Reopen As") {
                 ForEach(store.configuration.reopenChoices, id: \.self) { choice in
