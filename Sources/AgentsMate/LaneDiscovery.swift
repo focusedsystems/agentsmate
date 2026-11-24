@@ -238,7 +238,9 @@ public struct TmuxLaneSessions: Sendable {
     /// ssh in batch mode (never prompting) when there is a host. Nil when
     /// the host is set but not valid.
     public func listCommand() -> (executable: String, arguments: [String])? {
-        let list = ["list-sessions", "-F", Self.listFormat]
+        // -u: without a UTF-8 locale (an app started from the Dock has none)
+        // tmux prints the tab between fields as an underscore, and nothing parses.
+        let list = ["-u", "list-sessions", "-F", Self.listFormat]
         guard host != nil else { return (tmux, list) }
         guard let host = validHost else { return nil }
         let remote = ([ShellQuote.quote(remoteTmux)] + list.map(ShellQuote.quote)).joined(separator: " ")

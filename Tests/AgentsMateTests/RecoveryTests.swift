@@ -88,7 +88,8 @@ final class TmuxLaneSessionsTests: XCTestCase {
     func testCommandLines() {
         let local = TmuxLaneSessions(prefixes: ["lane-"], tmux: "/opt/tmux")
         XCTAssertEqual(local.listCommand()?.executable, "/opt/tmux")
-        XCTAssertEqual(local.listCommand()?.arguments, ["list-sessions", "-F", TmuxLaneSessions.listFormat])
+        XCTAssertEqual(local.listCommand()?.arguments, ["-u", "list-sessions", "-F", TmuxLaneSessions.listFormat],
+                       "tmux is told to use UTF-8, or it prints the tabs between fields as underscores without a UTF-8 locale")
         XCTAssertEqual(local.stopCommand(session: "lane-a"), ["/opt/tmux", "kill-session", "-t", "=lane-a"])
         XCTAssertEqual(local.localAttachLine(session: "lane it's", fallback: nil),
                        #"exec '/opt/tmux' attach-session -t '=lane it'\''s'"#)

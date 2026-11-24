@@ -52,7 +52,7 @@ public struct TmuxPresenceSource: LanePresenceSource {
             let process = Process()
             process.qualityOfService = .background
             process.executableURL = URL(fileURLWithPath: tmux)
-            process.arguments = ["list-sessions", "-F", "#{session_name}\t#{session_attached}\t#{pane_current_path}\t#{pane_pid}"]
+            process.arguments = ["-u", "list-sessions", "-F", "#{session_name}\t#{session_attached}\t#{pane_current_path}\t#{pane_pid}"]
             let pipe = Pipe()
             process.standardOutput = pipe
             process.standardError = FileHandle.nullDevice
