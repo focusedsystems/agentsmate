@@ -188,7 +188,11 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         // A filter that would leave the list empty turns itself off; only a
         // search that matches nothing leaves the Show All overlay.
         .onChange(of: statusFilteredCount) { settleFilters(newest: nil) }
-        .onChange(of: searchText) { store.displayedSidebarSearch = searchText }
+        .onChange(of: searchText) {
+            store.displayedSidebarSearch = searchText
+            // Typing a search searches every lane, so the status chips go off.
+            if !searchText.trimmingCharacters(in: .whitespaces).isEmpty { dropStatusFilters() }
+        }
         .onAppear { settleFilters(newest: nil) }
         .overlay {
             if visibleLanes.isEmpty, !store.listedLanes.isEmpty {
@@ -408,12 +412,18 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         Self.visibleLanes(store: store, query: searchText, filters: activeFilters)
     }
 
-    /// A search that finds nothing shows every lane, as Show All does, without
+    /// A search is made across all lanes, so it sets the status filters aside;
+    /// one that finds nothing shows every lane, as Show All does, without
     /// the person having to ask: the search text stays, and the list comes back
     /// narrowed again as soon as the text matches something.
     static func visibleLanes(store: AgentLaneStore, query: String, filters: Set<LaneStatusFilter>) -> [AgentLane] {
         let found = matchingLanes(store: store, query: query, filters: filters)
         guard found.isEmpty, !query.trimmingCharacters(in: .whitespaces).isEmpty else { return found }
+        // A search the status filters hide drops the filters and keeps the search.
+        if !filters.isEmpty {
+            let anywhere = matchingLanes(store: store, query: query, filters: [])
+            if !anywhere.isEmpty { return anywhere }
+        }
         return store.listedLanes.filter { store.session(for: $0) != nil }
     }
 
@@ -481,7 +491,11 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         Binding(get: { activeFilters.contains(filter) },
                 set: { on in
                     setFilter(filter, on)
-                    if on { settleFilters(newest: filter) }
+                    if on {
+                        // A chip starts from the whole list, not from a search.
+                        searchText = ""
+                        settleFilters(newest: filter)
+                    }
                 })
     }
 
@@ -514,8 +528,12 @@ public struct AgentLaneSidebar<Accessory: View>: View {
 
     static func wantsYou(_ status: LaneDisplayStatus) -> Bool { LaneStatusFilter.wantsYou(status) }
 
-    private func clearFilters() {
+    private func dropStatusFilters() {
         for filter in LaneStatusFilter.allCases { setFilter(filter, false) }
+    }
+
+    private func clearFilters() {
+        dropStatusFilters()
         searchText = ""
     }
 

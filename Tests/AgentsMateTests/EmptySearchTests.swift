@@ -29,4 +29,11 @@ final class EmptySearchTests: XCTestCase {
         let store = store()
         XCTAssertEqual(AgentLaneSidebar<EmptyView>.visibleLanes(store: store, query: "", filters: [.running]), [])
     }
+
+    func testASearchTheFiltersHideDropsTheFiltersAndKeepsTheSearch() {
+        let store = store()
+        typealias Sidebar = AgentLaneSidebar<EmptyView>
+        XCTAssertEqual(Sidebar.visibleLanes(store: store, query: "api", filters: [.running]).map(\.id), ["api"])
+        XCTAssertEqual(Sidebar.visibleLanes(store: store, query: "api", filters: [.running, .idle]).map(\.id), ["api"])
+    }
 }
