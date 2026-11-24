@@ -134,7 +134,7 @@ public struct AgentsMainToolbar<ID: Hashable, Trailing: ToolbarContent>: Toolbar
     private let selection: Binding<ID>
     private let windowWidth: CGFloat
     private let onSelect: () -> Void
-    private let trailing: Trailing
+    private let trailing: Trailing?
 
     public init(agent: AgentsToolbarAgent?, history: AgentsToolbarHistory, tabs: [CollapsingTab<ID>],
                 selection: Binding<ID>, windowWidth: CGFloat, onSelect: @escaping () -> Void = {},
@@ -144,7 +144,7 @@ public struct AgentsMainToolbar<ID: Hashable, Trailing: ToolbarContent>: Toolbar
     }
 
     private init(agent: AgentsToolbarAgent?, history: AgentsToolbarHistory, tabs: [CollapsingTab<ID>],
-                 selection: Binding<ID>, windowWidth: CGFloat, onSelect: @escaping () -> Void, content: Trailing) {
+                 selection: Binding<ID>, windowWidth: CGFloat, onSelect: @escaping () -> Void, content: Trailing?) {
         self.agent = agent
         self.history = history
         self.tabs = tabs
@@ -186,14 +186,16 @@ public struct AgentsMainToolbar<ID: Hashable, Trailing: ToolbarContent>: Toolbar
         if #available(macOS 26.0, *) {
             ToolbarSpacer(.flexible, placement: .primaryAction)
         }
-        trailing
+        if let trailing { trailing }
     }
 }
 
-/// No controls after the tabs.
+/// No controls after the tabs. A toolbar built this way never draws it.
 public struct AgentsNoTrailing: ToolbarContent {
     public init() {}
-    public var body: some ToolbarContent {}
+    public var body: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) { EmptyView() }
+    }
 }
 
 extension AgentsMainToolbar where Trailing == AgentsNoTrailing {
@@ -201,7 +203,7 @@ extension AgentsMainToolbar where Trailing == AgentsNoTrailing {
     public init(agent: AgentsToolbarAgent?, history: AgentsToolbarHistory, tabs: [CollapsingTab<ID>],
                 selection: Binding<ID>, windowWidth: CGFloat, onSelect: @escaping () -> Void = {}) {
         self.init(agent: agent, history: history, tabs: tabs, selection: selection, windowWidth: windowWidth,
-                  onSelect: onSelect, content: AgentsNoTrailing())
+                  onSelect: onSelect, content: nil)
     }
 }
 
@@ -434,7 +436,7 @@ public struct AgentsToolbarStrip<ID: Hashable, Trailing: View>: View {
     private let selection: ID
     private let width: CGFloat
     private let search: (prompt: String, hint: String)?
-    private let trailing: Trailing
+    private let trailing: Trailing?
 
     public init(agent: AgentsToolbarAgent?, tabs: [CollapsingTab<ID>], selection: ID, width: CGFloat,
                 search: (prompt: String, hint: String)? = nil, @ViewBuilder trailing: () -> Trailing) {
