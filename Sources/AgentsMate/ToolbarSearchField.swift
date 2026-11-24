@@ -95,14 +95,21 @@ public struct AgentsToolbarSearchField<Results: View>: View {
                 .buttonStyle(.plain)
                 .help(scope.help)
             }
-            TextField("", text: text, prompt: Text(prompt).foregroundStyle(.secondary))
-                .textFieldStyle(.plain)
-                .focused($focused)
-                .onSubmit(onSubmit)
-                .onExitCommand {
-                    onClear()
-                    focused = false
-                }
+            if showsPopover {
+                TextField("", text: text, prompt: Text(prompt).foregroundStyle(.secondary))
+                    .textFieldStyle(.plain)
+                    .focused($focused)
+                    .onSubmit(onSubmit)
+                    .onExitCommand {
+                        onClear()
+                        focused = false
+                    }
+            } else {
+                // Offscreen a text field draws as a placeholder box.
+                Text(prompt)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
             if text.wrappedValue.isEmpty {
                 Text(hint)
                     .font(.system(size: 10 * fontScale, weight: .medium))
