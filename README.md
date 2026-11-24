@@ -358,6 +358,26 @@ minutes old, owned by another user, or writable by group or others. A host
 that has not reported lately keeps its cards, marked with when it was last
 seen.
 
+## What the app shows
+
+A running app writes what its sidebar and All Agents board show to
+`~/.local/state/agentsmate/<bundle id>/displayed.json` (under
+`$XDG_STATE_HOME` when that is an absolute path), so another tool can check
+a sidebar without a screenshot. The folder is mode 700 and the file mode 600,
+replaced atomically, about a second after anything shown changes. Set
+`Configuration.displayedExportFile` to another file, or to nil to turn it off;
+it defaults to nil outside an app bundle. `Configuration.agentsMateCommit`
+(or an `AgentsMateCommit` key in the app's Info.plist) fills `app.agentsmate_commit`.
+
+Read it, and set it against the live snapshot:
+
+```
+agentsmate-status displayed --app com.example.app
+agentsmate-status displayed --app com.example.app --compare ~/.local/state/agentsmate/live-sessions.json --json
+```
+
+The full schema is in [docs/displayed-export.md](docs/displayed-export.md).
+
 ## Sidebar shape
 
 Three choices shape the sidebar. Each app sets the default in

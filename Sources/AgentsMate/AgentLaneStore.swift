@@ -173,6 +173,14 @@ public final class AgentLaneStore: ObservableObject {
         /// Open All Agents with only the active sessions showing: the Active
         /// filter is turned on at each launch. One click on it shows every lane.
         public var opensActiveOnly: Bool
+        /// Where the running app writes what its sidebar and All Agents
+        /// board show (``DisplayedExport``), so other tools can check them
+        /// without a screenshot. Nil turns it off. The default is
+        /// ``defaultDisplayedExportFile``: nothing outside an app bundle.
+        public var displayedExportFile: URL?
+        /// The AgentsMate commit the app was built from, for that file; when
+        /// nil, the `AgentsMateCommit` key of the app's Info.plist.
+        public var agentsMateCommit: String?
 
         /// `~/Library/Caches/<bundle id>/agent-pull-requests.json`.
         public static var defaultPullRequestLedgerFile: URL { PullRequestLedgerCache.defaultURL() }
@@ -204,7 +212,11 @@ public final class AgentLaneStore: ObservableObject {
                     defaultRepositoryOrder: [String] = [], showsHome: Bool = true,
                     launchShows: AgentsLaunchDestination = .home, showsLaneIcons: Bool = true,
                     parallelSessions: ParallelSessionPlacement = .topLevel,
-                    liveSnapshotFile: URL? = LiveSessionSnapshot.standardURL, opensActiveOnly: Bool = true) {
+                    liveSnapshotFile: URL? = LiveSessionSnapshot.standardURL, opensActiveOnly: Bool = true,
+                    displayedExportFile: URL? = Configuration.defaultDisplayedExportFile,
+                    agentsMateCommit: String? = nil) {
+            self.displayedExportFile = displayedExportFile
+            self.agentsMateCommit = agentsMateCommit
             self.liveSnapshotFile = liveSnapshotFile
             self.opensActiveOnly = opensActiveOnly
             self.showsLaneIcons = showsLaneIcons
@@ -395,6 +407,7 @@ public final class AgentLaneStore: ObservableObject {
             MainActor.assumeIsolated { self?.apply(notes: notes) }
         }
         statusFeed?.start()
+        startDisplayedExport()
         if statusFeed != nil { startTranscripts() }
         if configuration.showsRowMetadata { startRowMetadata() }
         if configuration.notifies { notifier = LaneNotifier(store: self) }
@@ -1216,7 +1229,9 @@ public final class AgentLaneStore: ObservableObject {
             guard let self else { return }
             self.sweepingSessions = false
             self.firstSweepFinished = true
+            self.lastDiscoveryFinishedAt = Date()
             self.received(found: found)
+            self.displayedExporter?.changed()
         }
     }
 
@@ -1232,6 +1247,17 @@ public final class AgentLaneStore: ObservableObject {
     /// What the outside watcher last wrote (``Configuration/liveSnapshotFile``),
     /// read at launch; nil once nothing from it is still on show.
     private(set) var liveSnapshot: LiveSessionSnapshot?
+    /// The search text the sidebar and All Agents show, told by their views
+    /// for the displayed export.
+    var displayedSidebarSearch = "" {
+        didSet { if displayedSidebarSearch != oldValue { displayedExporter?.changed() } }
+    }
+    var displayedHomeSearch = "" {
+        didSet { if displayedHomeSearch != oldValue { displayedExporter?.changed() } }
+    }
+    /// When the last sweep for sessions came back.
+    var lastDiscoveryFinishedAt: Date?
+    var displayedExporter: DisplayedExporter?
     private(set) var liveSnapshotRead = false
     private var liveFoundSeeded = false
 

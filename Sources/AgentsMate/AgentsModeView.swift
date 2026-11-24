@@ -183,6 +183,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         // A filter that would leave the list empty turns itself off; only a
         // search that matches nothing leaves the Show All overlay.
         .onChange(of: statusFilteredCount) { settleFilters(newest: nil) }
+        .onChange(of: searchText) { store.displayedSidebarSearch = searchText }
         .onAppear { settleFilters(newest: nil) }
         .overlay {
             if visibleLanes.isEmpty, !store.lanes.isEmpty {
@@ -223,13 +224,22 @@ public struct AgentLaneSidebar<Accessory: View>: View {
     /// Whether the lanes show as one list with no section headings: the
     /// app turned them off, or there is only one section.
     private func isFlat(_ snapshot: AgentLaneStore.ListSnapshot) -> Bool {
+        Self.isFlat(snapshot, showsHeadings: showsHeadings)
+    }
+
+    static func isFlat(_ snapshot: AgentLaneStore.ListSnapshot, showsHeadings: Bool) -> Bool {
         !showsHeadings || snapshot.regularGroupCount <= 1
     }
 
     /// ``visibleGroups``, with the sections run together into one headless
     /// group when the list is flat.
     private func displayedGroups(_ snapshot: AgentLaneStore.ListSnapshot, flat: Bool) -> [LaneGroup] {
-        let groups = visibleGroups(snapshot)
+        Self.displayedGroups(snapshot, flat: flat, visible: Set(visibleLanes.map(\.id)), filtering: isFiltering)
+    }
+
+    static func displayedGroups(_ snapshot: AgentLaneStore.ListSnapshot, flat: Bool, visible: Set<AgentLane.ID>,
+                                filtering: Bool) -> [LaneGroup] {
+        let groups = visibleGroups(snapshot, visible: visible, filtering: filtering)
         guard flat else { return groups }
         let regular = groups.filter { !$0.isPinned && !$0.isDetached }
         var out = groups.filter(\.isPinned)
@@ -241,10 +251,9 @@ public struct AgentLaneSidebar<Accessory: View>: View {
 
     /// The groups with only the lanes the search and filters let through.
     /// While searching every group is shown open, so a match is never hidden.
-    private func visibleGroups(_ snapshot: AgentLaneStore.ListSnapshot) -> [LaneGroup] {
-        let visible = Set(visibleLanes.map(\.id))
-        let filtering = isFiltering
-        return snapshot.groups.compactMap { group in
+    static func visibleGroups(_ snapshot: AgentLaneStore.ListSnapshot, visible: Set<AgentLane.ID>,
+                              filtering: Bool) -> [LaneGroup] {
+        snapshot.groups.compactMap { group in
             var group = group
             group.lanes = group.lanes.filter { visible.contains($0.id) }
             if filtering, group.lanes.isEmpty { return nil }
@@ -395,15 +404,18 @@ public struct AgentLaneSidebar<Accessory: View>: View {
     /// The lanes the search and status filters let through. A search that
     /// matches a section's name lets all of that section's lanes through.
     private var visibleLanes: [AgentLane] {
-        let query = searchText.trimmingCharacters(in: .whitespaces).lowercased()
-        let sectionHits = query.isEmpty ? [] : Self.lanesInSections(matching: query, groups: store.groups,
-                                                                    section: store.layout.section(of:))
-        let filters = activeFilters
+        Self.visibleLanes(store: store, query: searchText, filters: activeFilters)
+    }
+
+    static func visibleLanes(store: AgentLaneStore, query rawQuery: String, filters: Set<LaneStatusFilter>) -> [AgentLane] {
+        let query = rawQuery.trimmingCharacters(in: .whitespaces).lowercased()
+        let sectionHits = query.isEmpty ? [] : lanesInSections(matching: query, groups: store.groups,
+                                                               section: store.layout.section(of:))
         let selected = store.selectedID
         return store.lanes.filter { lane in
             guard let session = store.session(for: lane) else { return false }
-            if !query.isEmpty, !sectionHits.contains(lane.id), !Self.matches(session, query: query) { return false }
-            var state = Self.filterState(session)
+            if !query.isEmpty, !sectionHits.contains(lane.id), !matches(session, query: query) { return false }
+            var state = filterState(session)
             // Opening an unread row reads it; it stays in the Unread list
             // while it is the one open, rather than vanishing under the click.
             if lane.id == selected { state.unread = true }
