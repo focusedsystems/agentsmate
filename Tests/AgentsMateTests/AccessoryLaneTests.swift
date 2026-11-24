@@ -81,8 +81,7 @@ final class AccessoryLaneTests: XCTestCase {
         second.detachAll()
     }
 
-    func testAllAgentsGlyphIsNotTheAppsRobot() {
-        XCTAssertEqual(AgentHomeSidebarButton.icon, .symbol("square.grid.2x2"))
+    func testAccessoryIconInitialisers() {
         XCTAssertEqual(AgentLane.Accessory(symbol: "x", label: "L").icon, .symbol("x"))
     }
 }
@@ -100,8 +99,63 @@ final class HeaderAlignmentTests: XCTestCase {
         XCTAssertEqual(AgentHomeView.headerHeight(top: 52, sidebarBottom: 60), AgentsModeMetrics.headerRowHeight)
     }
 
-    func testTheAllAgentsToolbarButtonIsAGridInTheSidebarColumn() {
-        XCTAssertEqual(AgentHomeSidebarButton.symbol, "square.grid.2x2")
-        XCTAssertTrue(AgentsToolbar.windowItemLabels.contains("All Agents"), "ranked with the window's own items, never overflowed first")
+}
+
+@MainActor
+final class AgentsCapsuleTests: XCTestCase {
+    private func store() -> AgentLaneStore {
+        let config = AgentLaneStore.Configuration(termProgram: "T", sessionFileDirectory: nil, findsDetachedSessions: false,
+                                                  sharedLanes: nil, liveSnapshotFile: nil, opensActiveOnly: false,
+                                                  displayedExportFile: nil)
+        let store = AgentLaneStore(configuration: config, backends: [CommandLaneBackend.shell], statusFeed: nil,
+                                   defaults: UserDefaults(suiteName: "agentsmate-capsule-\(UUID().uuidString)")!)
+        store.sync(lanes: [AgentLane(id: "a", title: "A", backendID: "shell")])
+        return store
+    }
+
+    func testTheIconIsOneSwappableValueAndTheTitleIsPlural() {
+        XCTAssertEqual(AgentsToolbar.agentsIcon, .bundled("bot"))
+        XCTAssertNotNil(LaneIconLibrary.bundledImage("bot"))
+        XCTAssertEqual(AgentsToolbar.agentsTitle, "Agents")
+        XCTAssertTrue(AgentsToolbar.windowItemLabels.contains("Agents"))
+        XCTAssertEqual(AgentsToolbarAgent(isOn: false) {}.icon, AgentsToolbar.agentsIcon)
+    }
+
+    func testTheBundledBotIsLucideZeroFourSixtyAndDrawsAsATemplate() throws {
+        let url = try XCTUnwrap(LaneIconLibrary.url(forBundled: "bot"))
+        let svg = try String(contentsOf: url, encoding: .utf8)
+        for shape in ["M12 8V4H8", "x=\"4\" y=\"8\" rx=\"2\"", "M2 14h2", "M20 14h2", "M15 13v2", "M9 13v2"] {
+            XCTAssertTrue(svg.contains(shape), "bot.svg lost \(shape): not the 0.460.0 drawing")
+        }
+        XCTAssertTrue(svg.contains("stroke=\"currentColor\""), "it takes the label's colour")
+    }
+
+    func testEnteringAgentsModeSelectsAllAgentsAndLeavingDoesNot() {
+        let store = store()
+        store.open("a")
+        XCTAssertFalse(store.isHomeShown)
+        var on = false
+        let off = AgentsToolbarAgent(isOn: false, store: store) { on = true }
+        off.press()
+        XCTAssertTrue(on)
+        XCTAssertTrue(store.isHomeShown, "entering lands on All Agents")
+        store.open("a")
+        let leaving = AgentsToolbarAgent(isOn: true, store: store) { on = false }
+        leaving.press()
+        XCTAssertFalse(on)
+        XCTAssertFalse(store.isHomeShown, "leaving only toggles the mode")
+    }
+
+    func testTheHelpNamesTheShortcutAndThereIsNoBadgeApi() {
+        XCTAssertTrue(AgentsToolbarAgent(isOn: false) {}.help.contains("⇧⌘A"))
+        XCTAssertTrue(AgentsToolbarAgent(isOn: true) {}.help.hasPrefix("Leave"))
+    }
+
+    func testTheStripDrawsTheCapsuleAtTheToggleHeight() throws {
+        let strip = AgentsToolbarButton(AgentsToolbarAgent(isOn: true) {}, drawsGlass: false)
+        let renderer = ImageRenderer(content: strip)
+        renderer.scale = 1
+        let image = try XCTUnwrap(renderer.nsImage)
+        XCTAssertEqual(image.size.height, AgentsToolbar.buttonHeight)
     }
 }

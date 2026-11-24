@@ -181,7 +181,7 @@ public struct LaneShortcutBindings: Codable, Equatable, Sendable {
         .forward: .init("]", command: true),
         .reattach: .init("r", command: true, shift: true),
         // ⇧⌘A, A for Agents; ⌘0 is Actual Size, here and in the apps.
-        .home: .init("a", command: true, shift: true),
+        .home: .init("a", command: true, option: true),
         .reopenSameAgent: .init("r", command: true, option: true),
         .reopenClaudeRemote: .init("c", command: true, shift: true),
         .reopenCodexRemote: .init("x", command: true, shift: true),

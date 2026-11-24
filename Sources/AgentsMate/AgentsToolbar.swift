@@ -8,6 +8,17 @@ public enum AgentsToolbar {
     public static let agentSymbol = NSImage(systemSymbolName: "apple.intelligence", accessibilityDescription: nil) != nil
         ? "apple.intelligence" : "sparkles"
 
+    /// The Agents button's icon: Lucide's `bot`, bundled. One value, so a
+    /// different robot (Phosphor `robot`, Tabler `robot-face`) is one change.
+    public static let agentsIcon = LaneIcon.bundled("bot")
+
+    /// The Agents button's title, and the label AppKit knows its item by.
+    public static let agentsTitle = "Agents"
+
+    /// The height of the circular sidebar toggle the button sits beside, and
+    /// so of the button.
+    public static let buttonHeight: CGFloat = 36
+
     /// The toolbar's leading and trailing controls each take up to this much,
     /// and the tab bar is centred, so it can use the window less twice this.
     public static let sideReserve: CGFloat = 620
@@ -17,22 +28,34 @@ public enum AgentsToolbar {
 
     /// The labels of the window-wide items, which AppKit keeps ahead of the
     /// app's own when the toolbar runs short.
-    public static let windowItemLabels: Set<String> = ["Back", "Forward", "Agent", "All Agents", "Search"]
+    public static let windowItemLabels: Set<String> = ["Back", "Forward", "Agents", "Search"]
 }
 
-/// What the toolbar's Agent button shows and does.
+/// What the toolbar's Agents button shows and does: one control for Agents
+/// mode, with All Agents as the view it opens on.
 public struct AgentsToolbarAgent {
     public var isOn: Bool
-    public var symbol: String
+    public var icon: LaneIcon
     public var help: String
     public var action: () -> Void
+    /// Entering Agents mode (the button pressed while off) selects All Agents
+    /// in this store first.
+    public var store: AgentLaneStore?
 
-    public init(isOn: Bool, symbol: String = AgentsToolbar.agentSymbol, help: String? = nil,
-                action: @escaping () -> Void) {
+    public init(isOn: Bool, store: AgentLaneStore? = nil, icon: LaneIcon = AgentsToolbar.agentsIcon,
+                help: String? = nil, action: @escaping () -> Void) {
         self.isOn = isOn
-        self.symbol = symbol
-        self.help = help ?? (isOn ? "Hide the agent terminal (⌘J or ⌃`)" : "Work with the agent in the terminal (⌘J or ⌃`)")
+        self.store = store
+        self.icon = icon
+        self.help = help ?? (isOn ? "Leave Agents (⇧⌘A)" : "Work with your agents (⇧⌘A)")
         self.action = action
+    }
+
+    /// Press the button: All Agents first when it is entering Agents mode.
+    @MainActor
+    func press() {
+        if !isOn { store?.showHome() }
+        action()
     }
 }
 
@@ -59,9 +82,9 @@ public struct AgentsToolbarHistory {
     }
 }
 
-/// The toolbar's Agent control, the first item at the far left: blue invites
-/// you into the agent; once it is open the button goes plain like the
-/// toolbar's other controls, with the same icon. ⌃` toggles it from anywhere.
+/// The toolbar's Agents control: a robot and "Agents", as tall as the circular
+/// sidebar toggle it sits beside, with a selected tint while Agents mode is on.
+/// It carries ⇧⌘A, which toggles Agents mode from anywhere.
 public struct AgentsToolbarButton: View {
     private let agent: AgentsToolbarAgent
     /// Off only offscreen, where the system's glass does not draw.
@@ -75,39 +98,38 @@ public struct AgentsToolbarButton: View {
     }
 
     public var body: some View {
-        let button = Button(action: agent.action) {
-            Label("Agent", systemImage: agent.symbol)
-                .labelStyle(.titleAndIcon)
+        let isOn = agent.isOn
+        let button = Button { agent.press() } label: {
+            HStack(spacing: 6) {
+                LaneIconView(icon: agent.icon, tint: isOn ? Color.accentColor : Color.primary, size: 16)
+                    .accessibilityHidden(true)
+                Text(AgentsToolbar.agentsTitle)
+            }
+            .foregroundStyle(isOn ? Color.accentColor : Color.primary)
+            .padding(.horizontal, 14)
+            .frame(height: AgentsToolbar.buttonHeight)
         }
-        styled(button)
-            .keyboardShortcut("`", modifiers: .control)
+        styled(button, isOn: isOn)
+            .keyboardShortcut("a", modifiers: [.command, .shift])
             .help(agent.help)
-            .accessibilityLabel("Agent")
-            .accessibilityValue(agent.isOn ? "On" : "Off")
-            .accessibilityAddTraits(agent.isOn ? .isSelected : [])
+            .accessibilityLabel(AgentsToolbar.agentsTitle)
+            .accessibilityValue(isOn ? "On" : "Off")
+            .accessibilityAddTraits(isOn ? .isSelected : [])
     }
 
     @ViewBuilder
-    private func styled(_ button: some View) -> some View {
-        let isOn = agent.isOn
+    private func styled(_ button: some View, isOn: Bool) -> some View {
         if !drawsGlass {
             button.buttonStyle(.plain)
-                .foregroundStyle(isOn ? Color.primary : Color.white)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 5)
-                .background(isOn ? Color.primary.opacity(0.12) : Color.accentColor, in: Capsule())
+                .background(isOn ? Color.accentColor.opacity(0.22) : Color.primary.opacity(0.08), in: Capsule())
         } else if #available(macOS 26.0, *) {
-            // Both states are drawn here at the same size, so the button does
-            // not shift when clicked. The window toolbar greys out
-            // .glassProminent's tint, so the blue is drawn as tinted glass.
             button.buttonStyle(.plain)
-                .foregroundStyle(isOn ? Color.primary : Color.white)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 5)
-                .glassEffect(isOn ? .regular.interactive() : .regular.tint(.accentColor).interactive(), in: .capsule)
+                .glassEffect(isOn ? .regular.tint(Color.accentColor.opacity(0.28)).interactive() : .regular.interactive(),
+                             in: .capsule)
                 .contentShape(Capsule())
         } else {
-            if isOn { button.buttonStyle(.bordered) } else { button.buttonStyle(.borderedProminent).tint(.accentColor) }
+            button.buttonStyle(.plain)
+                .background(isOn ? Color.accentColor.opacity(0.22) : Color.primary.opacity(0.08), in: Capsule())
         }
     }
 }
@@ -142,17 +164,23 @@ public struct AgentsMainToolbar<ID: Hashable, Trailing: ToolbarContent>: Toolbar
     private let selection: Binding<ID>
     private let windowWidth: CGFloat
     private let onSelect: () -> Void
+    private let agentInSidebar: Bool
     private let trailing: Trailing?
 
+    /// `agentInSidebar` is true while the sidebar is expanded and carries the
+    /// Agents button in its own titlebar space (``View/agentsSidebarToolbar(_:visible:)``),
+    /// so the toolbar leaves it out; collapsed, it leads the toolbar.
     public init(agent: AgentsToolbarAgent?, history: AgentsToolbarHistory, tabs: [CollapsingTab<ID>],
-                selection: Binding<ID>, windowWidth: CGFloat, onSelect: @escaping () -> Void = {},
-                @ToolbarContentBuilder trailing: () -> Trailing) {
+                selection: Binding<ID>, windowWidth: CGFloat, agentInSidebar: Bool = false,
+                onSelect: @escaping () -> Void = {}, @ToolbarContentBuilder trailing: () -> Trailing) {
         self.init(agent: agent, history: history, tabs: tabs, selection: selection, windowWidth: windowWidth,
-                  onSelect: onSelect, content: trailing())
+                  agentInSidebar: agentInSidebar, onSelect: onSelect, content: trailing())
     }
 
     private init(agent: AgentsToolbarAgent?, history: AgentsToolbarHistory, tabs: [CollapsingTab<ID>],
-                 selection: Binding<ID>, windowWidth: CGFloat, onSelect: @escaping () -> Void, content: Trailing?) {
+                 selection: Binding<ID>, windowWidth: CGFloat, agentInSidebar: Bool, onSelect: @escaping () -> Void,
+                 content: Trailing?) {
+        self.agentInSidebar = agentInSidebar
         self.agent = agent
         self.history = history
         self.tabs = tabs
@@ -165,7 +193,7 @@ public struct AgentsMainToolbar<ID: Hashable, Trailing: ToolbarContent>: Toolbar
     public var body: some ToolbarContent {
         // Agent is the app's core action, so it sits at the far left, ahead
         // of history, on every tab.
-        if let agent {
+        if let agent, !agentInSidebar {
             if #available(macOS 26.0, *) {
                 ToolbarItem(placement: .navigation) {
                     AgentsToolbarButton(agent)
@@ -209,9 +237,10 @@ public struct AgentsNoTrailing: ToolbarContent {
 extension AgentsMainToolbar where Trailing == AgentsNoTrailing {
     /// A toolbar with nothing after the tabs.
     public init(agent: AgentsToolbarAgent?, history: AgentsToolbarHistory, tabs: [CollapsingTab<ID>],
-                selection: Binding<ID>, windowWidth: CGFloat, onSelect: @escaping () -> Void = {}) {
+                selection: Binding<ID>, windowWidth: CGFloat, agentInSidebar: Bool = false,
+                onSelect: @escaping () -> Void = {}) {
         self.init(agent: agent, history: history, tabs: tabs, selection: selection, windowWidth: windowWidth,
-                  onSelect: onSelect, content: nil)
+                  agentInSidebar: agentInSidebar, onSelect: onSelect, content: nil)
     }
 }
 
@@ -255,6 +284,27 @@ private struct WindowWidthReader: ViewModifier {
 }
 
 extension View {
+    /// The Agents button in the sidebar column's titlebar space, beside the
+    /// sidebar toggle, while the sidebar is `visible`. Put it on the sidebar's
+    /// content, and pass the same flag as `agentInSidebar` to
+    /// ``AgentsMainToolbar`` so the button is in one place at a time. The item
+    /// is declared either way (removing it left an empty glass pill) and only
+    /// its content comes and goes.
+    public func agentsSidebarToolbar(_ agent: AgentsToolbarAgent, visible: Bool) -> some View {
+        toolbar {
+            if #available(macOS 26.0, *) {
+                ToolbarItem(placement: .automatic) {
+                    if visible { AgentsToolbarButton(agent) }
+                }
+                .sharedBackgroundVisibility(.hidden)
+            } else {
+                ToolbarItem(placement: .automatic) {
+                    if visible { AgentsToolbarButton(agent) }
+                }
+            }
+        }
+    }
+
     /// Gives the window the toolbar's chrome: the width the tab bar needs,
     /// the ranking of its items, and, when `search` is given, the search field
     /// pinned to the title bar at the width it is handed. Put the
@@ -340,7 +390,7 @@ struct AgentsToolbarPriorityBridge: NSViewRepresentable {
                     priority = .high
                 } else if labels.contains(item.label) {
                     priority = .high
-                    if item.label == "Agent" { useAgentSymbol(item) }
+                    if item.label == AgentsToolbar.agentsTitle { useAgentsIcon(item) }
                 } else {
                     priority = .low
                 }
@@ -348,12 +398,17 @@ struct AgentsToolbarPriorityBridge: NSViewRepresentable {
             }
         }
 
-        /// The overflow menu drew Agent with a generic glyph; it is the
-        /// agent symbol everywhere.
-        private func useAgentSymbol(_ item: NSToolbarItem) {
-            let image = NSImage(systemSymbolName: AgentsToolbar.agentSymbol, accessibilityDescription: "Agent")
+        /// The overflow menu drew Agents with a generic glyph; it is the
+        /// Agents icon everywhere.
+        private func useAgentsIcon(_ item: NSToolbarItem) {
+            let image: NSImage?
+            switch AgentsToolbar.agentsIcon {
+            case .symbol(let name): image = LaneIconLibrary.symbolImage(name)
+            case .bundled(let name): image = LaneIconLibrary.bundledImage(name)
+            }
+            guard let image else { return }
             if item.image == nil { item.image = image }
-            if let menuItem = item.menuFormRepresentation, menuItem.image?.name() != image?.name() {
+            if let menuItem = item.menuFormRepresentation, menuItem.image !== image {
                 menuItem.image = image
                 item.menuFormRepresentation = menuItem
             }
