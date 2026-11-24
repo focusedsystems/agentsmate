@@ -315,6 +315,42 @@ final class OwnedSessionTests: XCTestCase {
                        "while the owned session is not listed the row shows no other")
     }
 
+    private func listing(live: Bool) -> HostSessionListing {
+        let running = LaneStatus(agent: "claude", state: .running, lane: "Nutrition", directory: folder,
+                                 sessionID: "f4eced18-1111-2222", event: ClaudeAgentsList.event, agentID: "f4eced18")
+        return HostSessionListing(claude: live ? [running] : [], bindings: ["Nutrition": "f4eced18"])
+    }
+
+    func testARowWithALiveBoundSessionOpensThatSessionAndNeverANewOne() throws {
+        let store = store()
+        store.received(listing(live: true), from: "hub-mac", hosts: hosts)
+        let session = try XCTUnwrap(store.sessions["Nutrition"])
+        let launch = try XCTUnwrap(store.boundSessionLaunch(for: session), "attaches the session its summary comes from")
+        XCTAssertTrue(launch.arguments.last?.hasSuffix("attach 'f4eced18'") == true, "\(launch.arguments)")
+        XCTAssertEqual(launch.directory, folder)
+        store.start(session)
+        XCTAssertNil(session.attachOnlyLaunch, "consumed by the start, which ran that launch and not the backend's")
+        session.detach()
+    }
+
+    func testARowWhoseBoundSessionIsNotLiveKeepsItsOwnBackend() throws {
+        let store = store()
+        store.received(listing(live: false), from: "hub-mac", hosts: hosts)
+        XCTAssertNil(store.boundSessionLaunch(for: try XCTUnwrap(store.sessions["Nutrition"])))
+        let unbound = self.store()
+        unbound.received(HostSessionListing(claude: [], bindings: [:]), from: "hub-mac", hosts: hosts)
+        XCTAssertNil(unbound.boundSessionLaunch(for: try XCTUnwrap(unbound.sessions["Nutrition"])))
+    }
+
+    func testTheDisplayedRowNamesTheSessionItIsBoundTo() throws {
+        let store = store()
+        store.received(listing(live: true), from: "hub-mac", hosts: hosts)
+        store.defaults.set(false, forKey: store.keys.filterOpen)
+        let export = store.displayedExport()
+        let row = try XCTUnwrap(export.rows.first { $0.laneID == "Nutrition" }, "\(export.rows.map(\.laneID))")
+        XCTAssertEqual(row.sessionID, "f4eced18", "session_id is the session the row attaches")
+    }
+
     private let row = AgentLane(id: "n", title: "Other", directory: URL(fileURLWithPath: "/x"), backendID: "claude-bg")
     private let backends: [String: any LaneBackend] = ["claude-bg": ClaudeBackgroundLaneBackend(id: "claude-bg")]
 
