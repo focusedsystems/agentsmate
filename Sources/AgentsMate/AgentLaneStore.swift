@@ -598,7 +598,9 @@ public final class AgentLaneStore: ObservableObject {
     /// unread mark changes and whenever a row goes, so a badge never outlives
     /// the row that asked for it.
     func updateBadge() {
-        let count = unreadLanes.count
+        // From the lanes themselves, not the cached list, which may not have
+        // caught up with a change that has just been made.
+        let count = lanes.filter { sessions[$0.id]?.needsAttention == true }.count
         badgeCount = count
         guard configuration.notifies, LaneNotifier.isAvailable else { return }
         NSApp.dockTile.badgeLabel = count > 0 ? String(count) : nil
