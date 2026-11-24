@@ -42,10 +42,18 @@ public struct AgentsToolbarHistory {
     public var canGoForward: Bool
     public var goBack: () -> Void
     public var goForward: () -> Void
+    /// The shortcuts the app's menu really gives Back and Forward, such as
+    /// `⌘[`, for the tooltips. Nil shows none, so a tooltip never names a key
+    /// the app does not use.
+    public var backShortcut: String?
+    public var forwardShortcut: String?
 
-    public init(canGoBack: Bool, canGoForward: Bool, goBack: @escaping () -> Void, goForward: @escaping () -> Void) {
+    public init(canGoBack: Bool, canGoForward: Bool, backShortcut: String? = nil, forwardShortcut: String? = nil,
+                goBack: @escaping () -> Void, goForward: @escaping () -> Void) {
         self.canGoBack = canGoBack
         self.canGoForward = canGoForward
+        self.backShortcut = backShortcut
+        self.forwardShortcut = forwardShortcut
         self.goBack = goBack
         self.goForward = goForward
     }
@@ -114,12 +122,12 @@ public struct AgentsToolbarHistoryButtons: View {
         Button(action: history.goBack) {
             Label("Back", systemImage: "chevron.left")
         }
-        .help("Back (⌘[)")
+        .help(history.backShortcut.map { "Back (\($0))" } ?? "Back")
         .disabled(!history.canGoBack)
         Button(action: history.goForward) {
             Label("Forward", systemImage: "chevron.right")
         }
-        .help("Forward (⌘])")
+        .help(history.forwardShortcut.map { "Forward (\($0))" } ?? "Forward")
         .disabled(!history.canGoForward)
     }
 }

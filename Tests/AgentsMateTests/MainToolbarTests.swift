@@ -36,3 +36,14 @@ final class MainToolbarTests: XCTestCase {
         XCTAssertTrue(AgentsToolbarAgent(isOn: false) {}.help.hasPrefix("Work with"))
     }
 }
+
+final class HistoryShortcutTests: XCTestCase {
+    func testTheTooltipsNameOnlyTheShortcutsTheAppGives() {
+        let none = AgentsToolbarHistory(canGoBack: true, canGoForward: true, goBack: {}, goForward: {})
+        XCTAssertNil(none.backShortcut)
+        let some = AgentsToolbarHistory(canGoBack: true, canGoForward: true, backShortcut: "⌥⌘[",
+                                        forwardShortcut: "⌥⌘]", goBack: {}, goForward: {})
+        XCTAssertEqual(some.backShortcut, "⌥⌘[")
+        XCTAssertEqual(some.forwardShortcut, "⌥⌘]")
+    }
+}
