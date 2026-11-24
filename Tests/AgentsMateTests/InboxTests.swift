@@ -81,3 +81,42 @@ final class InboxStoreTests: XCTestCase {
         XCTAssertEqual(opened, [url], "an untrusted link never reaches the hook")
     }
 }
+
+@MainActor
+final class BadgeCountTests: XCTestCase {
+    private func makeStore() -> AgentLaneStore {
+        AgentLaneStore(configuration: .init(termProgram: "T", sessionFileDirectory: nil),
+                       backends: [CommandLaneBackend.shell], statusFeed: nil,
+                       defaults: UserDefaults(suiteName: "agentsmate-badge-\(UUID().uuidString)")!)
+    }
+
+    private func unread(_ session: AgentLaneSession) {
+        session.update(record: LaneStatus(agent: "claude", state: .running, lane: session.id, event: "UserPromptSubmit"))
+        session.update(record: LaneStatus(agent: "claude", state: .done, lane: session.id, event: "Stop",
+                                          updatedAt: Date(timeIntervalSinceNow: 1)))
+    }
+
+    func testBadgeFollowsTheUnreadRowsWhenTheMarkClearsOnItsOwn() {
+        let store = makeStore()
+        store.sync(lanes: [AgentLane(id: "a", title: "A", backendID: "shell")])
+        let a = store.sessions["a"]!
+        unread(a)
+        XCTAssertEqual(store.badgeCount, 1)
+        a.update(record: LaneStatus(agent: "claude", state: .running, lane: "a", event: "UserPromptSubmit",
+                                    updatedAt: Date(timeIntervalSinceNow: 2)))
+        XCTAssertTrue(store.unreadLanes.isEmpty)
+        XCTAssertEqual(store.badgeCount, 0, "a row that is no longer unread takes its badge with it")
+    }
+
+    func testBadgeDropsWhenTheUnreadRowGoes() {
+        let store = makeStore()
+        store.sync(lanes: [AgentLane(id: "a", title: "A", backendID: "shell"),
+                           AgentLane(id: "b", title: "B", backendID: "shell")])
+        unread(store.sessions["a"]!)
+        unread(store.sessions["b"]!)
+        XCTAssertEqual(store.badgeCount, 2)
+        store.sync(lanes: [AgentLane(id: "b", title: "B", backendID: "shell")])
+        XCTAssertEqual(store.badgeCount, store.unreadLanes.count)
+        XCTAssertNil(store.sessions["a"])
+    }
+}
