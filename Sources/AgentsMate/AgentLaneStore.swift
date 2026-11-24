@@ -1943,9 +1943,11 @@ public final class AgentLaneStore: ObservableObject {
         }
     }
 
-    /// Every backend a lane can run on, by name.
+    /// Every backend a lane can run on, by name. The backend of an accessory lane is left out: it runs that lane and
+    /// nothing else, so no menu offers it for a new, duplicated or switched lane.
     public var availableBackends: [any LaneBackend] {
-        backends.values.sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
+        let hidden = Set(accessoryLanes.map(\.backendID)).subtracting(listedLanes.map(\.backendID))
+        return backends.values.filter { !hidden.contains($0.id) }.sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
     }
 
     /// A new lane like this one, in the same folder and section, just after

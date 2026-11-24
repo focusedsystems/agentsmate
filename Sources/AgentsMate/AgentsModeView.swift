@@ -1447,7 +1447,8 @@ struct AgentHomeSidebarButton: View {
 
 /// The button for a lane the app lists nowhere else (``AgentLane/Accessory``):
 /// it sits in the filter bar, opens the lane in the detail pane and shows as
-/// selected while that pane is showing.
+/// selected while that pane is showing. A plain borderless button, as its
+/// neighbours are, tinted only while selected.
 struct AgentAccessoryLaneButton: View {
     @ObservedObject var store: AgentLaneStore
     let lane: AgentLane
@@ -1456,17 +1457,11 @@ struct AgentAccessoryLaneButton: View {
     var body: some View {
         let selected = store.isShowingAccessory(lane.id)
         Button { store.open(lane.id) } label: {
-            LaneIconView(icon: accessory.icon, size: 14)
-                .frame(width: 18, height: 18)
-                .foregroundStyle(selected ? Color.white : Color.primary)
-                .padding(3)
-                .background {
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(selected ? Color.accentColor : Color.clear)
-                }
+            LaneIconView(icon: accessory.icon, tint: selected ? .accentColor : .primary, size: 14)
+                .frame(width: 24, height: 22)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.borderless)
         .help(accessory.label)
         .accessibilityLabel(accessory.label)
         .accessibilityAddTraits(selected ? .isSelected : [])
