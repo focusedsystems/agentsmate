@@ -45,6 +45,10 @@ public struct AgentLane: Identifiable, Hashable, Sendable {
     /// session's id. Several sessions can share a name, so a backend that
     /// can attach by id does so rather than by ``sessionName``.
     public var agentSessionID: String?
+    /// A row that must start a session of its own, such as a duplicate: its
+    /// first launch starts one and binds only the id that start prints,
+    /// never a running session found by name.
+    public var startsNewSession = false
     /// The host the lane runs on, by its name in the hosts registry
     /// (``AgentHosts``), or nil for the default. When set, the lane's
     /// terminal gets `CLAUDE_REMOTE_HOST` and `CODEX_REMOTE_HOST` naming it,

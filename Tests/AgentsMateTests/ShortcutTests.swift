@@ -122,6 +122,7 @@ final class DuplicateVariantTests: XCTestCase {
         let copy = store.duplicate("a", focus: false)!
         XCTAssertEqual(copy.lane.backendID, "bg")
         XCTAssertEqual(copy.lane.sessionName, "Create 2")
+        XCTAssertTrue(copy.lane.startsNewSession)
         XCTAssertNil(copy.lane.agentSessionID)
         XCTAssertFalse(background.launch(for: copy.lane, shell: "/bin/zsh").arguments.last?.contains("7c4cc4bb") == true)
         store.detachAll()

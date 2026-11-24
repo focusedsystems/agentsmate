@@ -33,6 +33,31 @@ public struct ClaudeBackgroundLaneBackend: LaneBackend {
     /// rather than run again while it is fresh.
     public var agentsListCache: URL = ClaudeBackgroundLaneBackend.defaultAgentsListCache
 
+    /// Where a lane's start line writes the short id `claude --bg` printed,
+    /// one file per lane id, for the store to bind to the row.
+    public var startedIDDirectory: URL = ClaudeBackgroundLaneBackend.defaultStartedIDDirectory
+
+    /// Which row holds which short id, kept by the store, so a name never
+    /// resolves to a session another row already has.
+    public var holders = SessionHolders()
+
+    public static var defaultStartedIDDirectory: URL {
+        LaneStatusDirectory.default().url.deletingLastPathComponent().appendingPathComponent("claude-bg-started")
+    }
+
+    /// The file a lane's start line writes its new session's id to.
+    public func startedIDFile(for lane: AgentLane) -> URL {
+        let safe = String(lane.id.map { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") ? $0 : "_" })
+        return startedIDDirectory.appendingPathComponent(safe)
+    }
+
+    /// The id a lane's start line recorded, when it is a valid short id.
+    public func startedID(for lane: AgentLane) -> String? {
+        guard let raw = try? String(contentsOf: startedIDFile(for: lane), encoding: .utf8) else { return nil }
+        let id = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return HostSessions.isValidAgentID(id) ? id : nil
+    }
+
     public static var defaultAgentsListCache: URL {
         LaneStatusDirectory.default().url.deletingLastPathComponent().appendingPathComponent("claude-agents.json")
     }
@@ -68,8 +93,12 @@ public struct ClaudeBackgroundLaneBackend: LaneBackend {
             line = "exec \(claude) attach \(ShellQuote.quote(id))"
         case .several(let ids):
             line = Self.ambiguousLine(name: name, ids: ids)
+        case .held:
+            let message = "Another row already has the session named “\(name)” open, so it was not attached here."
+            line = "printf '%s\\n' \(ShellQuote.quote(message)); exit 1"
         case .none:
-            line = Self.startLine(claude: claude, name: name, arguments: startArguments)
+            line = Self.startLine(claude: claude, name: name, arguments: startArguments,
+                                  recordingTo: startedIDFile(for: lane).path)
         case .elsewhere(let host):
             let message = "“\(name)” runs on \(host), and its session id is not known here, so nothing was attached."
             line = "printf '%s\\n' \(ShellQuote.quote(message)); exit 1"
@@ -79,14 +108,18 @@ public struct ClaudeBackgroundLaneBackend: LaneBackend {
 
     /// Start a new background session named `name` in the lane's folder,
     /// read the short id `claude --bg` prints, and attach that id.
-    static func startLine(claude: String, name: String, arguments: [String]) -> String {
+    static func startLine(claude: String, name: String, arguments: [String], recordingTo file: String? = nil) -> String {
         let start = ([claude, "--bg", "-n", ShellQuote.quote(name)] + arguments.map(ShellQuote.quote)).joined(separator: " ")
         // `backgrounded · <id> · <name>`, then `claude attach <id>` among the hints.
         let parse = "sed -n -e 's/^backgrounded [^ ]* \\([A-Za-z0-9][A-Za-z0-9-]*\\) .*/\\1/p'"
             + " -e 's/^ *claude attach \\([A-Za-z0-9][A-Za-z0-9-]*\\).*/\\1/p' | head -n 1"
         let failed = ShellQuote.quote("Claude started the session but did not print its id, so it was not attached.")
+        let record = file.map { path in
+            let dir = ShellQuote.quote((path as NSString).deletingLastPathComponent)
+            return "mkdir -p \(dir) 2>/dev/null; printf '%s\\n' \"$id\" > \(ShellQuote.quote(path)) 2>/dev/null; "
+        } ?? ""
         return "out=$(\(start)) || exit; id=$(printf '%s\\n' \"$out\" | \(parse)); "
-            + "[ -n \"$id\" ] || { printf '%s\\n' \(failed) \"$out\"; exit 1; }; exec \(claude) attach \"$id\""
+            + "[ -n \"$id\" ] || { printf '%s\\n' \(failed) \"$out\"; exit 1; }; \(record)exec \(claude) attach \"$id\""
     }
 
     /// A message in the pane when several running sessions have the lane's
@@ -112,16 +145,24 @@ public struct ClaudeBackgroundLaneBackend: LaneBackend {
         case none
         /// The lane is on another host, which this Mac's list cannot speak for.
         case elsewhere(String)
+        /// The one session with the name is another row's.
+        case held(String)
     }
 
     /// The session `lane` attaches: the id the row knows, else the running
     /// session in the shared list with the lane's name and folder.
     func resolution(for lane: AgentLane) -> Resolution {
         if let id = lane.agentSessionID, HostSessions.isValidAgentID(id) { return .one(id) }
+        if let id = startedID(for: lane) { return .one(id) }
         // This Mac's list says nothing about another host's sessions.
         if let host = lane.host, !host.isEmpty { return .elsewhere(host) }
+        // A row that must start its own session never takes one by name.
+        if lane.startsNewSession { return .none }
         guard let data = try? Data(contentsOf: agentsListCache) else { return .none }
-        return Self.resolve(name: sessionName(for: lane) ?? name(lane), in: lane.path, records: ClaudeAgentsList.parse(data))
+        let found = Self.resolve(name: sessionName(for: lane) ?? name(lane), in: lane.path,
+                                 records: ClaudeAgentsList.parse(data, includeInteractive: false))
+        if case .one(let id) = found, let holder = holders.holder(of: id), holder != lane.id { return .held(id) }
+        return found
     }
 
     /// The short id to attach `lane` by, when exactly one is known.
@@ -136,7 +177,9 @@ public struct ClaudeBackgroundLaneBackend: LaneBackend {
     static func resolve(name: String, in folder: String, records: [LaneStatus]) -> Resolution {
         let folder = LaneStatusMatch.normalizedPath(folder)
         let found = records.filter { record in
-            record.state != .ended && record.directory.map(LaneStatusMatch.normalizedPath) == folder
+            // Only background sessions: an interactive one is never bound.
+            record.event == ClaudeAgentsList.event && record.message == ClaudeAgentsList.backgroundMessage
+                && record.state != .ended && record.directory.map(LaneStatusMatch.normalizedPath) == folder
                 && record.agentID.map(HostSessions.isValidAgentID) == true
                 && record.lane?.caseInsensitiveCompare(name) == .orderedSame
         }
@@ -201,6 +244,26 @@ public struct ClaudeBackgroundLaneBackend: LaneBackend {
     public func stop(_ lane: AgentLane) {
         guard let id = attachID(for: lane) else { return }
         LaneCommand.run([claude.isEmpty ? "claude" : claude, "stop", id])
+    }
+}
+
+/// Which row holds which Claude short id, shared by every copy of a backend.
+public final class SessionHolders: @unchecked Sendable {
+    private let lock = NSLock()
+    private var byID: [String: String] = [:]
+
+    public init() {}
+
+    /// Replace the record: lane id by short id.
+    public func set(_ holders: [String: String]) {
+        lock.lock(); defer { lock.unlock() }
+        byID = holders
+    }
+
+    /// The lane id of the row holding `id`, if any.
+    public func holder(of id: String) -> String? {
+        lock.lock(); defer { lock.unlock() }
+        return byID[id]
     }
 }
 

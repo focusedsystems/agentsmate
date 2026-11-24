@@ -729,6 +729,7 @@ public final class AgentLaneStore: ObservableObject {
                 lanes.append(lane)
             }
             makeSession(for: lane)
+            syncSessionHolders()
             apply(statusFeed?.records ?? [])
             if !detachedIDs.contains(lane.id) { reconcileDetached() }
         }
@@ -1757,14 +1758,32 @@ public final class AgentLaneStore: ObservableObject {
         // so the copy asks for a lane of its own: the next free number.
         lane.variant = nil
         lane.variant = freeVariant(for: lane)
-        let taken = Set(sessions.values.map(\.title))
-        let name = session.title.nextCopyName(taken: taken)
-        // A Claude background copy names its own new session after itself,
-        // so it never resolves to the source's session.
-        if backends[lane.backendID] is ClaudeBackgroundLaneBackend { lane.sessionName = name }
+        let name = session.title.nextCopyName(taken: copyNamesTaken(in: lane.path))
+        // A Claude background copy starts a session of its own, named after
+        // itself, and binds only the id that start prints.
+        if backends[lane.backendID] is ClaudeBackgroundLaneBackend {
+            lane.sessionName = name
+            lane.startsNewSession = true
+        }
         let added = add(lane, focus: focus, after: id)
         setName(lane.id, to: name)
         return added
+    }
+
+    /// Names a copy must not take: every row's title and session name, and
+    /// the sessions running in `folder` (found by the sweep, or in this
+    /// Mac's Claude list).
+    func copyNamesTaken(in folder: String) -> Set<String> {
+        var taken = Set(sessions.values.map(\.title))
+        taken.formUnion(lanes.compactMap(\.sessionName))
+        let path = normalizedPath(folder)
+        taken.formUnion(discovered.filter { $0.session.directory.map(normalizedPath) == path }.map(\.session.name))
+        for backend in backends.values {
+            guard let claude = backend as? ClaudeBackgroundLaneBackend,
+                  let data = try? Data(contentsOf: claude.agentsListCache) else { continue }
+            taken.formUnion(ClaudeAgentsList.parse(data).filter { $0.directory.map(normalizedPath) == path }.compactMap(\.lane))
+        }
+        return taken
     }
 
     /// What a "Same Agent" duplicate of `source` runs. A lane on an agent
@@ -1791,8 +1810,15 @@ public final class AgentLaneStore: ObservableObject {
         let sharing = lanes.filter { $0.backendID == lane.backendID && normalizedPath($0.path) == path }
         guard !sharing.isEmpty else { return nil }
         let used = Set(sharing.map { $0.variant ?? "1" })
+        // A variant whose session still runs with no row would attach it.
+        let running = Set(discovered.filter { $0.backendID == lane.backendID }.map(\.session.name))
+        func live(_ variant: String) -> Bool {
+            var candidate = lane
+            candidate.variant = variant
+            return backend.sessionName(for: candidate).map(running.contains) ?? false
+        }
         var n = 2
-        while used.contains(String(n)) { n += 1 }
+        while used.contains(String(n)) || live(String(n)) { n += 1 }
         return String(n)
     }
 
@@ -2522,14 +2548,25 @@ public final class AgentLaneStore: ObservableObject {
     /// name that several sessions share, or an id another row holds, is
     /// left alone.
     func recordBackgroundSessionIDs(_ records: [LaneStatus]) {
+        defer { syncSessionHolders() }
         let listed = records.filter { $0.event == ClaudeAgentsList.event }
-        guard !listed.isEmpty else { return }
         var holding = Set(lanes.compactMap(\.agentSessionID))
         for index in lanes.indices {
             let lane = lanes[index]
             guard lane.agentSessionID == nil, lane.host == nil, !detachedIDs.contains(lane.id),
                   let backend = backends[lane.backendID] as? ClaudeBackgroundLaneBackend,
-                  let session = sessions[lane.id], session.isAttached,
+                  let session = sessions[lane.id] else { continue }
+            // The id its own start printed binds first, and is the only one
+            // a row that must start a new session ever takes.
+            if let id = backend.startedID(for: lane) {
+                lanes[index].agentSessionID = id
+                lanes[index].startsNewSession = false
+                holding.insert(id)
+                session.update(lane: lanes[index])
+                try? FileManager.default.removeItem(at: backend.startedIDFile(for: lane))
+                continue
+            }
+            guard !lane.startsNewSession, session.isAttached, !listed.isEmpty,
                   let name = backend.sessionName(for: lane),
                   case .one(let id) = ClaudeBackgroundLaneBackend.resolve(name: name, in: lane.path, records: listed),
                   !holding.contains(id) else { continue }
@@ -2537,6 +2574,13 @@ public final class AgentLaneStore: ObservableObject {
             holding.insert(id)
             session.update(lane: lanes[index])
         }
+    }
+
+    /// Tell each Claude background backend which row holds which id.
+    func syncSessionHolders() {
+        var byID: [String: String] = [:]
+        for lane in lanes { if let id = lane.agentSessionID { byID[id] = lane.id } }
+        for backend in backends.values { (backend as? ClaudeBackgroundLaneBackend)?.holders.set(byID) }
     }
 
     /// A note is found by the lane's id, or by the tmux session its status
