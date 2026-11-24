@@ -380,7 +380,7 @@ The full schema is in [docs/displayed-export.md](docs/displayed-export.md).
 
 ## Sidebar shape
 
-Three choices shape the sidebar. Each app sets the default in
+Four choices shape the sidebar. Each app sets the default in
 `Configuration`, and the person can change it under Settings, in
 `AgentSidebarSettingsSection` (part of `AgentLaneSettingsSection`, or
 `AgentSidebarSettingsControls` on its own). The person's choice is saved
@@ -389,6 +389,9 @@ under the app's `AgentsModeKeys` prefix and applies at once.
 - **Show section headings** (`showsSectionHeadings`).
 - **Show lane icons** (`showsLaneIcons`). Off, a row shows only its status
   dot.
+- **Show pull request pills** (`showsPullRequestPills`). Off by default: a
+  row and an All Agents card draw no pill for their pull requests. They stay
+  in the row's menu and hover.
 - **Parallel sessions** (`parallelSessions`). A session found for a lane is
   either a row of its own, as top-level as the lane's row, or indented under
   it. It follows that row either way. Unless the person gave it an icon, it

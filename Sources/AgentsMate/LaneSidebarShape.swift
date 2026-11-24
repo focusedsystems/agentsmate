@@ -23,8 +23,9 @@ public enum ParallelSessionPlacement: String, CaseIterable, Sendable, Identifiab
 /// ``AgentSidebarSettingsSection`` on top. Views read these through
 /// `@AppStorage` on the same keys, so a change applies at once.
 extension AgentLaneStore {
-    var sidebarDefaults: (headings: Bool, icons: Bool, parallel: ParallelSessionPlacement) {
-        (configuration.showsSectionHeadings, configuration.showsLaneIcons, configuration.parallelSessions)
+    var sidebarDefaults: (headings: Bool, icons: Bool, parallel: ParallelSessionPlacement, pullRequests: Bool) {
+        (configuration.showsSectionHeadings, configuration.showsLaneIcons, configuration.parallelSessions,
+         configuration.showsPullRequestPills)
     }
 
     /// The lane a found session belongs to, when it was placed under one.
@@ -68,6 +69,7 @@ public struct AgentSidebarSettingsControls: View {
     @AppStorage private var headings: Bool
     @AppStorage private var icons: Bool
     @AppStorage private var parallel: String
+    @AppStorage private var pullRequests: Bool
 
     public init(store: AgentLaneStore) {
         let keys = store.keys
@@ -75,6 +77,7 @@ public struct AgentSidebarSettingsControls: View {
         _headings = AppStorage(wrappedValue: defaults.headings, keys.showsSectionHeadings)
         _icons = AppStorage(wrappedValue: defaults.icons, keys.showsLaneIcons)
         _parallel = AppStorage(wrappedValue: defaults.parallel.rawValue, keys.parallelSessions)
+        _pullRequests = AppStorage(wrappedValue: defaults.pullRequests, keys.showsPullRequestPills)
     }
 
     public var body: some View {
@@ -82,6 +85,8 @@ public struct AgentSidebarSettingsControls: View {
             .help("Head the list with its sections. Off, every row is in one list; Pinned and Detached keep their headings.")
         Toggle("Show lane icons", isOn: $icons)
             .help("Draw each row's icon. Off, a row shows its status dot alone.")
+        Toggle("Show pull request pills", isOn: $pullRequests)
+            .help("Draw a pill for each pull request on a row and on an All Agents card. Off, pull requests are still in the row's menu and hover.")
         Picker("Parallel sessions", selection: $parallel) {
             ForEach(ParallelSessionPlacement.allCases) { Text($0.title).tag($0.rawValue) }
         }

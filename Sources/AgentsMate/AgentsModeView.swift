@@ -59,6 +59,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
     @AppStorage private var filterUnread: Bool
     @AppStorage private var showsHeadings: Bool
     @AppStorage private var showsIcons: Bool
+    @AppStorage private var showsPullRequests: Bool
     @AppStorage private var parallelPlacement: String
     @State private var searchText = ""
     @State private var renaming: String?
@@ -84,6 +85,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         let shape = store.sidebarDefaults
         _showsHeadings = AppStorage(wrappedValue: shape.headings, keys.showsSectionHeadings)
         _showsIcons = AppStorage(wrappedValue: shape.icons, keys.showsLaneIcons)
+        _showsPullRequests = AppStorage(wrappedValue: shape.pullRequests, keys.showsPullRequestPills)
         _parallelPlacement = AppStorage(wrappedValue: shape.parallel.rawValue, keys.parallelSessions)
     }
 
@@ -219,7 +221,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
                         loadStage: stages[lane.id],
                         isSplit: lane.id == store.splitID,
                         style: store.configuration.rowStyle,
-                        icon: look.icon, tintHex: look.tintHex, showsIcon: showsIcons,
+                        icon: look.icon, tintHex: look.tintHex, showsIcon: showsIcons, showsPullRequests: showsPullRequests,
                         isNested: parallelPlacement == ParallelSessionPlacement.nested.rawValue
                             && !group.isDetached && store.parallelOwner(of: lane.id) != nil)
                     .tag(lane.id)
@@ -805,6 +807,7 @@ struct LaneRow: View {
     var tintHex: String? = nil
     /// Off, the row shows its status dot alone.
     var showsIcon = true
+    var showsPullRequests = false
     /// Indented under the row above: a parallel session, when the person
     /// chose ``ParallelSessionPlacement/nested``.
     var isNested = false
@@ -900,7 +903,7 @@ struct LaneRow: View {
     }
 
     private var hasPullRequestPills: Bool {
-        !session.displayedPullRequests.isEmpty || session.rowMetadata.pullRequest != nil
+        showsPullRequests && !session.displayedPullRequests.isEmpty || session.rowMetadata.pullRequest != nil
     }
 
     /// The pull request pills on their own line under the title: as many of

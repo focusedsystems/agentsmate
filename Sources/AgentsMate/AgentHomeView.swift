@@ -26,6 +26,7 @@ public struct AgentHomeView: View {
     @AppStorage private var filterNeedsYou: Bool
     @AppStorage private var filterIdle: Bool
     @AppStorage private var filterUnread: Bool
+    @AppStorage private var showsPullRequests: Bool
 
     public init(store: AgentLaneStore, labels: AgentsModeLabels = .init(), rowActions: [LaneAction] = []) {
         self.store = store
@@ -37,6 +38,7 @@ public struct AgentHomeView: View {
         _filterNeedsYou = AppStorage(wrappedValue: false, keys.filterWaiting)
         _filterIdle = AppStorage(wrappedValue: false, keys.filterIdle)
         _filterUnread = AppStorage(wrappedValue: false, keys.filterUnread)
+        _showsPullRequests = AppStorage(wrappedValue: store.sidebarDefaults.pullRequests, keys.showsPullRequestPills)
     }
 
     public var body: some View {
@@ -126,7 +128,8 @@ public struct AgentHomeView: View {
                     ForEach(column.items) { item in
                         if let session = sessionsByID[item.id] {
                             AgentHomeCard(session: session, area: store.homeArea(of: session.lane),
-                                          isSelected: selection == item.id, isFocused: boardFocused)
+                                          isSelected: selection == item.id, isFocused: boardFocused,
+                                          showsPullRequests: showsPullRequests)
                                 .id(item.id)
                                 .onTapGesture { open(item.id) }
                                 .contextMenu {
@@ -422,6 +425,7 @@ struct AgentHomeCard: View {
     /// The board has the keyboard: the selection draws in the accent
     /// colour, else in grey, as a list's selection does.
     let isFocused: Bool
+    var showsPullRequests = false
 
     static let pillLimit = 4
 
@@ -488,7 +492,7 @@ struct AgentHomeCard: View {
 
     @ViewBuilder
     private var pills: some View {
-        let pullRequests = session.displayedPullRequests
+        let pullRequests = showsPullRequests ? session.displayedPullRequests : []
         if !pullRequests.isEmpty {
             let shown = Array(pullRequests.suffix(Self.pillLimit))
             AgentHomeFlow(spacing: 4) {
