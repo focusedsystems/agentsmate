@@ -17,14 +17,17 @@ public struct LaneStatusDirectory: Sendable {
         if let dir = environment["AGENTSMATE_STATUS_DIR"], !dir.isEmpty {
             return LaneStatusDirectory(url: URL(fileURLWithPath: (dir as NSString).expandingTildeInPath, isDirectory: true))
         }
-        let state: URL
-        if let xdg = environment["XDG_STATE_HOME"], !xdg.isEmpty {
-            state = URL(fileURLWithPath: xdg, isDirectory: true)
-        } else {
-            state = FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent(".local/state", isDirectory: true)
+        return LaneStatusDirectory(url: stateHome(environment: environment)
+            .appendingPathComponent("agentsmate/lanes", isDirectory: true))
+    }
+
+    /// `$XDG_STATE_HOME` when it is an absolute path (a relative one is
+    /// invalid and ignored), else `~/.local/state`.
+    public static func stateHome(environment: [String: String] = ProcessInfo.processInfo.environment) -> URL {
+        if let xdg = environment["XDG_STATE_HOME"], xdg.hasPrefix("/") {
+            return URL(fileURLWithPath: xdg, isDirectory: true)
         }
-        return LaneStatusDirectory(url: state.appendingPathComponent("agentsmate/lanes", isDirectory: true))
+        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/state", isDirectory: true)
     }
 
     static let encoder: JSONEncoder = {

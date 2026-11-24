@@ -17,6 +17,12 @@ import AgentsMateStatus
 //       row shows, or add a log line. The lane is found as the hooks find it,
 //       or named with --lane. --progress -1 removes the bar.
 //
+//   agentsmate-status displayed [--app <bundle id>] [--file <path>] [--json]
+//                               [--compare <live-sessions.json>] [--scope <folder>]…
+//       Print what an app's sidebar and All Agents board show (its
+//       displayed.json). With --compare, list the snapshot's sessions no row
+//       shows and the rows that claim a running session the snapshot lacks.
+//
 // A hook must never block or fail its agent, so every error is swallowed
 // and the exit status is always 0.
 
@@ -104,7 +110,14 @@ case "list":
         FileHandle.standardOutput.write(Data("\n".utf8))
     }
 
+case "displayed":
+    // Unlike the hooks, this is a command a person or a tool runs, so its
+    // exit status says what it found: 0 clean, 1 differences, 2 unreadable.
+    exit(DisplayedCommand.run(Array(args.dropFirst()),
+                              out: { FileHandle.standardOutput.write(Data($0.utf8)) },
+                              err: { FileHandle.standardError.write(Data($0.utf8)) }))
+
 default:
-    FileHandle.standardError.write(Data("usage: agentsmate-status claude | codex [--then <program> …] <json> | list\n".utf8))
+    FileHandle.standardError.write(Data("usage: agentsmate-status claude | codex [--then <program> …] <json> | list | displayed [--app <bundle id>] [--json] [--compare <live-sessions.json>]\n".utf8))
 }
 exit(0)

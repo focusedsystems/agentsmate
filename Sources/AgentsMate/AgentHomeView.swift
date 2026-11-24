@@ -71,6 +71,7 @@ public struct AgentHomeView: View {
         .background(Color(nsColor: .controlBackgroundColor))
         .modifier(LaneMenuSheets(store: store, presentation: menus))
         .onAppear { DispatchQueue.main.async { boardFocused = true } }
+        .onChange(of: query) { store.displayedHomeSearch = query }
     }
 
     // MARK: Rows
@@ -85,7 +86,11 @@ public struct AgentHomeView: View {
     /// The columns with only the cards the search and the sidebar's status
     /// filters let through.
     private var displayedColumns: [(section: AgentHomeSection, items: [AgentHomeItem])] {
-        let filters = activeFilters
+        Self.columns(store: store, query: query, filters: activeFilters, activeOnly: filterAttached)
+    }
+
+    static func columns(store: AgentLaneStore, query: String, filters: Set<LaneStatusFilter>,
+                        activeOnly: Bool) -> [(section: AgentHomeSection, items: [AgentHomeItem])] {
         let text = query.trimmingCharacters(in: .whitespaces)
         let sessions = store.homeSessions.filter { session in
             if !text.isEmpty {
@@ -96,7 +101,7 @@ public struct AgentHomeView: View {
             let state = AgentLaneSidebar<EmptyView>.filterState(session)
             return filters.allSatisfy { $0.admits(state) }
         }
-        return AgentHome.columns(sessions.map(AgentLaneStore.homeItem), includesNotRunning: !filterAttached)
+        return AgentHome.columns(sessions.map(AgentLaneStore.homeItem), includesNotRunning: !activeOnly)
     }
 
     private var activeFilters: Set<LaneStatusFilter> {
