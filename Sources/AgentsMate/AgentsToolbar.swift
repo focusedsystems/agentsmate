@@ -211,11 +211,23 @@ public struct AgentsMainToolbar<ID: Hashable, Trailing: ToolbarContent>: Toolbar
             AgentsToolbarHistoryButtons(history)
         }
         // A single tab needs no tab bar.
+        // The bar draws its own glass and hugs its visible tabs; the item
+        // reserves the room a hovered tab's name needs, so the system's glass
+        // behind the item is hidden or it shows empty on both sides.
         if tabs.count > 1 {
-            ToolbarItem(placement: .principal) {
-                CollapsingTabBar(selection: selection, tabs: tabs,
-                                 availableWidth: windowWidth - AgentsToolbar.sideReserve * 2,
-                                 onSelect: onSelect)
+            if #available(macOS 26.0, *) {
+                ToolbarItem(placement: .principal) {
+                    CollapsingTabBar(selection: selection, tabs: tabs,
+                                     availableWidth: windowWidth - AgentsToolbar.sideReserve * 2,
+                                     onSelect: onSelect)
+                }
+                .sharedBackgroundVisibility(.hidden)
+            } else {
+                ToolbarItem(placement: .principal) {
+                    CollapsingTabBar(selection: selection, tabs: tabs,
+                                     availableWidth: windowWidth - AgentsToolbar.sideReserve * 2,
+                                     onSelect: onSelect)
+                }
             }
         }
         // Push every trailing control to the window's right edge.
