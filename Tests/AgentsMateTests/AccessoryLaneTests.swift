@@ -162,22 +162,42 @@ final class AgentsCapsuleTests: XCTestCase {
 
 @MainActor
 final class AgentsCapsuleTintTests: XCTestCase {
-    /// The capsule's fill, sampled just inside its left end.
-    private func fill(isOn: Bool) throws -> (r: CGFloat, g: CGFloat, b: CGFloat) {
+    private func bitmap(isOn: Bool) throws -> NSBitmapImageRep {
         let view = AgentsToolbarButton(AgentsToolbarAgent(isOn: isOn) {}, drawsGlass: false)
             .environment(\.colorScheme, .light)
         let renderer = ImageRenderer(content: view)
-        renderer.scale = 1
+        renderer.scale = 2
         let image = try XCTUnwrap(renderer.nsImage)
-        let rep = try XCTUnwrap(NSBitmapImageRep(data: try XCTUnwrap(image.tiffRepresentation)))
-        let color = try XCTUnwrap(rep.colorAt(x: 8, y: rep.pixelsHigh / 2)?.usingColorSpace(.sRGB))
-        return (color.redComponent, color.greenComponent, color.blueComponent)
+        return try XCTUnwrap(NSBitmapImageRep(data: try XCTUnwrap(image.tiffRepresentation)))
     }
 
-    func testTheCapsuleIsBlueAsTheWayInAndNeutralWhileAgentsModeIsOn() throws {
-        let off = try fill(isOn: false)
-        let on = try fill(isOn: true)
-        XCTAssertGreaterThan(off.b - off.r, 0.05, "off is tinted blue, as a call to action")
-        XCTAssertLessThan(abs(on.b - on.r), 0.03, "on is plain glass in the label colour")
+    private func rgb(_ rep: NSBitmapImageRep, _ x: Int, _ y: Int) throws -> (r: CGFloat, g: CGFloat, b: CGFloat) {
+        let c = try XCTUnwrap(rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB))
+        return (c.redComponent, c.greenComponent, c.blueComponent)
+    }
+
+    /// The bluest pixel in the capsule, where the robot and label are drawn.
+    private func bluestInk(_ rep: NSBitmapImageRep) throws -> CGFloat {
+        var best: CGFloat = -1
+        for x in stride(from: 0, to: rep.pixelsWide, by: 2) {
+            for y in stride(from: 0, to: rep.pixelsHigh, by: 2) {
+                let c = try rgb(rep, x, y)
+                best = max(best, c.b - c.r)
+            }
+        }
+        return best
+    }
+
+    func testTheCapsuleFillIsNeutralInBothStates() throws {
+        for isOn in [false, true] {
+            let rep = try bitmap(isOn: isOn)
+            let fill = try rgb(rep, 6, rep.pixelsHigh / 2)
+            XCTAssertLessThan(abs(fill.b - fill.r), 0.03, "no coloured fill (isOn \(isOn))")
+        }
+    }
+
+    func testTheLabelIsInTheAccentColourOnlyWhileAgentsModeIsOff() throws {
+        XCTAssertGreaterThan(try bluestInk(bitmap(isOn: false)), 0.3, "off: robot and label in the accent colour")
+        XCTAssertLessThan(try bluestInk(bitmap(isOn: true)), 0.05, "on: label colour")
     }
 }

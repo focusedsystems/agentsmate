@@ -83,9 +83,10 @@ public struct AgentsToolbarHistory {
 }
 
 /// The toolbar's Agents control: a robot and "Agents", as tall as the circular
-/// sidebar toggle it sits beside. Tinted blue while Agents mode is off, as the
-/// way in; plain glass in the label colour while it is on. It carries ⇧⌘A,
-/// which toggles Agents mode from anywhere.
+/// sidebar toggle it sits beside. Always on neutral glass, never a coloured
+/// fill: the robot and label are in the accent colour while Agents mode is
+/// off, as the way in, and in the label colour while it is on. It carries
+/// ⇧⌘A, which toggles Agents mode from anywhere.
 public struct AgentsToolbarButton: View {
     private let agent: AgentsToolbarAgent
     /// Off only offscreen, where the system's glass does not draw.
@@ -122,15 +123,14 @@ public struct AgentsToolbarButton: View {
     private func styled(_ button: some View, isOn: Bool) -> some View {
         if !drawsGlass {
             button.buttonStyle(.plain)
-                .background(isOn ? Color.primary.opacity(0.08) : Color.accentColor.opacity(0.22), in: Capsule())
+                .background(Color.primary.opacity(0.08), in: Capsule())
         } else if #available(macOS 26.0, *) {
             button.buttonStyle(.plain)
-                .glassEffect(isOn ? .regular.interactive() : .regular.tint(Color.accentColor.opacity(0.28)).interactive(),
-                             in: .capsule)
+                .glassEffect(.regular.interactive(), in: .capsule)
                 .contentShape(Capsule())
         } else {
             button.buttonStyle(.plain)
-                .background(isOn ? Color.primary.opacity(0.08) : Color.accentColor.opacity(0.22), in: Capsule())
+                .background(Color.primary.opacity(0.08), in: Capsule())
         }
     }
 }
