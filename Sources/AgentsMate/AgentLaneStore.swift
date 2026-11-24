@@ -790,6 +790,10 @@ public final class AgentLaneStore: ObservableObject {
         let newLanes = fixed + opened
         guard newLanes != lanes else { return }
         let ids = Set(newLanes.map(\.id))
+        // An app brings its rows (and with them the folders its scope
+        // admits) after launch, so a sweep that ran before they came saw
+        // sessions the scope kept out. Sweep again for rows it has not seen.
+        let addedRows = !ids.isSubset(of: Set(lanes.map(\.id)))
         for (id, session) in sessions where !ids.contains(id) {
             session.detach()
             sessions.removeValue(forKey: id)
@@ -802,6 +806,7 @@ public final class AgentLaneStore: ObservableObject {
         }
         apply(statusFeed?.records ?? [])
         reconcileDetached()
+        if addedRows, configuration.findsDetachedSessions { sweepSoon() }
     }
 
     /// Add a lane the person opened, and open it.
@@ -1233,6 +1238,7 @@ public final class AgentLaneStore: ObservableObject {
     static let firstDiscoveryDelay: TimeInterval = 0.5
 
     private var discoveryTimer: CadenceTimer?
+    var sweepScheduled: Bool { discoveryKick != nil }
     private var discoveryKick: Task<Void, Never>?
     @Published private(set) var sweepingSessions = false
     /// Everything the last sweep found, kept so rows added later can claim
