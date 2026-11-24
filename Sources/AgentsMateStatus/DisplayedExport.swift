@@ -16,7 +16,7 @@ import Foundation
 ///            "session_id": null, "attached_session_id": null, "session_name": "lane-a", "host": "host-a", "folder": "/path",
 ///            "state": "working", "attached": true, "selected": false, "is_parallel": false,
 ///            "is_top_level": true, "collapsed": false, "column": null}],
-///  "all_agents": []}
+///  "all_agents": [], "all_agents_selected": false}
 /// ```
 ///
 /// Only what the app shows is in it: a lane the app's scope hides, or that
@@ -203,9 +203,14 @@ public struct DisplayedExport: Codable, Equatable, Sendable {
     public var rows: [Row]
     /// The cards All Agents shows, in board order.
     public var allAgents: [Row]
+    /// Whether All Agents is the view showing, as the sidebar's All Agents
+    /// button is selected. Added without a new schema version; a file
+    /// written before it reads as false.
+    public var allAgentsSelected: Bool
 
     public init(app: App, writtenAt: Date? = nil, lastDiscoveryFinishedAt: Date? = nil, filter: Filter = .init(),
-                counts: Counts = .init(), rows: [Row] = [], allAgents: [Row] = []) {
+                counts: Counts = .init(), rows: [Row] = [], allAgents: [Row] = [], allAgentsSelected: Bool = false) {
+        self.allAgentsSelected = allAgentsSelected
         self.schemaVersion = Self.schemaVersion
         self.app = app
         self.writtenAt = writtenAt
@@ -219,7 +224,20 @@ public struct DisplayedExport: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case schemaVersion = "schema_version", app, writtenAt = "written_at",
              lastDiscoveryFinishedAt = "last_discovery_finished_at", filter, counts, rows,
-             allAgents = "all_agents"
+             allAgents = "all_agents", allAgentsSelected = "all_agents_selected"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try c.decode(Int.self, forKey: .schemaVersion)
+        app = try c.decode(App.self, forKey: .app)
+        writtenAt = try c.decodeIfPresent(Date.self, forKey: .writtenAt)
+        lastDiscoveryFinishedAt = try c.decodeIfPresent(Date.self, forKey: .lastDiscoveryFinishedAt)
+        filter = try c.decode(Filter.self, forKey: .filter)
+        counts = try c.decode(Counts.self, forKey: .counts)
+        rows = try c.decode([Row].self, forKey: .rows)
+        allAgents = try c.decode([Row].self, forKey: .allAgents)
+        allAgentsSelected = try c.decodeIfPresent(Bool.self, forKey: .allAgentsSelected) ?? false
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -232,6 +250,7 @@ public struct DisplayedExport: Codable, Equatable, Sendable {
         try c.encode(counts, forKey: .counts)
         try c.encode(rows, forKey: .rows)
         try c.encode(allAgents, forKey: .allAgents)
+        try c.encode(allAgentsSelected, forKey: .allAgentsSelected)
     }
 
     /// Whether `other` shows the same things, ignoring when it was written.

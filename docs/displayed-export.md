@@ -29,7 +29,7 @@ ISO 8601 UTC.
    "session_id": "ab12cd34", "attached_session_id": "ab12cd34", "session_name": null, "host": "host-a",
    "folder": "/work/repo", "state": "working", "attached": true, "selected": false,
    "is_parallel": false, "is_top_level": true, "collapsed": false, "column": null}],
- "all_agents": []}
+ "all_agents": [], "all_agents_selected": false}
 ```
 
 ## Fields
@@ -40,6 +40,7 @@ ISO 8601 UTC.
 - `counts`: the All Agents header badges, over every lane before search and chips.
 - `rows`: the sidebar's rows in sidebar order, Pinned first and Detached last.
 - `all_agents`: the cards All Agents shows, column by column, with the same fields.
+- `all_agents_selected`: true while All Agents is the view showing, as the sidebar's All Agents button is selected. Added without a new schema version; a file without it reads as false.
 
 A row:
 

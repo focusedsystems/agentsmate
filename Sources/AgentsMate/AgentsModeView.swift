@@ -98,10 +98,6 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         let flat = isFlat(snapshot)
         let stages = store.laneLoadStages
         List(selection: selectionBinding) {
-            if store.configuration.showsHome {
-                // The gap under the header is the gap between sections.
-                Section { AgentHomeSidebarRow(store: store).padding(.top, 8).tag(Self.homeTag) }
-            }
             // Every group with a heading folds the same way. The header draws its own chevron, always shown, instead of the
             // sidebar's, which appears only under the pointer and moves the
             // header's buttons when it does.
@@ -134,6 +130,18 @@ public struct AgentLaneSidebar<Accessory: View>: View {
                         .padding(.horizontal, 12).padding(.vertical, 8)
                 }
                 .background(inDock ? AnyShapeStyle(.bar) : AnyShapeStyle(.clear))
+            }
+        }
+        .toolbar {
+            // In the sidebar column's titlebar space, ahead of the system's
+            // sidebar toggle; a dock has no titlebar, so its filter bar has it.
+            if !inDock, store.configuration.showsHome {
+                if #available(macOS 26.0, *) {
+                    ToolbarItem(placement: .navigation) { AgentHomeSidebarButton(store: store) }
+                        .sharedBackgroundVisibility(.hidden)
+                } else {
+                    ToolbarItem(placement: .navigation) { AgentHomeSidebarButton(store: store) }
+                }
             }
         }
         .modifier(LaneMenuSheets(store: store, presentation: menus))
@@ -176,7 +184,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
                 LaneContextMenu(store: store, session: session, presentation: menus, rowActions: rowActions)
             }
         } primaryAction: { ids in
-            if ids.first == Self.homeTag { store.showHome() } else if let id = ids.first { store.open(id) }
+            if let id = ids.first { store.open(id) }
         }
         .onDeleteCommand {
             if !store.isHomeShown, let id = store.selectedID, store.selected?.lane.isClosable == true { store.close(id) }
@@ -388,13 +396,9 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         }
     }
 
-    /// The All Agents row's tag in the list's selection; never a lane's id.
-    static var homeTag: AgentLane.ID { "\u{0}agentsmate-home" }
-
     private var selectionBinding: Binding<AgentLane.ID?> {
-        Binding(get: { store.isHomeShown ? Self.homeTag : store.selectedID },
+        Binding(get: { store.isHomeShown ? nil : store.selectedID },
                 set: { id in
-                    if id == Self.homeTag { return store.showHome() }
                     // A click hands the keyboard to the lane's terminal so
                     // typing goes straight to the agent. Moving through the
                     // list with the arrow keys attaches each lane but leaves
@@ -603,6 +607,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
             .help(activeFilters.isEmpty ? "Sort or filter the list, or add and fold sections"
                                         : "Sort or filter the list, or add and fold sections (a filter is on)")
             if inDock {
+                if store.configuration.showsHome { AgentHomeSidebarButton(store: store) }
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) { store.dockMaximized.toggle() }
                 } label: {
@@ -1365,34 +1370,59 @@ extension Color {
 }
 
 
-/// All Agents' row at the top of the sidebar: a robot, and how many
-/// sessions need the person.
-struct AgentHomeSidebarRow: View {
+/// The All Agents button in the sidebar's titlebar space: a robot, a
+/// selected state while All Agents is showing, and how many sessions need
+/// the person as a small badge.
+struct AgentHomeSidebarButton: View {
     @ObservedObject var store: AgentLaneStore
 
     /// macOS has no robot symbol, so the bundled Lucide bot.
     static let icon = LaneIcon.bundled("bot")
 
+    /// The badge's count: sessions waiting for the person.
+    var waiting: Int { store.homeSessions.filter { LaneStatusFilter.wantsYou($0.status) }.count }
+
+    /// The tooltip, with the shortcut when one is bound.
+    static func help(shortcut: String?) -> String {
+        shortcut.map { "All Agents \($0)" } ?? "All Agents"
+    }
+
     var body: some View {
-        let waiting = store.homeSessions.filter { LaneStatusFilter.wantsYou($0.status) }.count
-        HStack(spacing: 8) {
-            LaneIconView(icon: Self.icon, size: 16).frame(width: 20)
-            Text("All Agents")
-            Spacer(minLength: 4)
-            if waiting > 0 {
-                Text("\(waiting)")
-                    .font(.caption.monospacedDigit().weight(.semibold))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 1)
-                    .background(Capsule().fill(Color.orange.opacity(0.2)))
-                    .foregroundStyle(.orange)
-                    .help("\(waiting) waiting for you")
-            }
+        let waiting = waiting
+        let selected = store.isHomeShown
+        Button { store.showHome() } label: {
+            LaneIconView(icon: Self.icon, size: 16)
+                .frame(width: 22, height: 22)
+                .foregroundStyle(selected ? Color.white : Color.primary)
+                .padding(5)
+                .background { chrome(selected) }
+                .overlay(alignment: .topTrailing) {
+                    if waiting > 0 {
+                        Text("\(waiting)")
+                            .font(.system(size: 10, weight: .semibold).monospacedDigit())
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Capsule().fill(Color.orange.opacity(0.2)))
+                            .foregroundStyle(.orange)
+                            .offset(x: 6, y: -4)
+                    }
+                }
+                .contentShape(Circle())
         }
-        .padding(.vertical, 2)
-        .help("Every active session on one board (\(store.shortcuts.binding(for: .home)?.display ?? "Escape"))")
-        .accessibilityElement(children: .combine)
+        .buttonStyle(.plain)
+        .disabled(!store.configuration.showsHome || store.lanes.isEmpty)
+        .help(Self.help(shortcut: store.shortcuts.binding(for: .home)?.display))
         .accessibilityLabel("All Agents")
         .accessibilityValue(waiting > 0 ? "\(waiting) need you" : "")
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    @ViewBuilder
+    private func chrome(_ selected: Bool) -> some View {
+        if #available(macOS 26.0, *) {
+            Color.clear.glassEffect(selected ? .regular.tint(.accentColor).interactive() : .regular.interactive(), in: .circle)
+        } else {
+            Circle().fill(selected ? Color.accentColor : Color.primary.opacity(0.08))
+        }
     }
 }
