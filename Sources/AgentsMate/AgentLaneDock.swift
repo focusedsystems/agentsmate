@@ -31,7 +31,7 @@ public struct AgentLaneDock<Accessory: View, Empty: View>: View {
         self.accessory = accessory()
         self.empty = empty()
         _height = AppStorage(wrappedValue: 280, store.keys.dockHeight)
-        _listWidth = AppStorage(wrappedValue: 230, store.keys.dockListWidth)
+        _listWidth = AppStorage(wrappedValue: Double(AgentLaneStore.sidebarBaseMinimumWidth), store.keys.dockListWidth)
     }
 
     public var body: some View {
@@ -40,7 +40,7 @@ public struct AgentLaneDock<Accessory: View, Empty: View>: View {
                 if !store.dockMaximized { divider }
                 HStack(spacing: 0) {
                     AgentLaneSidebar(store: store, labels: labels, inDock: true) { accessory }
-                        .frame(width: CGFloat(listWidth))
+                        .frame(width: shownListWidth)
                     listDivider
                     AgentLaneDetail(store: store, labels: labels) { empty }
                 }
@@ -50,6 +50,10 @@ public struct AgentLaneDock<Accessory: View, Empty: View>: View {
             .transition(.move(edge: .bottom))
         }
     }
+
+    /// The saved width, never under what the list's controls need: a width
+    /// saved before the minimum rose opens at the minimum.
+    private var shownListWidth: CGFloat { max(CGFloat(listWidth), store.sidebarMinimumWidth) }
 
     private var divider: some View {
         Rectangle()
@@ -97,9 +101,10 @@ public struct AgentLaneDock<Accessory: View, Empty: View>: View {
             .gesture(
                 DragGesture(minimumDistance: 1, coordinateSpace: .global)
                     .onChanged { value in
-                        let start = listDragStart ?? listWidth
+                        let start = listDragStart ?? Double(shownListWidth)
                         listDragStart = start
-                        listWidth = min(max(start + value.translation.width, 160), 480)
+                        let least = Double(store.sidebarMinimumWidth)
+                        listWidth = min(max(start + value.translation.width, least), max(560, least))
                     }
                     .onEnded { _ in listDragStart = nil }
             )
