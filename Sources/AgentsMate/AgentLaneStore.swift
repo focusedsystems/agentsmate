@@ -888,6 +888,12 @@ public final class AgentLaneStore: ObservableObject {
         lane.sessionName = saved.sessionName
         lane.agentSessionID = saved.agentSessionID
         lane.agentConversationID = saved.agentConversationID
+        // A background row made from a session is that session: a saved id
+        // that is another session's is stale, and goes before any attach.
+        if let own = DetachedSessions.ownAgentID(ofLaneID: lane.id), lane.agentSessionID != own {
+            lane.agentSessionID = own
+            lane.agentConversationID = nil
+        }
         lane.host = saved.host
         // A session the restore brings back attaches here, so its
         // Detached row (if the sweep already found it) goes.
@@ -2677,6 +2683,14 @@ public final class AgentLaneStore: ObservableObject {
     func recordBackgroundSessionIDs(_ records: [LaneStatus]) {
         defer { syncSessionHolders() }
         let listed = records.filter { $0.event == ClaudeAgentsList.event }
+        // A row made from a session holds that session's id and no other.
+        for index in lanes.indices {
+            guard let own = DetachedSessions.ownAgentID(ofLaneID: lanes[index].id),
+                  lanes[index].agentSessionID != own else { continue }
+            lanes[index].agentSessionID = own
+            lanes[index].agentConversationID = nil
+            sessions[lanes[index].id]?.update(lane: lanes[index])
+        }
         var holding = Set(lanes.compactMap(\.agentSessionID))
         // A row that holds a short id learns the full session id behind it
         // from that id's own record, never from a name or folder.
@@ -2692,6 +2706,7 @@ public final class AgentLaneStore: ObservableObject {
         for index in lanes.indices {
             let lane = lanes[index]
             guard lane.agentSessionID == nil, lane.host == nil, !detachedIDs.contains(lane.id),
+                  DetachedSessions.ownAgentID(ofLaneID: lane.id) == nil,
                   let backend = backends[lane.backendID] as? ClaudeBackgroundLaneBackend,
                   let session = sessions[lane.id] else { continue }
             // The id its own start printed binds first, and is the only one
