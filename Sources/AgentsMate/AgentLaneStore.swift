@@ -164,6 +164,15 @@ public final class AgentLaneStore: ObservableObject {
         /// found sessions and to saved or shared lanes before they get a row,
         /// so a list written by an older version cannot bring one back.
         public var sessionScope: (@Sendable (_ directory: String?, _ host: String?) -> Bool)?
+        /// A file an outside watcher keeps of every host's live sessions
+        /// (``LiveSessionSnapshot``), read once at launch so the lanes'
+        /// states, and the found sessions in ``sessionScope``, show before
+        /// any host is asked. What the hosts then say replaces it. Nil reads
+        /// nothing. The default is ``LiveSessionSnapshot/standardURL``.
+        public var liveSnapshotFile: URL?
+        /// Open All Agents with only the active sessions showing: the Active
+        /// filter is turned on at each launch. One click on it shows every lane.
+        public var opensActiveOnly: Bool
 
         /// `~/Library/Caches/<bundle id>/agent-pull-requests.json`.
         public static var defaultPullRequestLedgerFile: URL { PullRequestLedgerCache.defaultURL() }
@@ -194,7 +203,10 @@ public final class AgentLaneStore: ObservableObject {
                     hostSessions: HostSessionsConfiguration? = nil, showsSectionHeadings: Bool = true,
                     defaultRepositoryOrder: [String] = [], showsHome: Bool = true,
                     launchShows: AgentsLaunchDestination = .home, showsLaneIcons: Bool = true,
-                    parallelSessions: ParallelSessionPlacement = .topLevel) {
+                    parallelSessions: ParallelSessionPlacement = .topLevel,
+                    liveSnapshotFile: URL? = LiveSessionSnapshot.standardURL, opensActiveOnly: Bool = true) {
+            self.liveSnapshotFile = liveSnapshotFile
+            self.opensActiveOnly = opensActiveOnly
             self.showsLaneIcons = showsLaneIcons
             self.parallelSessions = parallelSessions
             self.showsHome = showsHome
@@ -360,6 +372,9 @@ public final class AgentLaneStore: ObservableObject {
         for backend in backends { self.backends[backend.id] = backend }
         self.selectedID = defaults.string(forKey: keys.selectedLane)
         self.showingHome = configuration.showsHome && defaults.bool(forKey: keys.showingHome)
+        if configuration.showsHome, configuration.opensActiveOnly { defaults.set(true, forKey: keys.filterOpen) }
+        liveSnapshot = configuration.liveSnapshotFile.flatMap { LiveSessionSnapshot.load($0) }
+        liveSnapshotRead = liveSnapshot != nil
         keyboard.onChange = { [weak self] in self?.updateLanesHaveKeyboard() }
         self.fontOffset = CGFloat(defaults.double(forKey: keys.fontOffset))
         if let data = defaults.data(forKey: keys.shortcuts),
@@ -1177,6 +1192,7 @@ public final class AgentLaneStore: ObservableObject {
     /// section. Skipped while the last sweep is still going.
     public func sweepForDetachedSessions() {
         guard configuration.findsDetachedSessions, !sweepingSessions else { return }
+        seedFoundFromLiveSnapshot()
         sweepingSessions = true
         lastSweep = Date()
         refreshHostListingSoon()
@@ -1200,6 +1216,76 @@ public final class AgentLaneStore: ObservableObject {
     func received(found: [DetachedSessions.Found]) {
         discovered = found
         reconcileDetached()
+        retireLiveHints()
+    }
+
+    // MARK: Live snapshot
+
+    /// What the outside watcher last wrote (``Configuration/liveSnapshotFile``),
+    /// read at launch; nil once nothing from it is still on show.
+    private(set) var liveSnapshot: LiveSessionSnapshot?
+    private(set) var liveSnapshotRead = false
+    private var liveFoundSeeded = false
+
+    /// The host a lane's session runs on, as the snapshot names hosts: the
+    /// lane's session host when the hosts registry is known, else this Mac.
+    func liveHost(for lane: AgentLane) -> String? {
+        sessionHost(for: lane) ?? liveSelfName
+    }
+
+    /// This Mac's name in the hosts registry, as the snapshot lists it.
+    var liveSelfName: String? {
+        liveSelfNameOverride ?? (listingHosts ?? configuration.hostSessions?.hosts ?? agentHosts ?? AgentHosts.load())?.selfName
+    }
+    /// For tests: this Mac's name without a hosts registry.
+    var liveSelfNameOverride: String?
+
+    /// Before the first sweep comes back, show the found sessions the
+    /// snapshot lists on this Mac, in the app's scope, as the sweep will.
+    /// Their rows have the ids the sweep's would, so they stay when it
+    /// confirms them and go when it does not.
+    private func seedFoundFromLiveSnapshot() {
+        guard !liveFoundSeeded, !firstSweepFinished, discovered.isEmpty, let snapshot = liveSnapshot else { return }
+        liveFoundSeeded = true
+        let found = LiveSnapshotSeed.found(in: snapshot, selfName: liveSelfName,
+                                           backends: availableBackends, scope: configuration.sessionScope)
+        guard !found.isEmpty else { return }
+        discovered = found
+        reconcileDetached()
+    }
+
+    /// Settle each hint once its host has said what it runs. On this Mac
+    /// the first sweep and the status feed take over, so the hint goes. For
+    /// another host, its listing decides: a session it still lists keeps its
+    /// hint, now current, and one it no longer lists loses it. A host that did
+    /// not answer keeps its hints, marked stale, with when it was last seen.
+    func retireLiveHints() {
+        guard liveSnapshot != nil else { return }
+        let selfName = liveSelfName
+        var standing = false
+        for session in sessions.values {
+            guard var hint = session.liveHint else { continue }
+            guard let host = hint.host, host != selfName, configuration.hostSessions != nil,
+                  let hosts = listingHosts, HostSessions.askedHosts(hosts).contains(where: { $0.name == host }) else {
+                if firstSweepFinished { session.liveHint = nil } else { standing = true }
+                continue
+            }
+            if unknownHosts.contains(host) {
+                if !hint.isStale { hint.isStale = true; session.liveHint = hint }
+                standing = true
+            } else if let listing = hostListings[host] {
+                if hint.isListed(in: listing) {
+                    if hint.isStale { hint.isStale = false; session.liveHint = hint }
+                    standing = true
+                } else {
+                    session.liveHint = nil
+                }
+            } else {
+                standing = true
+            }
+        }
+        if !standing, firstSweepFinished { liveSnapshot = nil }
+        objectWillChange.send()
     }
 
     /// Match the last sweep against the rows: add a Detached row for each
@@ -1519,6 +1605,7 @@ public final class AgentLaneStore: ObservableObject {
         }
         attachPendingFromHosts()
         bindingsChanged()
+        retireLiveHints()
     }
 
     /// Record this Mac's answer when there is no hosts registry.
@@ -2036,6 +2123,9 @@ public final class AgentLaneStore: ObservableObject {
         applyIconOverride(to: session)
         if summariesEnabled { session.summary = summaries?.summary(for: id) }
         session.pullRequests = pullRequestLedger?.pullRequests(for: id) ?? []
+        if let snapshot = liveSnapshot {
+            session.liveHint = LiveSnapshotSeed.hint(for: lane, backend: backend, host: liveHost(for: lane), in: snapshot)
+        }
         sessions[lane.id] = session
         session.isSelected = id == selectedID || id == splitID
         session.isShown = isShowing && !isHomeShown && session.isSelected

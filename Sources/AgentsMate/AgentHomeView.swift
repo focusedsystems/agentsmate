@@ -49,13 +49,14 @@ public struct AgentHomeView: View {
         VStack(spacing: 0) {
             header(totals, progress: progress)
             Divider()
-            if progress.isLoading || loading.isLoading {
+            if (progress.isLoading || loading.isLoading) && !store.startsFromLiveSnapshot {
                 loadingRow(loading, progress: progress)
                 Divider()
                 AgentHomeLoadingList(store: store, stages: stages, open: open)
             } else {
-                // A host that never answered stays in view, with its Retry.
-                if !store.unknownHosts.isEmpty {
+                // A host that never answered stays in view, with its Retry;
+                // over the snapshot's board, so do the hosts still answering.
+                if !store.unknownHosts.isEmpty || progress.isLoading || loading.isLoading {
                     loadingRow(loading, progress: progress)
                     Divider()
                 }
@@ -95,7 +96,7 @@ public struct AgentHomeView: View {
             let state = AgentLaneSidebar<EmptyView>.filterState(session)
             return filters.allSatisfy { $0.admits(state) }
         }
-        return AgentHome.columns(sessions.map(AgentLaneStore.homeItem))
+        return AgentHome.columns(sessions.map(AgentLaneStore.homeItem), includesNotRunning: !filterAttached)
     }
 
     private var activeFilters: Set<LaneStatusFilter> {
@@ -198,6 +199,7 @@ public struct AgentHomeView: View {
             total(totals.working, "working", symbol: "bolt.fill", color: .green, progress: progress)
             total(totals.recent, "idle or done", symbol: "moon.fill", color: .secondary, progress: progress)
             Spacer(minLength: 8)
+            showPicker
             searchField
         }
         .padding(.horizontal, 16)
@@ -214,6 +216,20 @@ public struct AgentHomeView: View {
         .font(.callout)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(progress.accessibleCount(count)) \(noun)")
+    }
+
+    /// Active only, the launch default, or every lane, saved lanes with
+    /// nothing running among them. The sidebar's Active filter is the same switch.
+    private var showPicker: some View {
+        Picker("Show", selection: $filterAttached) {
+            Text("Active").tag(true)
+            Text("All Lanes").tag(false)
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .fixedSize()
+        .help("Show only the sessions that are running, or every lane, including saved lanes with nothing running")
+        .accessibilityLabel("Show")
     }
 
     private var searchField: some View {
@@ -423,6 +439,21 @@ struct AgentHomeCard: View {
             }
             if let area {
                 Text(area).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            if let hint = session.standingHint, hint.isStale, let host = hint.host {
+                Label {
+                    if let seen = hint.seen {
+                        Text("\(host) · last seen \(seen, format: .relative(presentation: .named))")
+                    } else {
+                        Text("\(host) · not seen yet")
+                    }
+                } icon: {
+                    Image(systemName: "clock.badge.questionmark")
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .help("\(host) has not reported lately, so this is how the session was when it last did")
             }
             Text(AgentHome.detail(for: session) ?? session.status.title)
                 .font(.callout)

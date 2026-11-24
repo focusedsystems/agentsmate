@@ -19,6 +19,9 @@ public enum AgentHomeSection: Int, CaseIterable, Sendable, Identifiable {
     case working
     /// Alive but quiet, or finished a turn recently.
     case recent
+    /// A lane with nothing running: shown only when the board lists every
+    /// lane, not just the active ones.
+    case notRunning
 
     public var id: Int { rawValue }
 
@@ -27,6 +30,7 @@ public enum AgentHomeSection: Int, CaseIterable, Sendable, Identifiable {
         case .needsYou: "Needs You"
         case .working: "Working"
         case .recent: "Idle & Done"
+        case .notRunning: "Not Running"
         }
     }
 }
@@ -61,7 +65,11 @@ public enum AgentHome {
     /// The column a card belongs in, or nil when the board leaves it out: a
     /// lane with nothing running and no recent news. Needs You and Working
     /// count the same rows as the sidebar's Needs You and Running filters.
-    public static func section(for item: AgentHomeItem, now: Date = Date()) -> AgentHomeSection? {
+    ///
+    /// With `includesNotRunning`, the board lists every lane: one it would
+    /// leave out goes in Not Running instead.
+    public static func section(for item: AgentHomeItem, now: Date = Date(),
+                               includesNotRunning: Bool = false) -> AgentHomeSection? {
         if LaneStatusFilter.wantsYou(item.status) { return .needsYou }
         if item.status == .running { return .working }
         if item.isActive || item.unread { return .recent }
@@ -69,17 +77,19 @@ public enum AgentHome {
            let last = item.lastActivity, now.timeIntervalSince(last) <= recentWindow {
             return .recent
         }
-        return nil
+        return includesNotRunning ? .notRunning : nil
     }
 
     /// The rows in their sections, in section order, leaving out empty
     /// sections. Within a section the most recent activity comes first;
     /// rows with no activity follow, in the order given.
-    public static func grouped(_ items: [AgentHomeItem], now: Date = Date())
+    public static func grouped(_ items: [AgentHomeItem], now: Date = Date(), includesNotRunning: Bool = false)
         -> [(section: AgentHomeSection, items: [AgentHomeItem])] {
         var buckets: [AgentHomeSection: [(offset: Int, item: AgentHomeItem)]] = [:]
         for (offset, item) in items.enumerated() {
-            if let section = section(for: item, now: now) { buckets[section, default: []].append((offset, item)) }
+            if let section = section(for: item, now: now, includesNotRunning: includesNotRunning) {
+                buckets[section, default: []].append((offset, item))
+            }
         }
         return AgentHomeSection.allCases.compactMap { section in
             guard let rows = buckets[section], !rows.isEmpty else { return nil }
@@ -96,11 +106,12 @@ public enum AgentHome {
     }
 
     /// Every column in board order, empty ones included, with the same
-    /// order inside each as ``grouped(_:now:)``.
-    public static func columns(_ items: [AgentHomeItem], now: Date = Date())
+    /// order inside each as ``grouped(_:now:includesNotRunning:)``. Not
+    /// Running is a column only with `includesNotRunning`.
+    public static func columns(_ items: [AgentHomeItem], now: Date = Date(), includesNotRunning: Bool = false)
         -> [(section: AgentHomeSection, items: [AgentHomeItem])] {
-        let groups = grouped(items, now: now)
-        return AgentHomeSection.allCases.map { section in
+        let groups = grouped(items, now: now, includesNotRunning: includesNotRunning)
+        return AgentHomeSection.allCases.filter { includesNotRunning || $0 != .notRunning }.map { section in
             (section, groups.first { $0.section == section }?.items ?? [])
         }
     }
@@ -147,6 +158,7 @@ public enum AgentHome {
             case .needsYou: totals.needsYou = group.items.count
             case .working: totals.working = group.items.count
             case .recent: totals.recent = group.items.count
+            case .notRunning: break
             }
         }
         return totals
@@ -226,6 +238,10 @@ extension AgentLaneStore {
         loading.findingSessions = configuration.findsDetachedSessions && !firstSweepFinished
         return loading
     }
+
+    /// The live snapshot was read at launch: All Agents shows the board at
+    /// once, from it, and fills in as the hosts answer.
+    public var startsFromLiveSnapshot: Bool { liveSnapshotRead }
 }
 
 public extension AgentsModeKeys {
