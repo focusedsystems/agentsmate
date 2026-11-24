@@ -48,7 +48,12 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
     /// The latest record from the status feed for this lane.
     @Published public private(set) var record: LaneStatus?
     /// Set when a record that wants a person arrives while the lane is out of sight.
-    @Published public private(set) var needsAttention = false
+    @Published public private(set) var needsAttention = false {
+        didSet { if needsAttention != oldValue { onAttentionChange?(self) } }
+    }
+    /// Called whenever the unread mark is set or cleared, so the Dock badge
+    /// follows the mark however it changed.
+    var onAttentionChange: ((AgentLaneSession) -> Void)?
     /// When the terminal last printed, for the recency sorts. Not a status:
     /// the status comes from the agent's own reports.
     @Published public private(set) var lastOutputAt: Date?

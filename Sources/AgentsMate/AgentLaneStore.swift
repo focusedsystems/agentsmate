@@ -265,10 +265,13 @@ public final class AgentLaneStore: ObservableObject {
                 scheduleRestoreWrite()
                 sharedLanes?.localChanged()
                 placeDetached()
+                updateBadge()
             }
         }
     }
-    @Published public private(set) var sessions: [AgentLane.ID: AgentLaneSession] = [:]
+    @Published public private(set) var sessions: [AgentLane.ID: AgentLaneSession] = [:] {
+        didSet { if sessions.count != oldValue.count { updateBadge() } }
+    }
     @Published public var selectedID: AgentLane.ID? {
         didSet {
             if selectedID != oldValue { scheduleRestoreWrite() }
@@ -587,9 +590,17 @@ public final class AgentLaneStore: ObservableObject {
         updateBadge()
     }
 
+    /// The number the Dock badge shows: the unread rows of the list the
+    /// sidebar draws, the same ones its Unread filter counts.
+    private(set) var badgeCount = 0
+
+    /// Set the Dock badge from the rows now shown. It runs whenever a row's
+    /// unread mark changes and whenever a row goes, so a badge never outlives
+    /// the row that asked for it.
     func updateBadge() {
-        guard configuration.notifies, LaneNotifier.isAvailable else { return }
         let count = unreadLanes.count
+        badgeCount = count
+        guard configuration.notifies, LaneNotifier.isAvailable else { return }
         NSApp.dockTile.badgeLabel = count > 0 ? String(count) : nil
     }
 
@@ -2168,6 +2179,7 @@ public final class AgentLaneStore: ObservableObject {
         let session = AgentLaneSession(lane: lane, backend: backend)
         let id = lane.id
         session.onWantsAttention = { [weak self] session in self?.laneWantsAttention(session) }
+        session.onAttentionChange = { [weak self] _ in self?.updateBadge() }
         session.customTitle = layout.names[id]
         session.onShortcut = { [weak self] shortcut in self?.handle(shortcut, from: id) ?? false }
         session.shortcutResolver = { [weak self] event in self?.shortcuts.terminalShortcut(for: event) }
