@@ -730,3 +730,50 @@ final class PresenceRulesTests: XCTestCase {
         XCTAssertEqual(store.sessions["r"]?.isPresent, false)
     }
 }
+
+@MainActor
+final class OwnSessionIDTests: XCTestCase {
+    private let rowID = "agentsmate.detached:claude-bg:claude-bg\u{1}\u{1}97a86545"
+
+    private func store(file: URL? = nil) -> AgentLaneStore {
+        var bg = ClaudeBackgroundLaneBackend(id: "claude-bg")
+        bg.agentsListCache = FileManager.default.temporaryDirectory.appendingPathComponent("am-none-\(UUID().uuidString)")
+        let defaults = UserDefaults(suiteName: "am-own-\(UUID().uuidString)")!
+        var configuration = AgentLaneStore.Configuration(termProgram: "Test")
+        if let file { configuration.workspaceFile = file }
+        return AgentLaneStore(configuration: configuration, backends: [bg], statusFeed: nil, defaults: defaults)
+    }
+
+    func testTheRowsOwnIDIsReadFromItsLaneID() {
+        XCTAssertEqual(DetachedSessions.ownAgentID(ofLaneID: rowID), "97a86545")
+        XCTAssertNil(DetachedSessions.ownAgentID(ofLaneID: "lane-1"))
+        XCTAssertNil(DetachedSessions.ownAgentID(ofLaneID: "agentsmate.detached:w:tmux\u{1}\u{1}cx-a"))
+    }
+
+    func testASavedRowWithAnotherSessionsIDGetsItsOwnBeforeAnyAttach() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("ws-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: file) }
+        var workspace = LaneWorkspaceFile()
+        workspace.restore = LaneWorkspace(name: "Last Session", lanes: [
+            .init(directory: "/tmp/tcc", backendID: "claude-bg", agentSessionID: "0d4c8edf",
+                  agentConversationID: "0d4c8edf-52c9-40a0-8092-59dcb2dd864d", id: rowID),
+        ])
+        try workspace.save(file)
+        let store = store(file: file)
+        store.restoreAtLaunch()
+        let lane = try XCTUnwrap(store.lanes.first { $0.id == rowID })
+        XCTAssertEqual(lane.agentSessionID, "97a86545")
+        XCTAssertNil(lane.agentConversationID, "the other session's full id goes with it")
+    }
+
+    func testNoPathWritesAnotherSessionsIDOntoTheRow() {
+        let store = store()
+        var lane = AgentLane(id: rowID, title: "Munki", directory: URL(fileURLWithPath: "/tmp/tcc"), backendID: "claude-bg")
+        lane.sessionName = "tcc"
+        store.sync(lanes: [lane])
+        let other = LaneStatus(agent: "claude", state: .running, lane: "tcc", directory: "/tmp/tcc", sessionID: "0d4c8edf-52c9-40a0-8092-59dcb2dd864d",
+                               message: ClaudeAgentsList.backgroundMessage, event: ClaudeAgentsList.event, agentID: "0d4c8edf")
+        store.recordBackgroundSessionIDs([other])
+        XCTAssertEqual(store.lanes.first { $0.id == rowID }?.agentSessionID, "97a86545", "never the same-named session in its folder")
+    }
+}

@@ -293,6 +293,20 @@ enum DetachedSessions {
         "agentsmate.detached:" + found.backendID + ":" + found.session.key
     }
 
+    /// The short id a Claude background row's own lane id names, for a row
+    /// made from a discovered session (``laneID(_:)``). Nil for any other row.
+    /// This id is the row's session and no other.
+    static func ownAgentID(ofLaneID id: String) -> String? {
+        let prefix = "agentsmate.detached:"
+        guard id.hasPrefix(prefix) else { return nil }
+        let parts = id.dropFirst(prefix.count).split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+        guard parts.count == 2 else { return nil }
+        let key = parts[1].split(separator: "\u{1}", omittingEmptySubsequences: false)
+        guard key.count == 3, key[0] == Substring(ClaudeBackgroundLaneBackend.kind),
+              HostSessions.isValidAgentID(String(key[2])) else { return nil }
+        return String(key[2])
+    }
+
     /// The row for a session nothing attaches: not started, not closable,
     /// matched to its status by its id when it has one, else by name. A
     /// session with a short id is attached by that id, and when another
