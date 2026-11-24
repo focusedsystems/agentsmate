@@ -84,4 +84,46 @@ final class DuplicateVariantTests: XCTestCase {
         XCTAssertEqual(store.duplicate("a", focus: false)?.lane.variant, "3")
         store.detachAll()
     }
+
+    func testDuplicateOfABackgroundLaneStartsANewLaneTheWayANewLaneDoes() {
+        let wrapper = CommandLaneBackend.tmuxLane(id: "w", displayName: "W", command: "lane-wrapper", statusAgent: "claude",
+                                                   variantFlag: "-n")
+        let background = ClaudeBackgroundLaneBackend(id: "bg")
+        let defaults = UserDefaults(suiteName: "agentsmate-var-\(UUID().uuidString)")!
+        let store = AgentLaneStore(configuration: .init(termProgram: "T", sessionFileDirectory: nil),
+                                   backends: [wrapper, background], statusFeed: nil, defaults: defaults)
+        defaults.set("w", forKey: store.keys.newLaneBackend)
+        var source = AgentLane(id: "a", title: "Create", directory: URL(fileURLWithPath: "/w/create"), backendID: "bg",
+                               section: "Areas", icon: .symbol("paintbrush"))
+        source.sessionName = "create"
+        source.agentSessionID = "7c4cc4bb"
+        store.sync(lanes: [source])
+        let copy = store.duplicate("a", focus: false)!
+        XCTAssertEqual(copy.title, "Create 2")
+        XCTAssertEqual(copy.lane.backendID, "w", "the app's new-lane start command, not the background backend")
+        XCTAssertEqual(copy.lane.icon, .symbol("paintbrush"))
+        XCTAssertEqual(store.layout.section(of: copy.lane), "Areas")
+        XCTAssertNil(copy.lane.sessionName)
+        XCTAssertNil(copy.lane.agentSessionID)
+        let line = wrapper.launch(for: copy.lane, shell: "/bin/zsh").arguments.last ?? ""
+        XCTAssertEqual(line, "lane-wrapper '/w/create'", "a new lane, never an attach of the source's session")
+        store.detachAll()
+    }
+
+    func testABackgroundDuplicateOnTheBackgroundBackendNamesItsOwnSession() {
+        let background = ClaudeBackgroundLaneBackend(id: "bg")
+        let defaults = UserDefaults(suiteName: "agentsmate-var-\(UUID().uuidString)")!
+        let store = AgentLaneStore(configuration: .init(termProgram: "T", sessionFileDirectory: nil),
+                                   backends: [background], statusFeed: nil, defaults: defaults)
+        defaults.set("bg", forKey: store.keys.newLaneBackend)
+        var source = AgentLane(id: "a", title: "Create", directory: URL(fileURLWithPath: "/w/create"), backendID: "bg")
+        source.agentSessionID = "7c4cc4bb"
+        store.sync(lanes: [source])
+        let copy = store.duplicate("a", focus: false)!
+        XCTAssertEqual(copy.lane.backendID, "bg")
+        XCTAssertEqual(copy.lane.sessionName, "Create 2")
+        XCTAssertNil(copy.lane.agentSessionID)
+        XCTAssertFalse(background.launch(for: copy.lane, shell: "/bin/zsh").arguments.last?.contains("7c4cc4bb") == true)
+        store.detachAll()
+    }
 }

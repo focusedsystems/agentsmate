@@ -2,7 +2,7 @@ import Foundation
 import AgentsMateStatus
 
 /// Claude Code's own background sessions as lanes: `claude --bg -n <name>`
-/// starts one, `claude attach <name>` draws it, and closing the terminal
+/// starts one, `claude attach <id>` draws it, and closing the terminal
 /// leaves it running, the way detaching from tmux does.
 ///
 /// Not a default anywhere: an app opts in by registering it. Its status
@@ -59,17 +59,42 @@ public struct ClaudeBackgroundLaneBackend: LaneBackend {
 
     public func launch(for lane: AgentLane, shell: String) -> TerminalLaunch {
         let claude = claude.isEmpty ? "claude" : claude
-        // Several sessions can share a name, and `claude attach <name>` then
-        // refuses, so a session whose id is known is attached by that id.
-        if let id = attachID(for: lane) {
-            let line = "exec \(claude) attach \(ShellQuote.quote(id))"
-            return TerminalLaunch(executable: shell, arguments: ["-l", "-i", "-c", line], directory: lane.path)
+        let name = sessionName(for: lane) ?? name(lane)
+        let line: String
+        // `claude attach <name>` also takes part of a name and refuses when
+        // several sessions match, so a session is only ever attached by id.
+        switch resolution(for: lane) {
+        case .one(let id):
+            line = "exec \(claude) attach \(ShellQuote.quote(id))"
+        case .several(let ids):
+            line = Self.ambiguousLine(name: name, ids: ids)
+        case .none:
+            line = Self.startLine(claude: claude, name: name, arguments: startArguments)
+        case .elsewhere(let host):
+            let message = "“\(name)” runs on \(host), and its session id is not known here, so nothing was attached."
+            line = "printf '%s\\n' \(ShellQuote.quote(message)); exit 1"
         }
-        let session = ShellQuote.quote(sessionName(for: lane) ?? name(lane))
-        let start = ([claude, "--bg", "-n", session] + startArguments.map(ShellQuote.quote)).joined(separator: " ")
-        // Attach when the session exists; otherwise start it here, then attach.
-        let line = "\(claude) attach \(session) 2>/dev/null || { \(start) >/dev/null && exec \(claude) attach \(session); }"
         return TerminalLaunch(executable: shell, arguments: ["-l", "-i", "-c", line], directory: lane.path)
+    }
+
+    /// Start a new background session named `name` in the lane's folder,
+    /// read the short id `claude --bg` prints, and attach that id.
+    static func startLine(claude: String, name: String, arguments: [String]) -> String {
+        let start = ([claude, "--bg", "-n", ShellQuote.quote(name)] + arguments.map(ShellQuote.quote)).joined(separator: " ")
+        // `backgrounded · <id> · <name>`, then `claude attach <id>` among the hints.
+        let parse = "sed -n -e 's/^backgrounded [^ ]* \\([A-Za-z0-9][A-Za-z0-9-]*\\) .*/\\1/p'"
+            + " -e 's/^ *claude attach \\([A-Za-z0-9][A-Za-z0-9-]*\\).*/\\1/p' | head -n 1"
+        let failed = ShellQuote.quote("Claude started the session but did not print its id, so it was not attached.")
+        return "out=$(\(start)) || exit; id=$(printf '%s\\n' \"$out\" | \(parse)); "
+            + "[ -n \"$id\" ] || { printf '%s\\n' \(failed) \"$out\"; exit 1; }; exec \(claude) attach \"$id\""
+    }
+
+    /// A message in the pane when several running sessions have the lane's
+    /// name in its folder, rather than attaching one of them at random.
+    static func ambiguousLine(name: String, ids: [String]) -> String {
+        let message = "\(ids.count) background sessions named “\(name)” run in this folder: \(ids.joined(separator: ", ")). "
+            + "Open the one you want from the Detached section, or stop the others, then choose Reattach."
+        return "printf '%s\\n' \(ShellQuote.quote(message)); exit 1"
     }
 
     public func statusMatch(for lane: AgentLane) -> LaneStatusMatch {
@@ -77,27 +102,57 @@ public struct ClaudeBackgroundLaneBackend: LaneBackend {
         return .lane(sessionName(for: lane) ?? name(lane))
     }
 
-    /// The short id to attach `lane` by: the one the row knows, else the
-    /// one running session in the shared list with the lane's name and
-    /// folder. Nil when neither is known, so the name is used and a new
-    /// session started when none runs.
+    /// Which running session a lane attaches.
+    enum Resolution: Equatable {
+        /// Attach this short id.
+        case one(String)
+        /// Several sessions fit; attach none of them.
+        case several([String])
+        /// None runs: start one.
+        case none
+        /// The lane is on another host, which this Mac's list cannot speak for.
+        case elsewhere(String)
+    }
+
+    /// The session `lane` attaches: the id the row knows, else the running
+    /// session in the shared list with the lane's name and folder.
+    func resolution(for lane: AgentLane) -> Resolution {
+        if let id = lane.agentSessionID, HostSessions.isValidAgentID(id) { return .one(id) }
+        // This Mac's list says nothing about another host's sessions.
+        if let host = lane.host, !host.isEmpty { return .elsewhere(host) }
+        guard let data = try? Data(contentsOf: agentsListCache) else { return .none }
+        return Self.resolve(name: sessionName(for: lane) ?? name(lane), in: lane.path, records: ClaudeAgentsList.parse(data))
+    }
+
+    /// The short id to attach `lane` by, when exactly one is known.
     func attachID(for lane: AgentLane) -> String? {
-        if let id = lane.agentSessionID, HostSessions.isValidAgentID(id) { return id }
-        guard let data = try? Data(contentsOf: agentsListCache) else { return nil }
-        return Self.soleID(named: sessionName(for: lane) ?? name(lane), in: lane.path,
-                           records: ClaudeAgentsList.parse(data))
+        if case .one(let id) = resolution(for: lane) { return id }
+        return nil
+    }
+
+    /// The live sessions in `records` (one host's list) working in `folder`
+    /// whose name is `name`, ignoring case. Only one is attached: with two
+    /// or more, none is. Never part of a name.
+    static func resolve(name: String, in folder: String, records: [LaneStatus]) -> Resolution {
+        let folder = LaneStatusMatch.normalizedPath(folder)
+        let found = records.filter { record in
+            record.state != .ended && record.directory.map(LaneStatusMatch.normalizedPath) == folder
+                && record.agentID.map(HostSessions.isValidAgentID) == true
+                && record.lane?.caseInsensitiveCompare(name) == .orderedSame
+        }
+        let ids = Array(Set(found.compactMap(\.agentID))).sorted()
+        switch ids.count {
+        case 0: return .none
+        case 1: return .one(ids[0])
+        default: return .several(ids)
+        }
     }
 
     /// The short id of the one live session in `records` named `name` and
     /// working in `folder`; nil when there is none or more than one.
     static func soleID(named name: String, in folder: String, records: [LaneStatus]) -> String? {
-        let folder = LaneStatusMatch.normalizedPath(folder)
-        let found = records.filter { record in
-            record.state != .ended && record.lane == name
-                && record.directory.map(LaneStatusMatch.normalizedPath) == folder
-                && record.agentID.map(HostSessions.isValidAgentID) == true
-        }
-        return found.count == 1 ? found[0].agentID : nil
+        if case .one(let id) = resolve(name: name, in: folder, records: records) { return id }
+        return nil
     }
 
     /// The session found by name, else the one ``name`` gives the lane.
@@ -141,10 +196,11 @@ public struct ClaudeBackgroundLaneBackend: LaneBackend {
 
     public var canStop: Bool { true }
 
-    /// `claude stop` ends the session and keeps its conversation, by id
-    /// when it is known, as attaching does.
+    /// `claude stop` ends the session and keeps its conversation. Only by
+    /// id: a name can match several sessions, or part of another's name.
     public func stop(_ lane: AgentLane) {
-        LaneCommand.run([claude.isEmpty ? "claude" : claude, "stop", attachID(for: lane) ?? sessionName(for: lane) ?? name(lane)])
+        guard let id = attachID(for: lane) else { return }
+        LaneCommand.run([claude.isEmpty ? "claude" : claude, "stop", id])
     }
 }
 

@@ -98,9 +98,75 @@ final class ClaudeBackgroundLaneBackendTests: XCTestCase {
         let lane = AgentLane(id: "x", title: "X", directory: URL(fileURLWithPath: "/w/My Repo.app"), backendID: "claude-bg")
         let backend = ClaudeBackgroundLaneBackend()
         XCTAssertEqual(ClaudeBackgroundLaneBackend.folderName(lane), "my-repo-app")
-        XCTAssertEqual(backend.launch(for: lane, shell: "/bin/zsh").arguments.last,
-                       "claude attach 'my-repo-app' 2>/dev/null || { claude --bg -n 'my-repo-app' >/dev/null && exec claude attach 'my-repo-app'; }")
+        let line = backend.launch(for: lane, shell: "/bin/zsh").arguments.last ?? ""
+        XCTAssertTrue(line.hasPrefix("out=$(claude --bg -n 'my-repo-app')"), line)
+        XCTAssertTrue(line.hasSuffix("exec claude attach \"$id\""), "a new session is attached by the id it printed")
+        XCTAssertFalse(line.contains("attach 'my-repo-app'"), "never attached by name")
         XCTAssertEqual(backend.statusMatch(for: lane), .lane("my-repo-app"))
+    }
+
+    func testTheStartLineReadsTheIDClaudePrints() throws {
+        let line = ClaudeBackgroundLaneBackend.startLine(claude: "fake-claude", name: "Create 2", arguments: [])
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("am-fake-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let fake = dir.appendingPathComponent("fake-claude")
+        try """
+        #!/bin/sh
+        if [ "$1" = "--bg" ]; then
+          printf 'backgrounded \\302\\267 b7c18466 \\302\\267 %s (idle)\\n  claude agents             list sessions\\n  claude attach b7c18466    open in this terminal\\n' "$3"
+        else
+          echo "$@"
+        fi
+        """.write(to: fake, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fake.path)
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", line]
+        process.environment = ["PATH": dir.path + ":/usr/bin:/bin"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        try process.run()
+        process.waitUntilExit()
+        let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        XCTAssertEqual(output, "attach b7c18466\n")
+    }
+
+    func testANameResolvesToAnIDExactlyThenIgnoringCaseNeverByPart() {
+        let rec = { (id: String, name: String, dir: String) in
+            LaneStatus(agent: "claude", state: .running, lane: name, directory: dir, sessionID: id, event: "claude agents",
+                       updatedAt: Date(), agentID: id)
+        }
+        let records = [rec("7344ef63", "Personal - Create", "/w/create"), rec("7c4cc4bb", "create", "/w/create"),
+                       rec("5fe18022", "Port the create sidebar", "/w/create"),
+                       rec("bbbb0002", "Notes", "/w/create"), rec("cccc0003", "notes", "/w/create"),
+                       rec("eeee0005", "Twin", "/w/create"), rec("ffff0006", "Twin", "/w/create/"),
+                       rec("dddd0004", "Other", "/w/elsewhere")]
+        typealias B = ClaudeBackgroundLaneBackend
+        XCTAssertEqual(B.resolve(name: "create", in: "/w/create", records: records), .one("7c4cc4bb"),
+                       "the one session with exactly that name, not the two that contain it")
+        XCTAssertEqual(B.resolve(name: "CREATE", in: "/w/create/", records: records), .one("7c4cc4bb"), "case aside")
+        XCTAssertEqual(B.resolve(name: "personal - create", in: "/w/create", records: records), .one("7344ef63"))
+        XCTAssertEqual(B.resolve(name: "Twin", in: "/w/create", records: records), .several(["eeee0005", "ffff0006"]),
+                       "two live sessions with the same name in one folder: attach neither")
+        XCTAssertEqual(B.resolve(name: "Notes", in: "/w/create", records: records), .several(["bbbb0002", "cccc0003"]),
+                       "names that differ only in case are both candidates")
+        XCTAssertEqual(B.resolve(name: "Port", in: "/w/create", records: records), .none, "never part of a name")
+        XCTAssertEqual(B.resolve(name: "Other", in: "/w/create", records: records), .none, "only in the lane's folder")
+        let line = B.ambiguousLine(name: "NOTES", ids: ["bbbb0002", "cccc0003"])
+        XCTAssertFalse(line.contains("claude"), "attaches nothing")
+        XCTAssertTrue(line.contains("bbbb0002, cccc0003"))
+    }
+
+    func testAKnownIDIsAttachedAndAnotherHostsLaneIsNotGuessedHere() {
+        var lane = AgentLane(id: "x", title: "X", directory: URL(fileURLWithPath: "/w/create"), backendID: "claude-bg")
+        lane.agentSessionID = "7c4cc4bb"
+        XCTAssertEqual(ClaudeBackgroundLaneBackend().launch(for: lane, shell: "/bin/zsh").arguments.last,
+                       "exec claude attach '7c4cc4bb'")
+        lane.agentSessionID = nil
+        lane.host = "desk"
+        let line = ClaudeBackgroundLaneBackend().launch(for: lane, shell: "/bin/zsh").arguments.last ?? ""
+        XCTAssertFalse(line.contains("claude"), "neither this Mac's list nor a new session here: \(line)")
     }
 }
 

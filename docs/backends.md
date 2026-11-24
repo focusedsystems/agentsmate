@@ -25,13 +25,21 @@ Opt-in. Claude Code 2.1.325 runs sessions in its own daemon:
 
 - `claude --bg -n <name> [prompt]` starts the full session in the background,
   with its hooks and remote control.
-- `claude attach <name>` draws it in a terminal. Two terminals attached at once
+- `claude attach <id>` draws it in a terminal. Two terminals attached at once
   stay in step. Closing the terminal leaves the session running.
 - `claude agents --json` lists background sessions and the interactive ones
   already running, with name, folder, pid and state.
 
-The backend attaches the session named after the lane's folder, starting it
-first when there is none. `ClaudeAgentsStatusSource` reads its state from
+The backend attaches the session named after the lane's folder, always by its
+short id: `claude attach` also takes part of a name and refuses when several
+match. The name is resolved to an id from this Mac's `claude agents --json`,
+ignoring case, in the lane's folder only, and only when exactly one session
+fits; with two or more the pane says so and attaches none. A lane on another
+host is never resolved from this Mac's list. When none runs it starts one and
+attaches the id `claude --bg` prints. Once the list shows exactly one session
+for an attached row, the row keeps that id, so it is attached and restored by
+id from then on. Duplicating such a lane opens an ordinary new
+lane on the app's new-lane backend rather than another background session. `ClaudeAgentsStatusSource` reads its state from
 `claude agents --json`; add it to a `LaneStatusFeed`'s `sources`. It has no
 `renameCommand`: the session's name is how every device attaches it, so
 renaming a lane leaves it alone.
