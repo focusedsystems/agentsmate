@@ -83,18 +83,24 @@ final class DisplayedExporterTests: XCTestCase {
             exporter.changed()
         }
         XCTAssertFalse(FileManager.default.fileExists(atPath: url.path), "nothing is written before the delay is up")
-        try await Task.sleep(nanoseconds: 700_000_000)
+        try await waitUntil { exporter.writes >= 1 }
+        try await Task.sleep(nanoseconds: 400_000_000)
         XCTAssertEqual(exporter.writes, 1)
         XCTAssertEqual(DisplayedExport.load(url)?.rows.count, 4)
 
         store.displayedSidebarSearch = "api"
-        try await Task.sleep(nanoseconds: 700_000_000)
+        exporter.changed()
+        try await waitUntil { exporter.writes >= 2 }
         XCTAssertEqual(exporter.writes, 2)
         XCTAssertEqual(DisplayedExport.load(url)?.rows.map(\.laneID), ["api"])
 
         exporter.changed()
         try await Task.sleep(nanoseconds: 500_000_000)
         XCTAssertEqual(exporter.writes, 2, "a change that shows nothing new is not written")
+    }
+
+    private func waitUntil(_ condition: () -> Bool) async throws {
+        for _ in 0..<200 where !condition() { try await Task.sleep(nanoseconds: 50_000_000) }
     }
 
     func testNilFileTurnsTheExportOff() {
