@@ -1736,20 +1736,23 @@ public final class AgentLaneStore: ObservableObject {
 
     /// A new lane like this one, in the same folder and section, just after
     /// it, named "<name> 2" (or the next free number), running `backendID`
-    /// or the same backend.
+    /// or else what a new lane in that folder starts on.
+    ///
+    /// The copy starts a session of its own, the way a brand-new lane does,
+    /// and never attaches one that is already running.
     @discardableResult
     public func duplicate(_ id: AgentLane.ID, backendID: String? = nil, focus: Bool = true) -> AgentLaneSession? {
         guard let source = lanes.first(where: { $0.id == id }), let session = sessions[id] else { return nil }
         var lane = source
         lane.id = UUID().uuidString
         lane.isClosable = true
-        lane.backendID = backendID ?? source.backendID
+        if source.directory == nil { lane.directory = URL(fileURLWithPath: session.currentDirectory) }
+        lane.backendID = backendID ?? duplicateBackendID(for: source, in: lane.directory)
         lane.section = layout.section(of: source)
         lane.statusMatch = nil
         // The copy is a lane of its own, not another view of the same session.
         lane.sessionName = nil
         lane.agentSessionID = nil
-        if source.directory == nil { lane.directory = URL(fileURLWithPath: session.currentDirectory) }
         // A persistent lane in the same folder would attach the same session,
         // so the copy asks for a lane of its own: the next free number.
         lane.variant = nil
@@ -1759,6 +1762,25 @@ public final class AgentLaneStore: ObservableObject {
         let added = add(lane, focus: focus, after: id)
         setName(lane.id, to: name)
         return added
+    }
+
+    /// What a "Same Agent" duplicate of `source` runs. A lane on an agent
+    /// starts the way a new lane in its folder does (the New Sessions
+    /// choice, else the source's own backend); a lane that attaches
+    /// sessions it did not start, such as a Claude background lane, takes
+    /// the app's new-lane backend instead. Anything else, such as a shell,
+    /// keeps its backend.
+    func duplicateBackendID(for source: AgentLane, in folder: URL?) -> String {
+        if backends[source.backendID] is ClaudeBackgroundLaneBackend {
+            let plan = newSessionPlan(in: folder).backendID
+            if backends[plan] != nil, !(backends[plan] is ClaudeBackgroundLaneBackend) { return plan }
+            let fallback = configuredNewLaneBackendID
+            if backends[fallback] != nil, !(backends[fallback] is ClaudeBackgroundLaneBackend) { return fallback }
+            return source.backendID
+        }
+        guard agentKind(ofBackend: source.backendID) != nil else { return source.backendID }
+        let plan = newSessionPlan(preferring: source.backendID, in: folder).backendID
+        return backends[plan] == nil ? source.backendID : plan
     }
 
     /// The variant a new lane needs so it is a session of its own: nil when

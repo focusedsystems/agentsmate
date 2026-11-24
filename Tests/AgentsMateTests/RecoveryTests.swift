@@ -189,7 +189,7 @@ final class TmuxLaneSessionsTests: XCTestCase {
         XCTAssertEqual(backend.sessionName(for: lane), "some-folder")
         lane.sessionName = "lane-a"
         XCTAssertEqual(backend.statusMatch(for: lane), .lane("lane-a"))
-        XCTAssertTrue(backend.launch(for: lane, shell: "/bin/zsh").arguments.last?.hasPrefix("claude attach 'lane-a'") == true)
+        XCTAssertTrue(backend.launch(for: lane, shell: "/bin/zsh").arguments.last?.hasPrefix("out=$(claude --bg -n 'lane-a')") == true)
     }
 }
 
