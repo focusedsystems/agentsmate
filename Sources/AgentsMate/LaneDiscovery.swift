@@ -216,6 +216,22 @@ public struct TmuxLaneSessions: Sendable {
         return sshLine(remote: Self.attachCommand(tmux: remoteTmux, session: session))
     }
 
+    /// The name a lane wrapper gives a lane's tmux session: `prefix`, the
+    /// folder's name in lower case with spaces and dots as dashes, and
+    /// `-<variant>` for a second lane in the folder, as `codex-remote` gives
+    /// `cx-<folder>` and `claude-remote` gives `<folder>`. Give it to
+    /// ``sessionName`` so a row is matched to its own session by name, and a
+    /// session with another name in the same folder (a second lane) is listed
+    /// apart rather than taken by the row.
+    public static func folderSessionName(prefix: String = "") -> @Sendable (AgentLane) -> String? {
+        { lane in
+            let base = (lane.path as NSString).lastPathComponent.lowercased()
+                .replacingOccurrences(of: " ", with: "-").replacingOccurrences(of: ".", with: "-")
+            guard !base.isEmpty, base != "/" else { return nil }
+            return prefix + base + (lane.variant.map { "-" + $0 } ?? "")
+        }
+    }
+
     static let listFormat = "#{session_name}\t#{session_attached}\t#{pane_current_path}"
 
     /// What lists the sessions: `tmux list-sessions` here, or the same over
