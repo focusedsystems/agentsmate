@@ -17,7 +17,7 @@ public enum AgentsToolbar {
 
     /// The labels of the window-wide items, which AppKit keeps ahead of the
     /// app's own when the toolbar runs short.
-    public static let windowItemLabels: Set<String> = ["Back", "Forward", "Agent", "Search"]
+    public static let windowItemLabels: Set<String> = ["Back", "Forward", "Agent", "All Agents", "Search"]
 }
 
 /// What the toolbar's Agent button shows and does.

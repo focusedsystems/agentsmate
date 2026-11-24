@@ -86,3 +86,22 @@ final class AccessoryLaneTests: XCTestCase {
         XCTAssertEqual(AgentLane.Accessory(symbol: "x", label: "L").icon, .symbol("x"))
     }
 }
+
+@MainActor
+final class HeaderAlignmentTests: XCTestCase {
+    func testHomeHeaderRunsDownToTheSidebarHeadersLine() {
+        // The sidebar's header ends at y 136; the board's starts at 52 and has a 1 pt divider.
+        XCTAssertEqual(AgentHomeView.headerHeight(top: 52, sidebarBottom: 136), 83)
+        XCTAssertEqual(AgentHomeView.headerHeight(top: 52, sidebarBottom: 136) + 52 + 1, 136, "one divider line")
+    }
+
+    func testHomeHeaderKeepsItsOwnHeightWithNoSidebarOrAShorterOne() {
+        XCTAssertEqual(AgentHomeView.headerHeight(top: 52, sidebarBottom: nil), AgentsModeMetrics.headerRowHeight)
+        XCTAssertEqual(AgentHomeView.headerHeight(top: 52, sidebarBottom: 60), AgentsModeMetrics.headerRowHeight)
+    }
+
+    func testTheAllAgentsToolbarButtonIsAGridInTheSidebarColumn() {
+        XCTAssertEqual(AgentHomeSidebarButton.symbol, "square.grid.2x2")
+        XCTAssertTrue(AgentsToolbar.windowItemLabels.contains("All Agents"), "ranked with the window's own items, never overflowed first")
+    }
+}
