@@ -99,7 +99,8 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         let stages = store.laneLoadStages
         List(selection: selectionBinding) {
             if store.configuration.showsHome {
-                Section { AgentHomeSidebarRow(store: store).tag(Self.homeTag) }
+                // The gap under the header is the gap between sections.
+                Section { AgentHomeSidebarRow(store: store).padding(.top, 8).tag(Self.homeTag) }
             }
             // Every group with a heading folds the same way. The header draws its own chevron, always shown, instead of the
             // sidebar's, which appears only under the pointer and moves the
@@ -166,7 +167,9 @@ public struct AgentLaneSidebar<Accessory: View>: View {
                     .frame(height: AgentsModeMetrics.headerRowHeight)
                 Divider()
             }
-            .background(inDock ? AnyShapeStyle(.bar) : AnyShapeStyle(.clear))
+            // The bar material, as a standard sidebar header has, so rows
+            // scroll under it and do not show through.
+            .background(.bar)
         }
         .contextMenu(forSelectionType: AgentLane.ID.self) { ids in
             if let id = ids.first, let session = store.sessions[id] {
