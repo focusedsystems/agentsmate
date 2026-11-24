@@ -2301,6 +2301,11 @@ public final class AgentLaneStore: ObservableObject {
 
     /// The width the lane list needs, measured from its filter bar. A split
     /// view or dock showing the list keeps it at least this wide.
+    /// Where the sidebar's header (the search field and the count row) ends,
+    /// as a y in the window, while the sidebar is on screen.
+    /// All Agents' header is made as tall as it takes to end at the same
+    /// line, so the two dividers meet across the window.
+    @Published var sidebarHeaderBottom: CGFloat?
     @Published public internal(set) var sidebarMinimumWidth: CGFloat = AgentLaneStore.sidebarBaseMinimumWidth
 
     // MARK: List snapshot

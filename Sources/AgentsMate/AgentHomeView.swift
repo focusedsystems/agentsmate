@@ -50,6 +50,8 @@ public struct AgentHomeView: View {
         let loading = store.homeLoading
         VStack(spacing: 0) {
             header(totals, progress: progress)
+                .frame(height: headerHeight, alignment: .bottom)
+                .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { headerTop = $0 }
             Divider()
             if (progress.isLoading || loading.isLoading) && !store.startsFromLiveSnapshot {
                 loadingRow(loading, progress: progress)
@@ -200,6 +202,21 @@ public struct AgentHomeView: View {
         .union(.symbols).union(.init(charactersIn: " "))
 
     // MARK: Header
+
+    @State private var headerTop: CGFloat = 0
+
+    /// The header runs down to the line the sidebar's header ends at, its row
+    /// sitting at the bottom, so the two rows share one baseline and the two
+    /// dividers one line. Its own height when the sidebar is not beside it.
+    private var headerHeight: CGFloat {
+        Self.headerHeight(top: headerTop, sidebarBottom: store.sidebarHeaderBottom)
+    }
+
+    static func headerHeight(top: CGFloat, sidebarBottom: CGFloat?, dividerThickness: CGFloat = 1) -> CGFloat {
+        let row = AgentsModeMetrics.headerRowHeight
+        guard let sidebarBottom else { return row }
+        return max(row, sidebarBottom - top - dividerThickness)
+    }
 
     private func header(_ totals: AgentHome.Totals, progress: LaneLoadProgress) -> some View {
         HStack(spacing: 14) {
