@@ -90,7 +90,13 @@ public struct ClaudeBackgroundLaneBackend: LaneBackend {
         // several sessions match, so a session is only ever attached by id.
         switch resolution(for: lane) {
         case .one(let id):
-            line = "exec \(claude) attach \(ShellQuote.quote(id))"
+            // A session the person stopped is never woken by selecting its
+            // row: attaching a stopped id would start it again.
+            if lane.agentSessionID == id, liveness(of: id) == .stopped {
+                line = Self.stoppedLine(name: name, id: id)
+            } else {
+                line = "exec \(claude) attach \(ShellQuote.quote(id))"
+            }
         case .several(let ids):
             line = Self.ambiguousLine(name: name, ids: ids)
         case .held:
@@ -122,6 +128,69 @@ public struct ClaudeBackgroundLaneBackend: LaneBackend {
             + "[ -n \"$id\" ] || { printf '%s\\n' \(failed) \"$out\"; exit 1; }; \(record)exec \(claude) attach \"$id\""
     }
 
+    /// Whether the shared list shows a session.
+    public enum Liveness: Equatable, Sendable {
+        case live, stopped
+        /// The list cannot be read, so nothing is known.
+        case unknown
+    }
+
+    /// Whether the daemon's list (the cache every app shares) shows `id`.
+    /// A session missing from a list that was read is stopped.
+    public func liveness(of id: String) -> Liveness {
+        guard let data = try? Data(contentsOf: agentsListCache), !data.isEmpty,
+              (try? JSONSerialization.jsonObject(with: data)) is [Any] else { return .unknown }
+        let records = ClaudeAgentsList.parse(data, includeInteractive: false)
+        return records.contains { $0.agentID == id && $0.state != .ended } ? .live : .stopped
+    }
+
+    /// The full session id of the conversation behind a row's short id: the
+    /// one the row recorded, else the one the list shows for that short id.
+    /// Nil when neither is known. Never found by name or folder.
+    public func conversationID(for lane: AgentLane) -> String? {
+        if let held = lane.agentConversationID, Self.isValidConversationID(held) { return held }
+        guard let id = lane.agentSessionID, let data = try? Data(contentsOf: agentsListCache) else { return nil }
+        return ClaudeAgentsList.parse(data, includeInteractive: false)
+            .first { $0.agentID == id && $0.sessionID.map(Self.isValidConversationID) == true }?.sessionID
+    }
+
+    static func isValidConversationID(_ id: String) -> Bool {
+        id.count >= 16 && id.count <= 64 && id.allSatisfy { $0.isASCII && ($0.isHexDigit || $0 == "-") }
+    }
+
+    /// The pane for a row whose session is stopped: a message, nothing run.
+    static func stoppedLine(name: String, id: String) -> String {
+        let message = "“\(name)” (\(id)) is stopped, so it was not attached. Choose Resume to continue its conversation here."
+        return "printf '%s\\n' \(ShellQuote.quote(message)); exit 1"
+    }
+
+    /// Continue the row's own conversation in its own pane with
+    /// `claude --resume <full session id>`; with `stoppingBackground`, after
+    /// `claude stop <id>` has finished. Never a new session: when the row has
+    /// no id or its full session id is unknown, the pane says so instead.
+    public func resumeLaunch(for lane: AgentLane, shell: String, stoppingBackground: Bool) -> TerminalLaunch {
+        let claude = claude.isEmpty ? "claude" : claude
+        let name = sessionName(for: lane) ?? name(lane)
+        let line: String
+        if lane.host?.isEmpty == false {
+            line = Self.refusal("“\(name)” runs on another host, so it cannot be resumed here.")
+        } else if let id = lane.agentSessionID, HostSessions.isValidAgentID(id) {
+            if let full = conversationID(for: lane) {
+                let stop = stoppingBackground ? "\(claude) stop \(ShellQuote.quote(id)); " : ""
+                line = stop + "exec \(claude) --resume \(ShellQuote.quote(full))"
+            } else {
+                line = Self.refusal("The conversation id of “\(name)” is not known, so it was not resumed.")
+            }
+        } else {
+            line = Self.refusal("“\(name)” has no session id, so it was not resumed.")
+        }
+        return TerminalLaunch(executable: shell, arguments: ["-l", "-i", "-c", line], directory: lane.path)
+    }
+
+    static func refusal(_ message: String) -> String {
+        "printf '%s\\n' \(ShellQuote.quote(message)); exit 1"
+    }
+
     /// A message in the pane when several running sessions have the lane's
     /// name in its folder, rather than attaching one of them at random.
     static func ambiguousLine(name: String, ids: [String]) -> String {
@@ -131,7 +200,15 @@ public struct ClaudeBackgroundLaneBackend: LaneBackend {
     }
 
     public func statusMatch(for lane: AgentLane) -> LaneStatusMatch {
-        if let id = lane.agentSessionID, HostSessions.isValidAgentID(id) { return .session(id) }
+        if let id = lane.agentSessionID, HostSessions.isValidAgentID(id) {
+            // Only this row's own sessions: its short id, or the conversation
+            // it was resumed as. Another session in its folder or tagged with
+            // its lane id never colours it.
+            if let full = lane.agentConversationID, Self.isValidConversationID(full) {
+                return .firstOf([.session(id), .session(full)])
+            }
+            return .session(id)
+        }
         return .lane(sessionName(for: lane) ?? name(lane))
     }
 
@@ -245,6 +322,17 @@ public struct ClaudeBackgroundLaneBackend: LaneBackend {
     public func stop(_ lane: AgentLane) {
         guard let id = attachID(for: lane) else { return }
         LaneCommand.run([claude.isEmpty ? "claude" : claude, "stop", id])
+        forgetInList(id)
+    }
+
+    /// Take a stopped session out of the shared list at once, so a row does
+    /// not read it as live until the list is next fetched.
+    func forgetInList(_ id: String) {
+        guard let data = try? Data(contentsOf: agentsListCache),
+              let entries = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return }
+        let kept = entries.filter { ($0["id"] as? String) != id }
+        guard kept.count != entries.count, let out = try? JSONSerialization.data(withJSONObject: kept) else { return }
+        try? out.write(to: agentsListCache, options: .atomic)
     }
 }
 

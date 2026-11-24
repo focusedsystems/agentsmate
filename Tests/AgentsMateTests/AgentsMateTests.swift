@@ -207,14 +207,88 @@ final class ClaudeBackgroundLaneBackendTests: XCTestCase {
         XCTAssertEqual("Create".nextCopyName(taken: ["create 2", "CREATE 3"]), "Create 4")
     }
 
-    func testAKnownIDIsAttachedAndAnotherHostsLaneIsNotGuessedHere() {
+    private let full = "97a86545-1111-4222-8333-444455556666"
+
+    private var runningListing: String {
+        #"[{"id":"7c4cc4bb","sessionId":"97a86545-1111-4222-8333-444455556666","name":"create","cwd":"/w/create","kind":"background","state":"working"}]"#
+    }
+
+    func testARowAttachesOnlyItsOwnLiveID() throws {
+        let (backend, dir) = try backend(listing: runningListing)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var lane = AgentLane(id: "x", title: "X", directory: URL(fileURLWithPath: "/w/create"), backendID: "bg")
+        lane.agentSessionID = "7c4cc4bb"
+        lane.sessionName = "create"
+        XCTAssertEqual(backend.launch(for: lane, shell: "/bin/zsh").arguments.last, "exec claude attach '7c4cc4bb'")
+        XCTAssertEqual(backend.statusMatch(for: lane), .session("7c4cc4bb"), "never by folder or name once it has an id")
+        let other = LaneStatus(agent: "claude", state: .running, lane: "bg-lane", directory: "/w/create",
+                               sessionID: "51cbdd11-0000-4000-8000-000000000000", event: "PreToolUse")
+        XCTAssertNil(backend.statusMatch(for: lane).find(in: [other]), "a different session is never reported under the row")
+    }
+
+    func testAStoppedSessionIsNotWokenByItsRow() throws {
+        let (backend, dir) = try backend(listing: "[]")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var lane = AgentLane(id: "x", title: "X", directory: URL(fileURLWithPath: "/w/create"), backendID: "bg")
+        lane.agentSessionID = "7c4cc4bb"
+        XCTAssertEqual(backend.liveness(of: "7c4cc4bb"), .stopped)
+        let line = backend.launch(for: lane, shell: "/bin/zsh").arguments.last ?? ""
+        XCTAssertFalse(line.contains("claude attach"), line)
+        XCTAssertFalse(line.contains("--bg"), "and no new session either: \(line)")
+        XCTAssertTrue(line.contains("is stopped"))
+    }
+
+    func testStoppingForgetsTheSessionInTheSharedList() throws {
+        let (backend, dir) = try backend(listing: runningListing)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        XCTAssertEqual(backend.liveness(of: "7c4cc4bb"), .live)
+        backend.forgetInList("7c4cc4bb")
+        XCTAssertEqual(backend.liveness(of: "7c4cc4bb"), .stopped)
+        try FileManager.default.removeItem(at: backend.agentsListCache)
+        XCTAssertEqual(backend.liveness(of: "7c4cc4bb"), .unknown)
+    }
+
+    func testResumeRunsTheFullSessionIDInTheRowsOwnFolder() throws {
+        let (backend, dir) = try backend(listing: runningListing)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var lane = AgentLane(id: "x", title: "X", directory: URL(fileURLWithPath: "/w/create"), backendID: "bg")
+        lane.agentSessionID = "7c4cc4bb"
+        let plain = backend.resumeLaunch(for: lane, shell: "/bin/zsh", stoppingBackground: false)
+        XCTAssertEqual(plain.arguments.last, "exec claude --resume '\(full)'")
+        XCTAssertEqual(plain.directory, "/w/create")
+        let here = backend.resumeLaunch(for: lane, shell: "/bin/zsh", stoppingBackground: true)
+        XCTAssertEqual(here.arguments.last, "claude stop '7c4cc4bb'; exec claude --resume '\(full)'",
+                       "stop finishes before the resume starts")
+        lane.agentConversationID = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+        XCTAssertEqual(backend.resumeLaunch(for: lane, shell: "/bin/zsh", stoppingBackground: false).arguments.last,
+                       "exec claude --resume 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'", "the row's own record wins")
+        XCTAssertEqual(backend.statusMatch(for: lane), .firstOf([.session("7c4cc4bb"), .session("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")]))
+    }
+
+    func testResumeWithoutAFullIDShowsAnErrorAndStartsNothing() throws {
+        let (backend, dir) = try backend(listing: "[]")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var lane = AgentLane(id: "x", title: "X", directory: URL(fileURLWithPath: "/w/create"), backendID: "bg")
+        lane.agentSessionID = "7c4cc4bb"
+        for stopping in [false, true] {
+            let line = backend.resumeLaunch(for: lane, shell: "/bin/zsh", stoppingBackground: stopping).arguments.last ?? ""
+            XCTAssertFalse(line.contains("claude"), line)
+            XCTAssertTrue(line.contains("not known"))
+        }
+        lane.agentSessionID = nil
+        XCTAssertFalse((backend.resumeLaunch(for: lane, shell: "/bin/zsh", stoppingBackground: true).arguments.last ?? "").contains("claude"))
+    }
+
+    func testAKnownIDIsAttachedAndAnotherHostsLaneIsNotGuessedHere() throws {
+        let (backend, dir) = try backend(listing: runningListing)
+        defer { try? FileManager.default.removeItem(at: dir) }
         var lane = AgentLane(id: "x", title: "X", directory: URL(fileURLWithPath: "/w/create"), backendID: "claude-bg")
         lane.agentSessionID = "7c4cc4bb"
-        XCTAssertEqual(ClaudeBackgroundLaneBackend().launch(for: lane, shell: "/bin/zsh").arguments.last,
+        XCTAssertEqual(backend.launch(for: lane, shell: "/bin/zsh").arguments.last,
                        "exec claude attach '7c4cc4bb'")
         lane.agentSessionID = nil
         lane.host = "desk"
-        let line = ClaudeBackgroundLaneBackend().launch(for: lane, shell: "/bin/zsh").arguments.last ?? ""
+        let line = backend.launch(for: lane, shell: "/bin/zsh").arguments.last ?? ""
         XCTAssertFalse(line.contains("claude"), "neither this Mac's list nor a new session here: \(line)")
     }
 }

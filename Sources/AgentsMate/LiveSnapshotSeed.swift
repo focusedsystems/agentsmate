@@ -61,7 +61,10 @@ enum LiveSnapshotSeed {
                         in snapshot: LiveSessionSnapshot) -> Session? {
         let candidates: [Session]
         if let host { candidates = snapshot.hosts[host]?.sessions ?? [] } else { candidates = [] }
-        if let byLane = candidates.first(where: { $0.lane == lane.id }) { return byLane }
+        // A row that holds a background session's id takes that session only:
+        // a watcher that tied another session to the row's id by folder is not believed.
+        if let byLane = candidates.first(where: { $0.lane == lane.id }),
+           lane.agentSessionID.map({ $0.isEmpty || byLane.agentID == $0 }) ?? true { return byLane }
         if let held = lane.agentSessionID, !held.isEmpty,
            let byID = candidates.first(where: { $0.agentID == held }) {
             return byID

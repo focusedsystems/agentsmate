@@ -45,6 +45,9 @@ public struct AgentLane: Identifiable, Hashable, Sendable {
     /// session's id. Several sessions can share a name, so a backend that
     /// can attach by id does so rather than by ``sessionName``.
     public var agentSessionID: String?
+    /// The agent's full session id for the conversation behind
+    /// ``agentSessionID``, so a stopped session can be resumed by it.
+    public var agentConversationID: String?
     /// A row that must start a session of its own, such as a duplicate: its
     /// first launch starts one and binds only the id that start prints,
     /// never a running session found by name.

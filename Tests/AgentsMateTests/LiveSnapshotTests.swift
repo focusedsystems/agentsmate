@@ -356,3 +356,54 @@ final class LiveSnapshotBoardTests: XCTestCase {
         }
     }
 }
+
+final class LiveSnapshotWrongLaneTests: XCTestCase {
+    func testABackgroundRowIgnoresASessionTheWatcherTiedToItByFolder() throws {
+        let json = snapshotJSON(hosts: ["hub-mac": (Date(), [
+            entry("claude-bg:0d4c8edf", name: "tcc", folder: "/w/tcc", state: "needs-you", lane: "row-bg", agentID: "0d4c8edf"),
+            entry("claude-bg:97a86545", name: "Munki", folder: "/w/tcc", state: "working", agentID: "97a86545"),
+        ])])
+        let snap = try XCTUnwrap(LiveSessionSnapshot.decode(json))
+        var row = AgentLane(id: "row-bg", title: "Munki", directory: URL(fileURLWithPath: "/w/tcc"), backendID: "claude-bg")
+        row.agentSessionID = "97a86545"
+        let hint = LiveSnapshotSeed.hint(for: row, backend: ClaudeBackgroundLaneBackend(), host: "hub-mac", in: snap)
+        XCTAssertEqual(hint?.state, .working, "its own id, not the other session filed under its lane id")
+    }
+}
+
+final class CodexBackendAppSeesBothKindsTests: XCTestCase {
+    func testACodexAppFindsItsTmuxLanesAndTheBackgroundSessions() throws {
+        let folders = ["/w/Systems/Inventory", "/w/Cloud/Vantage"]
+        let codex = CommandLaneBackend.tmuxLane(
+            id: "app.codex", displayName: "Codex", command: "cx", statusAgent: "codex",
+            tmuxSessions: TmuxLaneSessions(prefixes: ["cx-"], isRelevant: { @Sendable session in
+                session.name.hasPrefix("cx-") && session.isInside(anyOf: folders)
+            }))
+        let claude = CommandLaneBackend.tmuxLane(
+            id: "app.claude", displayName: "Claude", command: "cl", statusAgent: "claude",
+            tmuxSessions: TmuxLaneSessions(prefixes: [], isRelevant: { @Sendable session in
+                !session.name.hasPrefix("cx-") && session.isInside(anyOf: folders)
+            }))
+        var background = ClaudeBackgroundLaneBackend(id: "app.claude-bg")
+        background.isRelevant = { @Sendable session in session.isInside(anyOf: folders) }
+        let json = snapshotJSON(hosts: ["hub-mac": (Date(), [
+            entry("tmux:cx-vantage", name: "cx-vantage", folder: "/w/Cloud/Vantage", state: "idle"),
+            entry("tmux:cx-vantage-2", name: "cx-vantage-2", folder: "/w/Cloud/Vantage", state: "idle"),
+            entry("claude-bg:1bca8603", kind: "background", name: "Vantage worktree",
+                  folder: "/w/Cloud/Vantage/.worktrees/x", state: "working", agentID: "1bca8603"),
+            entry("claude-bg:8ca7673e", kind: "background", name: "Inventory", folder: "/w/Systems/Inventory",
+                  state: "working", agentID: "8ca7673e"),
+            entry("tmux:cx-elsewhere", name: "cx-elsewhere", folder: "/w/Other", state: "idle"),
+        ])])
+        let snap = try XCTUnwrap(LiveSessionSnapshot.decode(json))
+        let found = LiveSnapshotSeed.found(in: snap, selfName: "hub-mac", backends: [codex, claude, background],
+                                           scope: { directory, _ in
+            DiscoveredSession.isInRepository(directory, anyOf: folders)
+        })
+        XCTAssertEqual(Set(found.map(\.session.name)),
+                       ["cx-vantage", "cx-vantage-2", "Vantage worktree", "Inventory"], "both kinds, in scope only")
+        XCTAssertEqual(found.filter { $0.session.kind == "tmux" }.map(\.backendID), ["app.codex", "app.codex"])
+        XCTAssertEqual(found.filter { $0.session.kind == ClaudeBackgroundLaneBackend.kind }.map(\.backendID),
+                       ["app.claude-bg", "app.claude-bg"])
+    }
+}

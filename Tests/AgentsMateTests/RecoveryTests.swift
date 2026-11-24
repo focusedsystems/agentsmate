@@ -584,8 +584,11 @@ final class SharedNameSessionTests: XCTestCase {
         XCTAssertEqual(Set(sessions.map(\.key)).count, 4, "one key per session, not per name")
     }
 
-    func testEachSharedNameGetsItsOwnRowAttachedByID() {
-        let backend = ClaudeBackgroundLaneBackend()
+    func testEachSharedNameGetsItsOwnRowAttachedByID() throws {
+        var backend = ClaudeBackgroundLaneBackend()
+        backend.agentsListCache = FileManager.default.temporaryDirectory.appendingPathComponent("am-\(UUID().uuidString).json")
+        try Data(json.utf8).write(to: backend.agentsListCache)
+        defer { try? FileManager.default.removeItem(at: backend.agentsListCache) }
         let found = ClaudeBackgroundLaneBackend.sessions(from: records, isLaneSession: nil)
             .map { DetachedSessions.Found(backendID: backend.id, session: $0) }
         let left = DetachedSessions.unclaimed(found, lanes: [], backends: [backend.id: backend])
@@ -639,5 +642,91 @@ final class SharedNameSessionTests: XCTestCase {
         let lane = LaneWorkspace.Lane(backendID: "claude-bg", sessionName: "same", agentSessionID: "7893df00")
         let back = try JSONDecoder().decode(LaneWorkspace.Lane.self, from: JSONEncoder().encode(lane))
         XCTAssertEqual(back.agentSessionID, "7893df00")
+    }
+}
+
+final class SharedFolderSessionTests: XCTestCase {
+    func testTmuxSessionsInOneFolderAreToldApartByName() {
+        let wrapper = CommandLaneBackend.tmuxLane(id: "c", displayName: "C", command: "c", statusAgent: "codex",
+                                                  tmuxSessions: TmuxLaneSessions(prefixes: ["cx-"]))
+        let backends: [String: any LaneBackend] = ["c": wrapper]
+        let s = { (name: String) in
+            DetachedSessions.Found(backendID: "c", session: DiscoveredSession(kind: "tmux", name: name, directory: "/w/tcc"))
+        }
+        let row = AgentLane(id: "1", title: "TCC", directory: URL(fileURLWithPath: "/w/tcc"), backendID: "c")
+        let left = DetachedSessions.unclaimed([s("cx-tcc"), s("cx-munki-binary-naming")], lanes: [row], backends: backends)
+        XCTAssertEqual(Set(left.map(\.session.name)), ["cx-tcc", "cx-munki-binary-naming"],
+                       "a row with no name of its own takes neither of two sessions that share its folder")
+        let alone = DetachedSessions.unclaimed([s("cx-tcc")], lanes: [row], backends: backends)
+        XCTAssertTrue(alone.isEmpty, "a lone session in the folder is still its row's")
+    }
+
+    func testABackgroundSessionInTheFolderDoesNotHideATmuxSession() {
+        let wrapper = CommandLaneBackend.tmuxLane(id: "c", displayName: "C", command: "c", statusAgent: "codex",
+                                                  tmuxSessions: TmuxLaneSessions(prefixes: ["cx-"], sessionName: { "cx-" + $0.title }))
+        let bg = ClaudeBackgroundLaneBackend(id: "bg")
+        let backends: [String: any LaneBackend] = ["c": wrapper, "bg": bg]
+        let found: [DetachedSessions.Found] = [
+            .init(backendID: "c", session: DiscoveredSession(kind: "tmux", name: "cx-cimian", directory: "/w/cimian")),
+            .init(backendID: "bg", session: DiscoveredSession(kind: "claude-bg", name: "cimian", directory: "/w/cimian", agentID: "14375687")),
+        ]
+        let row = AgentLane(id: "1", title: "cimian", directory: URL(fileURLWithPath: "/w/cimian"), backendID: "c")
+        let left = DetachedSessions.unclaimed(found, lanes: [row], backends: backends)
+        XCTAssertFalse(left.contains { $0.session.name == "cx-cimian" }, "the row keeps its own tmux session by name")
+    }
+}
+
+final class AgentProcessTests: XCTestCase {
+    func testABarePaneIsNoAgentButAClaudeBelowItIs() {
+        let ps = """
+          100     1 -zsh
+          200   100 /bin/zsh -l
+          300   100 /Users/x/.local/share/claude/versions/2.1.150 --resume abc
+          400     1 /usr/bin/other
+        """
+        let table = AgentProcesses.parse(ps)
+        XCTAssertTrue(AgentProcesses.hasAgent(under: 100, in: table))
+        XCTAssertFalse(AgentProcesses.hasAgent(under: 200, in: table), "a shell alone is not an agent")
+        XCTAssertFalse(AgentProcesses.hasAgent(under: 400, in: table))
+        XCTAssertTrue(AgentProcesses.isAgent(command: "codex --yolo"))
+        XCTAssertFalse(AgentProcesses.isAgent(command: "/bin/zsh -c claude-notes"))
+    }
+
+    func testPresenceWithoutAnAgentDoesNotCount() throws {
+        let lane = AgentLane(id: "a", title: "A", directory: URL(fileURLWithPath: "/w/a"), backendID: "s")
+        let list = [LanePresence(name: "munki-devops", directory: "/w/a", attachedClients: 1, hasAgent: false)]
+        XCTAssertNotNil(list.find(for: lane, match: .lane("munki-devops")), "the match itself is unchanged")
+        XCTAssertEqual(list.locate(for: lane, match: .session("97a86545"))?.byName, false)
+    }
+}
+
+@MainActor
+final class PresenceRulesTests: XCTestCase {
+    private func store(_ backend: any LaneBackend, sessionID: String? = nil) -> AgentLaneStore {
+        let defaults = UserDefaults(suiteName: "am-presence-\(UUID().uuidString)")!
+        let store = AgentLaneStore(configuration: .init(termProgram: "Test"), backends: [backend], statusFeed: nil, defaults: defaults)
+        var lane = AgentLane(id: "r", title: "R", directory: URL(fileURLWithPath: "/w/r"), backendID: backend.id)
+        lane.agentSessionID = sessionID
+        store.sync(lanes: [lane])
+        return store
+    }
+
+    func testAPaneWithNoAgentProcessIsNotPresent() {
+        let backend = CommandLaneBackend.tmuxLane(id: "t", displayName: "T", command: "w", statusAgent: "codex",
+                                                  tmuxSessions: TmuxLaneSessions(sessionName: { _ in "munki-devops" }))
+        let store = store(backend)
+        store.apply(presence: [LanePresence(name: "munki-devops", directory: "/w/r", attachedClients: 1, hasAgent: false)])
+        XCTAssertEqual(store.sessions["r"]?.isPresent, false, "a bare shell is not an agent")
+        XCTAssertEqual(store.sessions["r"]?.isActive, false)
+        store.apply(presence: [LanePresence(name: "munki-devops", directory: "/w/r", attachedClients: 1, hasAgent: true)])
+        XCTAssertEqual(store.sessions["r"]?.isPresent, true)
+    }
+
+    func testABackgroundRowIsNeverPresentThroughATmuxSessionInItsFolder() {
+        var bg = ClaudeBackgroundLaneBackend(id: "bg")
+        bg.agentsListCache = FileManager.default.temporaryDirectory.appendingPathComponent("am-none-\(UUID().uuidString)")
+        let store = store(bg, sessionID: "97a86545")
+        store.apply(presence: [LanePresence(name: "cx-tcc", directory: "/w/r", attachedClients: 1, hasAgent: true)])
+        XCTAssertEqual(store.sessions["r"]?.isPresent, false)
     }
 }
