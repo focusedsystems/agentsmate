@@ -197,7 +197,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         .onChange(of: searchText) { store.displayedSidebarSearch = searchText }
         .onAppear { settleFilters(newest: nil) }
         .overlay {
-            if visibleLanes.isEmpty, !store.lanes.isEmpty {
+            if visibleLanes.isEmpty, !store.listedLanes.isEmpty {
                 VStack(spacing: 6) {
                     Text("No Matching \(labels.listTitle)").font(.callout).foregroundStyle(.secondary)
                     Button("Show All", action: clearFilters).controlSize(.small)
@@ -206,7 +206,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         }
     }
 
-    private var sessions: [AgentLaneSession] { store.lanes.compactMap { store.sessions[$0.id] } }
+    private var sessions: [AgentLaneSession] { store.listedLanes.compactMap { store.sessions[$0.id] } }
 
     @ViewBuilder
     private func rows(_ group: LaneGroup, numbers: [AgentLane.ID: Int],
@@ -419,7 +419,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         let sectionHits = query.isEmpty ? [] : lanesInSections(matching: query, groups: store.groups,
                                                                section: store.layout.section(of:))
         let selected = store.selectedID
-        return store.lanes.filter { lane in
+        return store.listedLanes.filter { lane in
             guard let session = store.session(for: lane) else { return false }
             if !query.isEmpty, !sectionHits.contains(lane.id), !matches(session, query: query) { return false }
             var state = filterState(session)
@@ -554,6 +554,9 @@ public struct AgentLaneSidebar<Accessory: View>: View {
             // they sit here rather than on a section's heading; each
             // section's heading keeps its own + for that section.
             accessory
+            ForEach(store.accessoryLanes) { lane in
+                if let accessory = lane.accessory { AgentAccessoryLaneButton(store: store, lane: lane, accessory: accessory) }
+            }
             Menu {
                 newLaneItems(LaneGroup(section: nil, lanes: []))
             } label: {
@@ -1370,14 +1373,15 @@ extension Color {
 }
 
 
-/// The All Agents button in the sidebar's titlebar space: a robot, a
+/// The All Agents button in the sidebar's titlebar space: a grid, a
 /// selected state while All Agents is showing, and how many sessions need
 /// the person as a small badge.
 struct AgentHomeSidebarButton: View {
     @ObservedObject var store: AgentLaneStore
 
-    /// macOS has no robot symbol, so the bundled Lucide bot.
-    static let icon = LaneIcon.bundled("bot")
+    /// A grid, as a board of every session. The robot is left to the app's
+    /// own agents button (``AgentLane/Accessory``), so the two never look alike.
+    static let icon = LaneIcon.symbol("square.grid.2x2")
 
     /// The badge's count: sessions waiting for the person.
     var waiting: Int { store.homeSessions.filter { LaneStatusFilter.wantsYou($0.status) }.count }
@@ -1424,5 +1428,34 @@ struct AgentHomeSidebarButton: View {
         } else {
             Circle().fill(selected ? Color.accentColor : Color.primary.opacity(0.08))
         }
+    }
+}
+
+
+/// The button for a lane the app lists nowhere else (``AgentLane/Accessory``):
+/// it sits in the filter bar, opens the lane in the detail pane and shows as
+/// selected while that pane is showing.
+struct AgentAccessoryLaneButton: View {
+    @ObservedObject var store: AgentLaneStore
+    let lane: AgentLane
+    let accessory: AgentLane.Accessory
+
+    var body: some View {
+        let selected = store.isShowingAccessory(lane.id)
+        Button { store.open(lane.id) } label: {
+            LaneIconView(icon: accessory.icon, size: 14)
+                .frame(width: 18, height: 18)
+                .foregroundStyle(selected ? Color.white : Color.primary)
+                .padding(3)
+                .background {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(selected ? Color.accentColor : Color.clear)
+                }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(accessory.label)
+        .accessibilityLabel(accessory.label)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }

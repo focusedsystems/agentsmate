@@ -600,7 +600,7 @@ public final class AgentLaneStore: ObservableObject {
     func updateBadge() {
         // From the lanes themselves, not the cached list, which may not have
         // caught up with a change that has just been made.
-        let count = lanes.filter { sessions[$0.id]?.needsAttention == true }.count
+        let count = listedLanes.filter { sessions[$0.id]?.needsAttention == true }.count
         badgeCount = count
         guard configuration.notifies, LaneNotifier.isAvailable else { return }
         NSApp.dockTile.badgeLabel = count > 0 ? String(count) : nil
@@ -757,6 +757,14 @@ public final class AgentLaneStore: ObservableObject {
 
     public func backend(id: String) -> (any LaneBackend)? { backends[id] }
 
+    /// The lanes the list shows: every lane but the accessory lanes.
+    public var listedLanes: [AgentLane] { lanes.filter { $0.accessory == nil } }
+    /// The lanes reached from a filter-bar button, in the order given.
+    public var accessoryLanes: [AgentLane] { lanes.filter { $0.accessory != nil } }
+
+    /// Whether the accessory lane `id` is what the detail pane shows.
+    public func isShowingAccessory(_ id: AgentLane.ID) -> Bool { !isHomeShown && selectedID == id }
+
     public var selected: AgentLaneSession? { selectedID.flatMap { sessions[$0] } }
     public var split: AgentLaneSession? { splitID.flatMap { sessions[$0] } }
     public func session(for lane: AgentLane) -> AgentLaneSession? { sessions[lane.id] }
@@ -783,7 +791,9 @@ public final class AgentLaneStore: ObservableObject {
         lanes = newLanes
         for lane in newLanes { makeSession(for: lane) }
         if splitID.map({ !ids.contains($0) }) ?? false { splitID = nil }
-        if selectedID.map({ !ids.contains($0) }) ?? true { selectedID = newLanes.first?.id }
+        if selectedID.map({ !ids.contains($0) }) ?? true {
+            selectedID = (newLanes.first { $0.accessory == nil } ?? newLanes.first)?.id
+        }
         apply(statusFeed?.records ?? [])
         reconcileDetached()
     }
@@ -2443,6 +2453,7 @@ public final class AgentLaneStore: ObservableObject {
     var orderedLanes: [AgentLane] { listSnapshot.orderedLanes }
 
     private func computeOrderedLanes() -> [AgentLane] {
+        let lanes = listedLanes
         guard !defaultRepositoryOrder.isEmpty else { return lanes }
         var rank: [String: Int] = [:]
         for (index, path) in defaultRepositoryOrder.enumerated() {
