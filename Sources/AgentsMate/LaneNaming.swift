@@ -53,14 +53,16 @@ public struct LaneSessionMetadata: Codable, Equatable, Sendable {
 }
 
 extension String {
-    /// "Name" → "Name 2"; "Name 2" → "Name 3", skipping names in `taken`.
+    /// "Name" → "Name 2"; "Name 2" → "Name 3", skipping names in `taken`,
+    /// whatever their case.
     func nextCopyName(taken: Set<String>) -> String {
         var base = self, n = 2
         if let match = range(of: #" (\d+)$"#, options: .regularExpression), let number = Int(self[match].dropFirst()) {
             base = String(self[..<match.lowerBound])
             n = number + 1
         }
-        while taken.contains("\(base) \(n)") { n += 1 }
+        let lowered = Set(taken.map { $0.lowercased() })
+        while lowered.contains("\(base) \(n)".lowercased()) { n += 1 }
         return "\(base) \(n)"
     }
 }

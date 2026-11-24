@@ -134,8 +134,8 @@ final class ClaudeBackgroundLaneBackendTests: XCTestCase {
 
     func testANameResolvesToAnIDExactlyThenIgnoringCaseNeverByPart() {
         let rec = { (id: String, name: String, dir: String) in
-            LaneStatus(agent: "claude", state: .running, lane: name, directory: dir, sessionID: id, event: "claude agents",
-                       updatedAt: Date(), agentID: id)
+            LaneStatus(agent: "claude", state: .running, lane: name, directory: dir, sessionID: id,
+                       message: ClaudeAgentsList.backgroundMessage, event: "claude agents", updatedAt: Date(), agentID: id)
         }
         let records = [rec("7344ef63", "Personal - Create", "/w/create"), rec("7c4cc4bb", "create", "/w/create"),
                        rec("5fe18022", "Port the create sidebar", "/w/create"),
@@ -156,6 +156,55 @@ final class ClaudeBackgroundLaneBackendTests: XCTestCase {
         let line = B.ambiguousLine(name: "NOTES", ids: ["bbbb0002", "cccc0003"])
         XCTAssertFalse(line.contains("claude"), "attaches nothing")
         XCTAssertTrue(line.contains("bbbb0002, cccc0003"))
+    }
+
+    private func backend(listing json: String) throws -> (ClaudeBackgroundLaneBackend, URL) {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("am-bg-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        var backend = ClaudeBackgroundLaneBackend(id: "bg")
+        backend.agentsListCache = dir.appendingPathComponent("claude-agents.json")
+        backend.startedIDDirectory = dir.appendingPathComponent("started")
+        try Data(json.utf8).write(to: backend.agentsListCache)
+        return (backend, dir)
+    }
+
+    private let listing = #"""
+    [{"id":"7c4cc4bb","name":"create","cwd":"/w/create","kind":"background","state":"done"},
+     {"id":"1a2b3c4d","name":"Create 2","cwd":"/w/create","kind":"interactive","status":"idle"}]
+    """#
+
+    func testADuplicateNeverTakesARunningSessionByName() throws {
+        let (backend, dir) = try backend(listing: listing)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var lane = AgentLane(id: "copy", title: "Create 2", directory: URL(fileURLWithPath: "/w/create"), backendID: "bg")
+        lane.sessionName = "create"
+        XCTAssertEqual(backend.resolution(for: lane), .one("7c4cc4bb"))
+        lane.startsNewSession = true
+        XCTAssertEqual(backend.resolution(for: lane), .none, "must start new: the name is never looked up")
+        let line = backend.launch(for: lane, shell: "/bin/zsh").arguments.last ?? ""
+        XCTAssertTrue(line.contains(backend.startedIDFile(for: lane).path), "the printed id is recorded for the row")
+        try FileManager.default.createDirectory(at: backend.startedIDDirectory, withIntermediateDirectories: true)
+        try "b7c18466\n".write(to: backend.startedIDFile(for: lane), atomically: true, encoding: .utf8)
+        XCTAssertEqual(backend.resolution(for: lane), .one("b7c18466"), "then it attaches the id its start printed")
+    }
+
+    func testAnInteractiveSessionOrAnotherRowsSessionIsNeverBound() throws {
+        let (backend, dir) = try backend(listing: listing)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var lane = AgentLane(id: "a", title: "A", directory: URL(fileURLWithPath: "/w/create"), backendID: "bg")
+        lane.sessionName = "Create 2"
+        XCTAssertEqual(backend.resolution(for: lane), .none, "the interactive session of that name is not a candidate")
+        lane.sessionName = "create"
+        backend.holders.set(["7c4cc4bb": "other-row"])
+        XCTAssertEqual(backend.resolution(for: lane), .held("7c4cc4bb"))
+        XCTAssertNil(backend.attachID(for: lane), "so stop leaves it alone too")
+        XCTAssertFalse(backend.launch(for: lane, shell: "/bin/zsh").arguments.last?.contains("claude") == true)
+        backend.holders.set(["7c4cc4bb": "a"])
+        XCTAssertEqual(backend.resolution(for: lane), .one("7c4cc4bb"), "its own row may")
+    }
+
+    func testCopyNamesSkipTakenNamesWhateverTheirCase() {
+        XCTAssertEqual("Create".nextCopyName(taken: ["create 2", "CREATE 3"]), "Create 4")
     }
 
     func testAKnownIDIsAttachedAndAnotherHostsLaneIsNotGuessedHere() {

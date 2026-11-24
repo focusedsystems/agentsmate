@@ -6,6 +6,9 @@ import Foundation
 public enum ClaudeAgentsList {
     /// The `event` of every record read from the list.
     public static let event = "claude agents"
+    /// The `message` of a record for a background session (`claude --bg`),
+    /// as against an interactive one.
+    public static let backgroundMessage = "background session"
     struct Entry: Decodable {
         var id: String?
         var sessionId: String?
