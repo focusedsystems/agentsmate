@@ -159,3 +159,25 @@ final class AgentsCapsuleTests: XCTestCase {
         XCTAssertEqual(image.size.height, AgentsToolbar.buttonHeight)
     }
 }
+
+@MainActor
+final class AgentsCapsuleTintTests: XCTestCase {
+    /// The capsule's fill, sampled just inside its left end.
+    private func fill(isOn: Bool) throws -> (r: CGFloat, g: CGFloat, b: CGFloat) {
+        let view = AgentsToolbarButton(AgentsToolbarAgent(isOn: isOn) {}, drawsGlass: false)
+            .environment(\.colorScheme, .light)
+        let renderer = ImageRenderer(content: view)
+        renderer.scale = 1
+        let image = try XCTUnwrap(renderer.nsImage)
+        let rep = try XCTUnwrap(NSBitmapImageRep(data: try XCTUnwrap(image.tiffRepresentation)))
+        let color = try XCTUnwrap(rep.colorAt(x: 8, y: rep.pixelsHigh / 2)?.usingColorSpace(.sRGB))
+        return (color.redComponent, color.greenComponent, color.blueComponent)
+    }
+
+    func testTheCapsuleIsBlueAsTheWayInAndNeutralWhileAgentsModeIsOn() throws {
+        let off = try fill(isOn: false)
+        let on = try fill(isOn: true)
+        XCTAssertGreaterThan(off.b - off.r, 0.05, "off is tinted blue, as a call to action")
+        XCTAssertLessThan(abs(on.b - on.r), 0.03, "on is plain glass in the label colour")
+    }
+}

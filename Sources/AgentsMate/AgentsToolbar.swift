@@ -83,8 +83,9 @@ public struct AgentsToolbarHistory {
 }
 
 /// The toolbar's Agents control: a robot and "Agents", as tall as the circular
-/// sidebar toggle it sits beside, with a selected tint while Agents mode is on.
-/// It carries ⇧⌘A, which toggles Agents mode from anywhere.
+/// sidebar toggle it sits beside. Tinted blue while Agents mode is off, as the
+/// way in; plain glass in the label colour while it is on. It carries ⇧⌘A,
+/// which toggles Agents mode from anywhere.
 public struct AgentsToolbarButton: View {
     private let agent: AgentsToolbarAgent
     /// Off only offscreen, where the system's glass does not draw.
@@ -101,11 +102,11 @@ public struct AgentsToolbarButton: View {
         let isOn = agent.isOn
         let button = Button { agent.press() } label: {
             HStack(spacing: 6) {
-                LaneIconView(icon: agent.icon, tint: isOn ? Color.accentColor : Color.primary, size: 16)
+                LaneIconView(icon: agent.icon, tint: isOn ? Color.primary : Color.accentColor, size: 16)
                     .accessibilityHidden(true)
                 Text(AgentsToolbar.agentsTitle)
             }
-            .foregroundStyle(isOn ? Color.accentColor : Color.primary)
+            .foregroundStyle(isOn ? Color.primary : Color.accentColor)
             .padding(.horizontal, 14)
             .frame(height: AgentsToolbar.buttonHeight)
         }
@@ -121,15 +122,15 @@ public struct AgentsToolbarButton: View {
     private func styled(_ button: some View, isOn: Bool) -> some View {
         if !drawsGlass {
             button.buttonStyle(.plain)
-                .background(isOn ? Color.accentColor.opacity(0.22) : Color.primary.opacity(0.08), in: Capsule())
+                .background(isOn ? Color.primary.opacity(0.08) : Color.accentColor.opacity(0.22), in: Capsule())
         } else if #available(macOS 26.0, *) {
             button.buttonStyle(.plain)
-                .glassEffect(isOn ? .regular.tint(Color.accentColor.opacity(0.28)).interactive() : .regular.interactive(),
+                .glassEffect(isOn ? .regular.interactive() : .regular.tint(Color.accentColor.opacity(0.28)).interactive(),
                              in: .capsule)
                 .contentShape(Capsule())
         } else {
             button.buttonStyle(.plain)
-                .background(isOn ? Color.accentColor.opacity(0.22) : Color.primary.opacity(0.08), in: Capsule())
+                .background(isOn ? Color.primary.opacity(0.08) : Color.accentColor.opacity(0.22), in: Capsule())
         }
     }
 }
