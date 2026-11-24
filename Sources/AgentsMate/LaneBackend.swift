@@ -7,6 +7,22 @@ import AgentsMateStatus
 /// session the person started) and which backend runs each one. Nothing in
 /// AgentsMate knows a path or a command of its own.
 public struct AgentLane: Identifiable, Hashable, Sendable {
+    /// A lane the app reaches from a button in the sidebar's filter bar and
+    /// the Agent menu instead of a row in the list: the button's icon and
+    /// its label, used as the tooltip, the accessibility label and the menu
+    /// item. Such a lane is a lane in every other way (its terminal, status,
+    /// saved selection), but it is left out of the list, the counts above
+    /// it, the Dock badge, All Agents and the displayed export.
+    public struct Accessory: Hashable, Sendable {
+        public var icon: LaneIcon
+        public var label: String
+        public init(icon: LaneIcon, label: String) {
+            self.icon = icon
+            self.label = label
+        }
+        public init(symbol: String, label: String) { self.init(icon: .symbol(symbol), label: label) }
+    }
+
     public var id: String
     public var title: String
     /// An SF Symbol name.
@@ -57,6 +73,9 @@ public struct AgentLane: Identifiable, Hashable, Sendable {
     /// terminal gets `CLAUDE_REMOTE_HOST` and `CODEX_REMOTE_HOST` naming it,
     /// which the lane wrappers read.
     public var host: String?
+    /// Set to reach this lane from a filter-bar button rather than a row;
+    /// see ``Accessory``. Nil is an ordinary listed lane.
+    public var accessory: Accessory?
 
     public init(id: String, title: String, symbol: String = "terminal", tintHex: String? = nil,
                 directory: URL? = nil, backendID: String, isClosable: Bool = false,

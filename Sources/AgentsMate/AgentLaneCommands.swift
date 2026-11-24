@@ -64,6 +64,18 @@ public struct AgentLaneCommands: Commands {
                 .disabled(store.lanes.isEmpty)
                 Divider()
             }
+            // Lanes the app reaches from a filter-bar button have no row to
+            // find them by, so each has its menu item.
+            ForEach(store.accessoryLanes) { lane in
+                if let accessory = lane.accessory {
+                    Button(accessory.label) {
+                        reveal()
+                        store.open(lane.id)
+                    }
+                    .disabled(store.sessions[lane.id] == nil)
+                }
+            }
+            if !store.accessoryLanes.isEmpty { Divider() }
             // The pinned rows, on ⌘1–⌘9 in the order the list shows them.
             ForEach(Array(store.numberedLanes.enumerated()), id: \.element.id) { index, lane in
                 laneButton(lane, index: index)
