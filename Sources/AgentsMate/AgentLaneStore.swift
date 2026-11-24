@@ -141,6 +141,10 @@ public final class AgentLaneStore: ObservableObject {
         public var showsSectionHeadings: Bool
         /// Draw each row's icon. Off, a row shows its status dot alone.
         public var showsLaneIcons: Bool
+        /// Draw pull request pills on rows and All Agents cards. Off by
+        /// default; the person can turn them on in ``AgentSidebarSettingsSection``.
+        /// Pull requests stay in a row's menu and hover either way.
+        public var showsPullRequestPills: Bool
         /// Where a session found for a lane (a parallel session) goes:
         /// a top-level row like its lane's, or indented under it.
         public var parallelSessions: ParallelSessionPlacement
@@ -211,6 +215,7 @@ public final class AgentLaneStore: ObservableObject {
                     hostSessions: HostSessionsConfiguration? = nil, showsSectionHeadings: Bool = true,
                     defaultRepositoryOrder: [String] = [], showsHome: Bool = true,
                     launchShows: AgentsLaunchDestination = .home, showsLaneIcons: Bool = true,
+                    showsPullRequestPills: Bool = false,
                     parallelSessions: ParallelSessionPlacement = .topLevel,
                     liveSnapshotFile: URL? = LiveSessionSnapshot.standardURL, opensActiveOnly: Bool = true,
                     displayedExportFile: URL? = Configuration.defaultDisplayedExportFile,
@@ -220,6 +225,7 @@ public final class AgentLaneStore: ObservableObject {
             self.liveSnapshotFile = liveSnapshotFile
             self.opensActiveOnly = opensActiveOnly
             self.showsLaneIcons = showsLaneIcons
+            self.showsPullRequestPills = showsPullRequestPills
             self.parallelSessions = parallelSessions
             self.showsHome = showsHome
             self.launchShows = launchShows
@@ -3059,6 +3065,7 @@ public struct AgentsModeKeys: Sendable {
     /// (``AgentSidebarSettingsSection``).
     public var showsSectionHeadings: String { prefix + "showsSectionHeadings" }
     public var showsLaneIcons: String { prefix + "showsLaneIcons" }
+    public var showsPullRequestPills: String { prefix + "showsPullRequestPills" }
     public var parallelSessions: String { prefix + "parallelSessions" }
     /// The agent new sessions start on, as a ``LaneReopenChoice/Kind`` raw
     /// value (`claudeRemote`, `codexRemote`, `claudeDirect`, `codexDirect`);
