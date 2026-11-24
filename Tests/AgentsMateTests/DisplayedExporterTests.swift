@@ -108,4 +108,17 @@ final class DisplayedExporterTests: XCTestCase {
         XCTAssertNil(store.configuration.displayedExportFile)
         XCTAssertNil(store.displayedExporter)
     }
+
+    func testTheExportSaysWhetherAllAgentsIsSelectedAndTheButtonSaysSo() throws {
+        let store = store()
+        XCTAssertFalse(store.displayedExport().allAgentsSelected)
+        store.showHome()
+        XCTAssertTrue(store.displayedExport().allAgentsSelected)
+        store.open("api")
+        XCTAssertFalse(store.displayedExport().allAgentsSelected)
+        XCTAssertEqual(AgentHomeSidebarButton.help(shortcut: "\u{21E7}\u{2318}A"), "All Agents \u{21E7}\u{2318}A")
+        XCTAssertEqual(AgentHomeSidebarButton.help(shortcut: nil), "All Agents")
+        XCTAssertEqual(AgentHomeSidebarButton(store: store).waiting, 0)
+        XCTAssertEqual(store.shortcuts.binding(for: .home)?.display, "\u{21E7}\u{2318}A", "the shortcut the tooltip names")
+    }
 }

@@ -306,7 +306,7 @@ public struct AgentHomeView: View {
     @ViewBuilder
     private var emptyState: some View {
         VStack(spacing: 10) {
-            LaneIconView(icon: AgentHomeSidebarRow.icon, tint: .secondary, size: 32)
+            LaneIconView(icon: AgentHomeSidebarButton.icon, tint: .secondary, size: 32)
                 .accessibilityHidden(true)
             if isFiltering, !allGroups.isEmpty {
                 Text("No Matching Sessions").font(.title3)

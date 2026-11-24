@@ -23,6 +23,19 @@ private func mode(_ url: URL) -> Int {
 }
 
 final class DisplayedSchemaTests: XCTestCase {
+    func testAllAgentsSelectedIsAddedWithoutANewSchemaAndOldFilesStillRead() throws {
+        var value = export()
+        value.allAgentsSelected = true
+        let data = try JSONEncoder().encode(value)
+        XCTAssertTrue(String(decoding: data, as: UTF8.self).contains("\"all_agents_selected\":true"))
+        XCTAssertEqual(try JSONDecoder().decode(DisplayedExport.self, from: data).allAgentsSelected, true)
+        XCTAssertEqual(value.schemaVersion, 1)
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        object.removeValue(forKey: "all_agents_selected")
+        let old = try JSONSerialization.data(withJSONObject: object)
+        XCTAssertEqual(try JSONDecoder().decode(DisplayedExport.self, from: old).allAgentsSelected, false)
+    }
+
     func testEncodesTheSchemaWithExplicitNulls() throws {
         var value = export(rows: [row("one", session: "ab12cd34", attached: "ab12cd34")], cards: [row("one")])
         value.writtenAt = Date(timeIntervalSince1970: 1_700_000_000)
@@ -31,7 +44,7 @@ final class DisplayedSchemaTests: XCTestCase {
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: value.encoded()) as? [String: Any])
         XCTAssertEqual(object["schema_version"] as? Int, 1)
         XCTAssertEqual(Set(object.keys), ["schema_version", "app", "written_at", "last_discovery_finished_at", "filter",
-                                          "counts", "rows", "all_agents"])
+                                          "counts", "rows", "all_agents", "all_agents_selected"])
         XCTAssertTrue(object["last_discovery_finished_at"] is NSNull)
         let app = try XCTUnwrap(object["app"] as? [String: Any])
         XCTAssertEqual(Set(app.keys), ["bundle_id", "version", "build", "agentsmate_commit"])

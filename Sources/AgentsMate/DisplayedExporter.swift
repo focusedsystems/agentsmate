@@ -222,7 +222,7 @@ extension AgentLaneStore {
                           statuses: LaneStatusFilter.allCases.filter(filters.contains).map(Self.exportName),
                           search: search.isEmpty ? nil : search, sidebarSearch: sidebarQuery.isEmpty ? nil : sidebarQuery),
             counts: .init(needsYou: totals.needsYou, working: totals.working, idleOrDone: totals.recent),
-            rows: rows, allAgents: cards)
+            rows: rows, allAgents: cards, allAgentsSelected: isHomeShown)
     }
 
     private static func exportName(_ filter: LaneStatusFilter) -> String {
