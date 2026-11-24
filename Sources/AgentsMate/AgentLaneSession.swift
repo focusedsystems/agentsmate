@@ -136,7 +136,8 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
     /// The lane's session is running somewhere: a presence source or a
     /// daemon's session list has it, whether or not it is attached here.
     public var isAlive: Bool {
-        isPresent || (record.map { $0.isPolled && $0.state != .ended } ?? false) || standingHint?.isAlive == true
+        isPresent || (record.map { $0.isPolled && $0.state != .ended } ?? false)
+            || (polledRecord.map { $0.state != .ended } ?? false) || standingHint?.isAlive == true
     }
 
     /// Attached here, or running somewhere: what the Active filter shows.
@@ -333,6 +334,17 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
     /// Takes effect the next time the lane is attached.
     func update(backend: any LaneBackend) {
         self.backend = backend
+    }
+
+    /// The daemon's own listing of this lane's session, kept apart from
+    /// ``record``: a hook's record of a question or a finished turn is shown
+    /// in place of the poll's (`laneStatusPick()`), but the session is still
+    /// listed, so it is still running.
+    private(set) var polledRecord: LaneStatus?
+
+    func update(record new: LaneStatus?, polled: LaneStatus?) {
+        polledRecord = polled
+        update(record: new)
     }
 
     func update(record new: LaneStatus?) {

@@ -2747,10 +2747,11 @@ public final class AgentLaneStore: ObservableObject {
         recordBackgroundSessionIDs(records)
         var held: [AgentLane.ID: [String]] = [:]
         var owned: [AgentLane.ID: DetachedSessions.OwnedSession] = [:]
+        let listed = records.filter(\.isPolled)
         for session in sessions.values {
             let match = statusMatch(for: session, records: records)
             let record = match.find(in: records)
-            session.update(record: record)
+            session.update(record: record, polled: record?.isPolled == true ? record : match.find(in: listed))
             guard !detachedIDs.contains(session.id) else { continue }
             if let own = ownedSession(for: session.lane) {
                 owned[session.id] = own
