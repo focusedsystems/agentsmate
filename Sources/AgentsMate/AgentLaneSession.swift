@@ -53,12 +53,23 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
     /// the status comes from the agent's own reports.
     @Published public private(set) var lastOutputAt: Date?
 
-    /// The latest of the last output here and the last status report.
+    /// The latest of the last output here and the last status report, or
+    /// what the live snapshot said while there is neither.
     public var lastActivity: Date? {
         switch (lastOutputAt, record?.updatedAt) {
         case let (output?, report?): max(output, report)
-        case let (output, report): output ?? report
+        case let (output, report): output ?? report ?? liveHint?.lastActivity
         }
+    }
+
+    /// What the live snapshot said about this lane's session, until the
+    /// status feed, presence or the lane's host says. Nil once they have.
+    @Published public internal(set) var liveHint: LiveSessionHint?
+
+    /// The hint, while nothing more current is known about the lane.
+    var standingHint: LiveSessionHint? {
+        guard let liveHint, !isStarted, !isPresent, record == nil || record?.state == .ended else { return nil }
+        return liveHint
     }
 
     /// One line on what the agent is working on, when summaries are on.
@@ -120,7 +131,7 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
     /// The lane's session is running somewhere: a presence source or a
     /// daemon's session list has it, whether or not it is attached here.
     public var isAlive: Bool {
-        isPresent || (record.map { $0.isPolled && $0.state != .ended } ?? false)
+        isPresent || (record.map { $0.isPolled && $0.state != .ended } ?? false) || standingHint?.isAlive == true
     }
 
     /// Attached here, or running somewhere: what the Active filter shows.
@@ -253,6 +264,7 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
             case .ended: break
             }
         }
+        if let hint = standingHint { return hint.displayStatus }
         if !isStarted { return .notOpened }
         return hasExited ? .detached : .attached
     }

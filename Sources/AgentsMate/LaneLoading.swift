@@ -76,6 +76,8 @@ extension AgentLaneStore {
         let finding = configuration.findsDetachedSessions && !firstSweepFinished
         for lane in lanes {
             guard let session = sessions[lane.id], !session.isAttached else { continue }
+            // The live snapshot already says how it is; it is refreshed quietly.
+            if session.standingHint != nil, launchAttachPending != lane.id { continue }
             if launchAttachPending == lane.id {
                 stages[lane.id] = .attaching
                 continue

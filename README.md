@@ -339,6 +339,25 @@ Launch shows it and attaches nothing until the person picks a card. Set
 launch instead, or `showsHome = false` to leave it out. The API and saved keys
 keep its first name, Home.
 
+All Agents opens with only the active sessions showing (`opensActiveOnly`,
+on by default). Its Active / All Lanes switch is the sidebar's Active filter.
+All Lanes adds a Not Running column for saved lanes with nothing running.
+
+At launch the store reads a live snapshot, `LiveSessionSnapshot`, from
+`Configuration.liveSnapshotFile` (by default
+`~/.local/state/agentsmate/live-sessions.json`), so the board shows active
+sessions before any host answers. An outside watcher writes this file;
+its format is documented on the type. The snapshot only seeds what is shown.
+It never starts or attaches a session, and it is replaced as the status
+feed, the first sweep and each host's listing come in. A lane takes a
+snapshot entry only on an exact match, on the lane's own host: the app lane
+id, the short id or the tmux name. A folder never matches. Found sessions
+come from the snapshot only within `sessionScope`; with no scope, none are
+shown. The file is ignored when it is missing, malformed, more than 30
+minutes old, owned by another user, or writable by group or others. A host
+that has not reported lately keeps its cards, marked with when it was last
+seen.
+
 ## Sidebar shape
 
 Three choices shape the sidebar. Each app sets the default in

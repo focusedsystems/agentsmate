@@ -446,6 +446,10 @@ public struct AgentLaneSidebar<Accessory: View>: View {
     private func settleFilters(newest: LaneStatusFilter?) {
         let on = activeFilters
         guard !on.isEmpty else { return }
+        // While the lanes are still loading, an empty list says nothing yet:
+        // Active, on at launch, stays on until the hosts have answered.
+        guard newest != nil || !(store.homeLoading.isLoading || store.laneLoadProgress(store.laneLoadStages).isLoading)
+        else { return }
         let kept = LaneStatusFilter.settled(on, newest: newest, lanes: sessions.map(Self.filterState))
         for filter in on.subtracting(kept) { setFilter(filter, false) }
     }
