@@ -377,7 +377,21 @@ enum DetachedSessions {
         if let same = sameAgent(lane, session) { return same }
         if let name = laneName(lane, backend: backend) { return name == session.name }
         guard byFolder, let directory = session.directory else { return false }
-        return LaneStatusMatch.normalizedPath(directory) == LaneStatusMatch.normalizedPath(lane.path)
+        guard LaneStatusMatch.normalizedPath(directory) == LaneStatusMatch.normalizedPath(lane.path) else { return false }
+        // A row that cannot name its session takes the one in its folder, but
+        // never one named for a second lane there: `<folder>-<number>`.
+        return !(session.kind == TmuxLaneSessions.kind && isSecondLaneName(session.name, folder: lane.path))
+    }
+
+    /// Whether a session name ends with the folder's name and a number from
+    /// 2, as a wrapper names a second lane in that folder (`TmuxLaneSessions/folderSessionName(prefix:)`).
+    static func isSecondLaneName(_ name: String, folder: String) -> Bool {
+        let base = (folder as NSString).lastPathComponent.lowercased()
+            .replacingOccurrences(of: " ", with: "-").replacingOccurrences(of: ".", with: "-")
+        guard !base.isEmpty, base != "/", let dash = name.lastIndex(of: "-") else { return false }
+        let number = name[name.index(after: dash)...]
+        guard let n = Int(number), n >= 2, number.allSatisfy(\.isNumber) else { return false }
+        return name[..<dash].lowercased().hasSuffix(base)
     }
 
     /// The session name a row attaches, when its backend or status match
