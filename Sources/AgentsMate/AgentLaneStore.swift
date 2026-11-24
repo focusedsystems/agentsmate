@@ -346,7 +346,35 @@ public final class AgentLaneStore: ObservableObject {
                 if let backend = backends[prepared.backendID] { session.update(backend: backend) }
             }
         }
+        if !session.isAttached, session.attachOnlyLaunch == nil, let launch = boundSessionLaunch(for: session) {
+            session.attachOnlyLaunch = launch
+        }
         session.start(configuration: configuration, font: font)
+    }
+
+    /// The launch for a row whose bindings own a live Claude background
+    /// session: `claude attach` of exactly that id, so the pane is the
+    /// session the row's summary and status come from, whatever backend the
+    /// row defaults to. Nil when no session is bound or the bound one is not
+    /// live; then the backend's own launch runs, which never replaces a live
+    /// session.
+    func boundSessionLaunch(for session: AgentLaneSession) -> TerminalLaunch? {
+        guard let config = configuration.hostSessions, let owned = ownedSession(for: session.lane),
+              isLive(owned) else { return nil }
+        return HostSessions.launch(.claude(id: owned.agentID, host: owned.host), lane: session.lane,
+                                   shell: AgentLaneSession.loginShell, config: config)
+    }
+
+    /// Whether the Claude background session a row owns is running now, by
+    /// its exact short id on its host.
+    private func isLive(_ owned: DetachedSessions.OwnedSession) -> Bool {
+        let live = { (records: [LaneStatus]) in
+            records.contains { $0.agentID == owned.agentID && $0.state != .ended }
+        }
+        if let host = owned.host { return hostListings[host].map { live($0.claude) } ?? false }
+        if let local = localListing, live(local.claude) { return true }
+        if let own = liveSelfName, let listing = hostListings[own], live(listing.claude) { return true }
+        return live(statusFeed?.records ?? [])
     }
 
     /// The person's keyboard shortcuts for the lanes' commands.

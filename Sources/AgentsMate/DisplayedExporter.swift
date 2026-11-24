@@ -156,7 +156,7 @@ extension AgentLaneStore {
         return DisplayedExport.Row(
             section: section, title: session.title, laneID: lane.id,
             backend: backendKind(backend, id: lane.backendID), agent: agent,
-            sessionID: lane.agentSessionID, attachedSessionID: running?.agentID ?? running?.sessionID,
+            sessionID: lane.agentSessionID ?? ownedSession(for: lane)?.agentID, attachedSessionID: running?.agentID ?? running?.sessionID,
             sessionName: lane.sessionName ?? backend?.sessionName(for: lane),
             host: liveHost(for: lane) ?? backend.flatMap(DetachedSessions.laneHost) ?? lane.host,
             folder: lane.directory?.path, state: session.status.exportState, attached: session.isAttached,
