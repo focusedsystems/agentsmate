@@ -70,6 +70,9 @@ public struct ClaudeBackgroundLaneBackend: LaneBackend {
             line = Self.ambiguousLine(name: name, ids: ids)
         case .none:
             line = Self.startLine(claude: claude, name: name, arguments: startArguments)
+        case .elsewhere(let host):
+            let message = "“\(name)” runs on \(host), and its session id is not known here, so nothing was attached."
+            line = "printf '%s\\n' \(ShellQuote.quote(message)); exit 1"
         }
         return TerminalLaunch(executable: shell, arguments: ["-l", "-i", "-c", line], directory: lane.path)
     }
@@ -107,12 +110,16 @@ public struct ClaudeBackgroundLaneBackend: LaneBackend {
         case several([String])
         /// None runs: start one.
         case none
+        /// The lane is on another host, which this Mac's list cannot speak for.
+        case elsewhere(String)
     }
 
     /// The session `lane` attaches: the id the row knows, else the running
     /// session in the shared list with the lane's name and folder.
     func resolution(for lane: AgentLane) -> Resolution {
         if let id = lane.agentSessionID, HostSessions.isValidAgentID(id) { return .one(id) }
+        // This Mac's list says nothing about another host's sessions.
+        if let host = lane.host, !host.isEmpty { return .elsewhere(host) }
         guard let data = try? Data(contentsOf: agentsListCache) else { return .none }
         return Self.resolve(name: sessionName(for: lane) ?? name(lane), in: lane.path, records: ClaudeAgentsList.parse(data))
     }
@@ -123,17 +130,17 @@ public struct ClaudeBackgroundLaneBackend: LaneBackend {
         return nil
     }
 
-    /// The live sessions in `records` working in `folder` whose name is
-    /// `name`: exactly, else ignoring case. Never part of a name.
+    /// The live sessions in `records` (one host's list) working in `folder`
+    /// whose name is `name`, ignoring case. Only one is attached: with two
+    /// or more, none is. Never part of a name.
     static func resolve(name: String, in folder: String, records: [LaneStatus]) -> Resolution {
         let folder = LaneStatusMatch.normalizedPath(folder)
-        let here = records.filter { record in
+        let found = records.filter { record in
             record.state != .ended && record.directory.map(LaneStatusMatch.normalizedPath) == folder
                 && record.agentID.map(HostSessions.isValidAgentID) == true
+                && record.lane?.caseInsensitiveCompare(name) == .orderedSame
         }
-        var found = here.filter { $0.lane == name }
-        if found.isEmpty { found = here.filter { $0.lane?.caseInsensitiveCompare(name) == .orderedSame } }
-        let ids = found.compactMap(\.agentID)
+        let ids = Array(Set(found.compactMap(\.agentID))).sorted()
         switch ids.count {
         case 0: return .none
         case 1: return .one(ids[0])
@@ -148,13 +155,9 @@ public struct ClaudeBackgroundLaneBackend: LaneBackend {
         return nil
     }
 
-    /// The session found by name, else the one ``name`` gives the lane,
-    /// with its ``AgentLane/variant`` after a dash so a second lane in the
-    /// folder has a session of its own.
+    /// The session found by name, else the one ``name`` gives the lane.
     public func sessionName(for lane: AgentLane) -> String? {
-        if let held = lane.sessionName { return held }
-        guard let variant = lane.variant, !variant.isEmpty else { return name(lane) }
-        return name(lane) + "-" + variant
+        lane.sessionName ?? name(lane)
     }
 
     /// The background sessions in `claude agents --json` (interactive ones

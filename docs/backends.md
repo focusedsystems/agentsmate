@@ -32,10 +32,13 @@ Opt-in. Claude Code 2.1.325 runs sessions in its own daemon:
 
 The backend attaches the session named after the lane's folder, always by its
 short id: `claude attach` also takes part of a name and refuses when several
-match. The name is resolved to an id from `claude agents --json`, exactly and
-then ignoring case, in the lane's folder only. When none runs it starts one
-and attaches the id `claude --bg` prints; when several share the name, the
-pane says so and attaches none. Duplicating such a lane opens an ordinary new
+match. The name is resolved to an id from this Mac's `claude agents --json`,
+ignoring case, in the lane's folder only, and only when exactly one session
+fits; with two or more the pane says so and attaches none. A lane on another
+host is never resolved from this Mac's list. When none runs it starts one and
+attaches the id `claude --bg` prints. Once the list shows exactly one session
+for an attached row, the row keeps that id, so it is attached and restored by
+id from then on. Duplicating such a lane opens an ordinary new
 lane on the app's new-lane backend rather than another background session. `ClaudeAgentsStatusSource` reads its state from
 `claude agents --json`; add it to a `LaneStatusFeed`'s `sources`. It has no
 `renameCommand`: the session's name is how every device attaches it, so

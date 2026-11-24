@@ -1759,6 +1759,9 @@ public final class AgentLaneStore: ObservableObject {
         lane.variant = freeVariant(for: lane)
         let taken = Set(sessions.values.map(\.title))
         let name = session.title.nextCopyName(taken: taken)
+        // A Claude background copy names its own new session after itself,
+        // so it never resolves to the source's session.
+        if backends[lane.backendID] is ClaudeBackgroundLaneBackend { lane.sessionName = name }
         let added = add(lane, focus: focus, after: id)
         setName(lane.id, to: name)
         return added
@@ -1766,17 +1769,13 @@ public final class AgentLaneStore: ObservableObject {
 
     /// What a "Same Agent" duplicate of `source` runs. A lane on an agent
     /// starts the way a new lane in its folder does (the New Sessions
-    /// choice, else the source's own backend); a lane that attaches
-    /// sessions it did not start, such as a Claude background lane, takes
-    /// the app's new-lane backend instead. Anything else, such as a shell,
-    /// keeps its backend.
+    /// choice, else the source's own backend); a Claude background lane
+    /// takes what a new session in that folder starts on, folder rules and
+    /// all. Anything else, such as a shell, keeps its backend.
     func duplicateBackendID(for source: AgentLane, in folder: URL?) -> String {
         if backends[source.backendID] is ClaudeBackgroundLaneBackend {
             let plan = newSessionPlan(in: folder).backendID
-            if backends[plan] != nil, !(backends[plan] is ClaudeBackgroundLaneBackend) { return plan }
-            let fallback = configuredNewLaneBackendID
-            if backends[fallback] != nil, !(backends[fallback] is ClaudeBackgroundLaneBackend) { return fallback }
-            return source.backendID
+            return backends[plan] == nil ? source.backendID : plan
         }
         guard agentKind(ofBackend: source.backendID) != nil else { return source.backendID }
         let plan = newSessionPlan(preferring: source.backendID, in: folder).backendID
@@ -2488,6 +2487,7 @@ public final class AgentLaneStore: ObservableObject {
     }
 
     private func apply(_ records: [LaneStatus]) {
+        recordBackgroundSessionIDs(records)
         var held: [AgentLane.ID: [String]] = [:]
         var owned: [AgentLane.ID: DetachedSessions.OwnedSession] = [:]
         for session in sessions.values {
@@ -2513,6 +2513,29 @@ public final class AgentLaneStore: ObservableObject {
             heldSessionIDs = held
             ownedSessionIDs = owned
             if !discovered.isEmpty { reconcileDetached() }
+        }
+    }
+
+    /// Give each attached Claude background row on this Mac the short id of
+    /// its session once the list shows exactly one with its name in its
+    /// folder, so it is attached and restored by that id from then on. A
+    /// name that several sessions share, or an id another row holds, is
+    /// left alone.
+    func recordBackgroundSessionIDs(_ records: [LaneStatus]) {
+        let listed = records.filter { $0.event == ClaudeAgentsList.event }
+        guard !listed.isEmpty else { return }
+        var holding = Set(lanes.compactMap(\.agentSessionID))
+        for index in lanes.indices {
+            let lane = lanes[index]
+            guard lane.agentSessionID == nil, lane.host == nil, !detachedIDs.contains(lane.id),
+                  let backend = backends[lane.backendID] as? ClaudeBackgroundLaneBackend,
+                  let session = sessions[lane.id], session.isAttached,
+                  let name = backend.sessionName(for: lane),
+                  case .one(let id) = ClaudeBackgroundLaneBackend.resolve(name: name, in: lane.path, records: listed),
+                  !holding.contains(id) else { continue }
+            lanes[index].agentSessionID = id
+            holding.insert(id)
+            session.update(lane: lanes[index])
         }
     }
 

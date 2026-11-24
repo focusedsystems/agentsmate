@@ -138,15 +138,19 @@ final class ClaudeBackgroundLaneBackendTests: XCTestCase {
                        updatedAt: Date(), agentID: id)
         }
         let records = [rec("7344ef63", "Personal - Create", "/w/create"), rec("7c4cc4bb", "create", "/w/create"),
-                       rec("5fe18022", "Port the create sidebar", "/w/create"), rec("aaaa0001", "Create", "/w/create"),
+                       rec("5fe18022", "Port the create sidebar", "/w/create"),
                        rec("bbbb0002", "Notes", "/w/create"), rec("cccc0003", "notes", "/w/create"),
+                       rec("eeee0005", "Twin", "/w/create"), rec("ffff0006", "Twin", "/w/create/"),
                        rec("dddd0004", "Other", "/w/elsewhere")]
         typealias B = ClaudeBackgroundLaneBackend
-        XCTAssertEqual(B.resolve(name: "create", in: "/w/create", records: records), .one("7c4cc4bb"), "exact first")
-        XCTAssertEqual(B.resolve(name: "Create", in: "/w/create/", records: records), .one("aaaa0001"))
-        XCTAssertEqual(B.resolve(name: "personal - create", in: "/w/create", records: records), .one("7344ef63"),
-                       "ignoring case when nothing matches exactly")
-        XCTAssertEqual(B.resolve(name: "NOTES", in: "/w/create", records: records), .several(["bbbb0002", "cccc0003"]))
+        XCTAssertEqual(B.resolve(name: "create", in: "/w/create", records: records), .one("7c4cc4bb"),
+                       "the one session with exactly that name, not the two that contain it")
+        XCTAssertEqual(B.resolve(name: "CREATE", in: "/w/create/", records: records), .one("7c4cc4bb"), "case aside")
+        XCTAssertEqual(B.resolve(name: "personal - create", in: "/w/create", records: records), .one("7344ef63"))
+        XCTAssertEqual(B.resolve(name: "Twin", in: "/w/create", records: records), .several(["eeee0005", "ffff0006"]),
+                       "two live sessions with the same name in one folder: attach neither")
+        XCTAssertEqual(B.resolve(name: "Notes", in: "/w/create", records: records), .several(["bbbb0002", "cccc0003"]),
+                       "names that differ only in case are both candidates")
         XCTAssertEqual(B.resolve(name: "Port", in: "/w/create", records: records), .none, "never part of a name")
         XCTAssertEqual(B.resolve(name: "Other", in: "/w/create", records: records), .none, "only in the lane's folder")
         let line = B.ambiguousLine(name: "NOTES", ids: ["bbbb0002", "cccc0003"])
@@ -154,13 +158,15 @@ final class ClaudeBackgroundLaneBackendTests: XCTestCase {
         XCTAssertTrue(line.contains("bbbb0002, cccc0003"))
     }
 
-    func testASecondLaneInTheFolderHasASessionOfItsOwn() {
+    func testAKnownIDIsAttachedAndAnotherHostsLaneIsNotGuessedHere() {
         var lane = AgentLane(id: "x", title: "X", directory: URL(fileURLWithPath: "/w/create"), backendID: "claude-bg")
-        lane.variant = "2"
-        XCTAssertEqual(ClaudeBackgroundLaneBackend().sessionName(for: lane), "create-2")
         lane.agentSessionID = "7c4cc4bb"
         XCTAssertEqual(ClaudeBackgroundLaneBackend().launch(for: lane, shell: "/bin/zsh").arguments.last,
                        "exec claude attach '7c4cc4bb'")
+        lane.agentSessionID = nil
+        lane.host = "desk"
+        let line = ClaudeBackgroundLaneBackend().launch(for: lane, shell: "/bin/zsh").arguments.last ?? ""
+        XCTAssertFalse(line.contains("claude"), "neither this Mac's list nor a new session here: \(line)")
     }
 }
 

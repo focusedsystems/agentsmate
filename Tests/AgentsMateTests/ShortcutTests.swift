@@ -109,4 +109,21 @@ final class DuplicateVariantTests: XCTestCase {
         XCTAssertEqual(line, "lane-wrapper '/w/create'", "a new lane, never an attach of the source's session")
         store.detachAll()
     }
+
+    func testABackgroundDuplicateOnTheBackgroundBackendNamesItsOwnSession() {
+        let background = ClaudeBackgroundLaneBackend(id: "bg")
+        let defaults = UserDefaults(suiteName: "agentsmate-var-\(UUID().uuidString)")!
+        let store = AgentLaneStore(configuration: .init(termProgram: "T", sessionFileDirectory: nil),
+                                   backends: [background], statusFeed: nil, defaults: defaults)
+        defaults.set("bg", forKey: store.keys.newLaneBackend)
+        var source = AgentLane(id: "a", title: "Create", directory: URL(fileURLWithPath: "/w/create"), backendID: "bg")
+        source.agentSessionID = "7c4cc4bb"
+        store.sync(lanes: [source])
+        let copy = store.duplicate("a", focus: false)!
+        XCTAssertEqual(copy.lane.backendID, "bg")
+        XCTAssertEqual(copy.lane.sessionName, "Create 2")
+        XCTAssertNil(copy.lane.agentSessionID)
+        XCTAssertFalse(background.launch(for: copy.lane, shell: "/bin/zsh").arguments.last?.contains("7c4cc4bb") == true)
+        store.detachAll()
+    }
 }
