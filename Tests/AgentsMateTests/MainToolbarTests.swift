@@ -32,7 +32,7 @@ final class MainToolbarTests: XCTestCase {
     }
 
     func testTheAgentButtonSaysWhatItDoes() {
-        XCTAssertTrue(AgentsToolbarAgent(isOn: true) {}.help.hasPrefix("Hide"))
+        XCTAssertTrue(AgentsToolbarAgent(isOn: true) {}.help.hasPrefix("Leave"))
         XCTAssertTrue(AgentsToolbarAgent(isOn: false) {}.help.hasPrefix("Work with"))
     }
 }

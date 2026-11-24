@@ -134,15 +134,6 @@ public struct AgentLaneSidebar<Accessory: View>: View {
                 .background(inDock ? AnyShapeStyle(.bar) : AnyShapeStyle(.clear))
             }
         }
-        .toolbar {
-            // In the sidebar column's titlebar space, between the window
-            // controls and the system's sidebar toggle. `.navigation` would
-            // put it in the main toolbar, beside the app's own items; a dock
-            // has no titlebar, so its filter bar has it.
-            if !inDock, store.configuration.showsHome {
-                ToolbarItem(placement: .automatic) { AgentHomeSidebarButton(store: store) }
-            }
-        }
         .modifier(LaneMenuSheets(store: store, presentation: menus))
         .alert("Save Lanes as Workspace", isPresented: $savingWorkspace) {
             TextField("Name", text: $workspaceName)
@@ -623,7 +614,6 @@ public struct AgentLaneSidebar<Accessory: View>: View {
             .help(activeFilters.isEmpty ? "Sort or filter the list, or add and fold sections"
                                         : "Sort or filter the list, or add and fold sections (a filter is on)")
             if inDock {
-                if store.configuration.showsHome { AgentHomeSidebarButton(store: store, inBar: true) }
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) { store.dockMaximized.toggle() }
                 } label: {
@@ -1386,61 +1376,6 @@ extension Color {
     }
 }
 
-
-/// A borderless button in a filter bar; in a toolbar the system's own button
-/// style stands, so the button matches the controls beside it.
-private struct BarButtonStyle: ViewModifier {
-    let inBar: Bool
-    func body(content: Content) -> some View {
-        if inBar { content.buttonStyle(.borderless) } else { content }
-    }
-}
-
-/// The All Agents button: a grid, the same size and quiet style as its
-/// neighbours, tinted while All Agents is showing, with a dot while a session
-/// needs the person. In the sidebar column's titlebar space it is a standard
-/// toolbar button, so it matches the sidebar toggle beside it; in a dock, which
-/// has no titlebar, it is a borderless button in the filter bar.
-struct AgentHomeSidebarButton: View {
-    @ObservedObject var store: AgentLaneStore
-    var inBar = false
-
-    /// A grid, as a board of every session. The robot is left to the app's
-    /// own agents button (``AgentLane/Accessory``), so the two never look alike.
-    static let icon = LaneIcon.symbol("square.grid.2x2")
-    static let symbol = "square.grid.2x2"
-
-    /// The badge's count: sessions waiting for the person.
-    var waiting: Int { store.homeSessions.filter { LaneStatusFilter.wantsYou($0.status) }.count }
-
-    /// The tooltip, with the shortcut when one is bound.
-    static func help(shortcut: String?) -> String {
-        shortcut.map { "All Agents \($0)" } ?? "All Agents"
-    }
-
-    var body: some View {
-        let waiting = waiting
-        let selected = store.isHomeShown
-        Button { store.showHome() } label: {
-            Label("All Agents", systemImage: Self.symbol)
-                .labelStyle(.iconOnly)
-                .font(inBar ? .system(size: 13) : nil)
-                .frame(width: inBar ? 24 : nil, height: inBar ? 22 : nil)
-                .overlay(alignment: .topTrailing) {
-                    if waiting > 0 {
-                        Circle().fill(Color.orange).frame(width: 6, height: 6).offset(x: inBar ? -3 : 4, y: inBar ? 3 : -3)
-                    }
-                }
-        }
-        .modifier(BarButtonStyle(inBar: inBar))
-        .foregroundStyle(selected ? Color.accentColor : Color.primary)
-        .disabled(!store.configuration.showsHome || store.lanes.isEmpty)
-        .help(Self.help(shortcut: store.shortcuts.binding(for: .home)?.display))
-        .accessibilityLabel("All Agents")
-        .accessibilityValue(waiting > 0 ? "\(waiting) need you" : "")
-        .accessibilityAddTraits(selected ? .isSelected : [])
-    }
-}
 
 /// The button for a lane the app lists nowhere else (``AgentLane/Accessory``):
 /// it sits in the filter bar, opens the lane in the detail pane and shows as

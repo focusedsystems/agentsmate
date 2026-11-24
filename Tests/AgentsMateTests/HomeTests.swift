@@ -144,7 +144,7 @@ final class HomeLaunchTests: XCTestCase {
 
     func testHomeHasItsOwnRebindableShortcut() {
         let binding = LaneShortcutBindings().binding(for: .home)
-        XCTAssertEqual(binding, LaneKeyBinding("a", command: true, shift: true))
+        XCTAssertEqual(binding, LaneKeyBinding("a", command: true, option: true))
         XCTAssertNil(LaneShortcutBindings().conflict(for: binding!, excluding: .home))
     }
 }
