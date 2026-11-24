@@ -96,6 +96,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         // Read once for the whole list; every header and row uses this copy.
         let snapshot = store.listSnapshot
         let flat = isFlat(snapshot)
+        let stages = store.laneLoadStages
         List(selection: selectionBinding) {
             if store.configuration.showsHome {
                 Section { AgentHomeSidebarRow(store: store).tag(Self.homeTag) }
@@ -109,10 +110,10 @@ public struct AgentLaneSidebar<Accessory: View>: View {
             // above the first section.
             ForEach(displayedGroups(snapshot, flat: flat)) { group in
                 if flat || group.section == nil, !group.isPinned, !group.isDetached {
-                    Section { rows(group, numbers: snapshot.shortcutNumbers) }
+                    Section { rows(group, numbers: snapshot.shortcutNumbers, stages: stages) }
                 } else {
                     Section {
-                        if isExpanded(group) { rows(group, numbers: snapshot.shortcutNumbers) }
+                        if isExpanded(group) { rows(group, numbers: snapshot.shortcutNumbers, stages: stages) }
                     } header: {
                         sectionHeader(group, snapshot: snapshot)
                     }
@@ -159,10 +160,13 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         .onChange(of: store.messageAlertTarget) { if store.messageAlertTarget != nil { message = "" } }
         .searchable(text: $searchText, placement: .sidebar, prompt: "Search \(labels.laneNoun)s")
         .safeAreaInset(edge: .top, spacing: 0) {
-            filterBar
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
-                .background(inDock ? AnyShapeStyle(.bar) : AnyShapeStyle(.clear))
+            VStack(spacing: 0) {
+                filterBar(progress: store.laneLoadProgress(stages))
+                    .padding(.horizontal, 10)
+                    .frame(height: AgentsModeMetrics.headerRowHeight)
+                Divider()
+            }
+            .background(inDock ? AnyShapeStyle(.bar) : AnyShapeStyle(.clear))
         }
         .contextMenu(forSelectionType: AgentLane.ID.self) { ids in
             if let id = ids.first, let session = store.sessions[id] {
@@ -193,12 +197,14 @@ public struct AgentLaneSidebar<Accessory: View>: View {
     private var sessions: [AgentLaneSession] { store.lanes.compactMap { store.sessions[$0.id] } }
 
     @ViewBuilder
-    private func rows(_ group: LaneGroup, numbers: [AgentLane.ID: Int]) -> some View {
+    private func rows(_ group: LaneGroup, numbers: [AgentLane.ID: Int],
+                      stages: [AgentLane.ID: LaneLoadStage]) -> some View {
         ForEach(group.lanes) { lane in
             if let session = store.session(for: lane) {
                 let look = store.rowIcon(for: session)
                 LaneRow(session: session,
                         shortcutNumber: numbers[lane.id],
+                        loadStage: stages[lane.id],
                         isSplit: lane.id == store.splitID,
                         style: store.configuration.rowStyle,
                         icon: look.icon, tintHex: look.tintHex, showsIcon: showsIcons,
@@ -487,7 +493,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
     }
 
     /// Status toggles with their counts.
-    private var filterBar: some View {
+    private func filterBar(progress: LaneLoadProgress) -> some View {
         let all = sessions
         return HStack(spacing: 2) {
             // Each half keeps its full size, so no count or button is ever
@@ -497,6 +503,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
                     LaneFilterToggle(symbol: filter.symbol, symbolScale: filter.symbolScale, title: filter.title,
                                      help: filter.help(noun: labels.laneNoun),
                                      count: all.filter { filter.admits(Self.filterState($0)) }.count,
+                                     progress: progress,
                                      isOn: filterBinding(filter))
                 }
             }
@@ -761,6 +768,8 @@ struct LaneRow: View {
     @ObservedObject var session: AgentLaneSession
     /// The ⌘ number that reaches the row: pinned rows only.
     let shortcutNumber: Int?
+    /// What the row is waiting on while the window fills in.
+    var loadStage: LaneLoadStage? = nil
     let isSplit: Bool
     var style: LaneRowStyle = .standard
     /// The icon to draw, when it is not the session's own: a parallel
@@ -840,6 +849,7 @@ struct LaneRow: View {
     /// unread dot and the row's ⌘ number.
     @ViewBuilder
     private var trailingIndicators: some View {
+        if let loadStage { LaneLoadIndicator(stage: loadStage) }
         if let progress = session.note?.progress {
             ProgressView(value: progress)
                 .progressViewStyle(.circular)
@@ -916,7 +926,7 @@ struct LaneRow: View {
     private var accessibilityValue: String {
         let status = session.isOrphan ? "Running, nothing attached"
             : session.needsAttention ? "\(session.status.title), new" : session.status.title
-        var parts = [status]
+        var parts = [loadStage?.title ?? status]
         if let notice = session.renameNotice { parts.append(notice) }
         if let summary = session.summary, !summary.isEmpty { parts.append(summary) }
         parts += session.displayedPullRequests.map(\.accessibilityDescription)
@@ -944,12 +954,13 @@ struct LaneRow: View {
     /// row has no summary, beside the pills when it does.
     private var statusLine: String {
         if let notice = session.renameNotice { return notice }
-        let base = detailText == nil ? statusSubtitle : ""
+        let base = detailText == nil || loadStage != nil ? statusSubtitle : ""
         guard let branch = session.rowMetadata.branch else { return base }
         return base.isEmpty ? branch : base + " · " + branch
     }
 
     private var statusSubtitle: String {
+        if let loadStage { return loadStage.title }
         if session.isOrphan, !session.isAttached { return "Running, nothing attached" }
         if session.lane.isClosable, session.status == .attached || session.status == .detached {
             return session.shortDirectory
@@ -1174,6 +1185,7 @@ struct LaneFilterToggle: View {
     let title: String
     let help: String
     let count: Int
+    var progress = LaneLoadProgress(finished: 0, total: 0)
     @Binding var isOn: Bool
     @State private var hovered = false
 
@@ -1189,7 +1201,7 @@ struct LaneFilterToggle: View {
                 // wide at 5 as at 55 and the list's minimum covers both.
                 ZStack(alignment: .leading) {
                     Text("88").hidden().accessibilityHidden(true)
-                    Text("\(count)").foregroundStyle(.secondary)
+                    Text(progress.display(count)).foregroundStyle(.secondary)
                 }
                 .font(.system(size: 11, weight: .medium)).monospacedDigit()
             }
@@ -1208,7 +1220,7 @@ struct LaneFilterToggle: View {
         .onHover { hovered = $0 }
         .help(isOn ? "Show all" : help)
         .accessibilityLabel(title)
-        .accessibilityValue("\(count)")
+        .accessibilityValue(progress.accessibleCount(count))
         .accessibilityAddTraits(isOn ? .isSelected : [])
     }
 }

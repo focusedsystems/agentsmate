@@ -57,6 +57,35 @@ public struct DiscoveredSession: Hashable, Sendable {
     }
 }
 
+public extension DiscoveredSession {
+    /// The folders under a repository that hold its worktrees.
+    static let worktreeFolders = [".worktrees", ".claude/worktrees"]
+
+    /// Whether the session works in one of `repositories` or in one of their
+    /// worktrees, and not merely somewhere beneath them, so a folder that
+    /// holds other projects does not claim every session started in them.
+    func isInRepository<Folders: Sequence>(anyOf repositories: Folders) -> Bool where Folders.Element == String {
+        Self.isInRepository(directory, anyOf: repositories)
+    }
+
+    /// ``isInRepository(anyOf:)`` for a folder, as saved lanes record it.
+    static func isInRepository<Folders: Sequence>(_ directory: String?, anyOf repositories: Folders) -> Bool
+    where Folders.Element == String {
+        guard let directory, !directory.isEmpty else { return false }
+        let path = LaneStatusMatch.normalizedPath(directory)
+        return repositories.contains { folder in
+            guard !folder.isEmpty else { return false }
+            let root = LaneStatusMatch.normalizedPath(folder)
+            if path == root { return true }
+            let base = root == "/" ? "" : root
+            return worktreeFolders.contains { name in
+                let parent = base + "/" + name + "/"
+                return path.hasPrefix(parent) && path.count > parent.count
+            }
+        }
+    }
+}
+
 /// How a tmux lane wrapper names its sessions, so the backend can find the
 /// lane sessions running with no row, attach one by name, and reach lanes
 /// on another machine. Give it to ``CommandLaneBackend/tmuxSessions``.

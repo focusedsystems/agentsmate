@@ -43,13 +43,27 @@ public struct AgentHomeView: View {
         // Read once per update: the grouping walks every row.
         let columns = displayedColumns
         let totals = AgentHome.totals(allGroups)
+        let stages = store.laneLoadStages
+        let progress = store.laneLoadProgress(stages)
+        let loading = store.homeLoading
         VStack(spacing: 0) {
-            header(totals)
+            header(totals, progress: progress)
             Divider()
-            if columns.allSatisfy(\.items.isEmpty) {
-                emptyState
+            if progress.isLoading || loading.isLoading {
+                loadingRow(loading, progress: progress)
+                Divider()
+                AgentHomeLoadingList(store: store, stages: stages, open: open)
             } else {
-                board(columns)
+                // A host that never answered stays in view, with its Retry.
+                if !store.unknownHosts.isEmpty {
+                    loadingRow(loading, progress: progress)
+                    Divider()
+                }
+                if columns.allSatisfy(\.items.isEmpty) {
+                    emptyState
+                } else {
+                    board(columns)
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -178,31 +192,28 @@ public struct AgentHomeView: View {
 
     // MARK: Header
 
-    private func header(_ totals: AgentHome.Totals) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline, spacing: 14) {
-                total(totals.needsYou, "need you", symbol: "hand.raised.fill", color: .orange)
-                total(totals.working, "working", symbol: "bolt.fill", color: .green)
-                total(totals.recent, "idle or done", symbol: "moon.fill", color: .secondary)
-                Spacer(minLength: 8)
-                searchField
-            }
-            let loading = store.homeLoading
-            if loading.isLoading { loadingRow(loading) }
+    private func header(_ totals: AgentHome.Totals, progress: LaneLoadProgress) -> some View {
+        HStack(spacing: 14) {
+            total(totals.needsYou, "need you", symbol: "hand.raised.fill", color: .orange, progress: progress)
+            total(totals.working, "working", symbol: "bolt.fill", color: .green, progress: progress)
+            total(totals.recent, "idle or done", symbol: "moon.fill", color: .secondary, progress: progress)
+            Spacer(minLength: 8)
+            searchField
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .frame(height: AgentsModeMetrics.headerRowHeight)
     }
 
-    private func total(_ count: Int, _ noun: String, symbol: String, color: Color) -> some View {
+    private func total(_ count: Int, _ noun: String, symbol: String, color: Color,
+                       progress: LaneLoadProgress) -> some View {
         HStack(spacing: 4) {
             Image(systemName: symbol).foregroundStyle(count > 0 ? color : .secondary)
-            Text("\(count)").monospacedDigit().fontWeight(.medium)
+            Text(progress.display(count)).monospacedDigit().fontWeight(.medium)
             Text(noun).foregroundStyle(.secondary)
         }
         .font(.callout)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(count) \(noun)")
+        .accessibilityLabel("\(progress.accessibleCount(count)) \(noun)")
     }
 
     private var searchField: some View {
@@ -231,41 +242,42 @@ public struct AgentHomeView: View {
         .accessibilityLabel("Filter sessions")
     }
 
-    /// Loading sessions…, with a bar that fills as each host answers, and
-    /// each host's state beside it.
-    private func loadingRow(_ loading: AgentHomeLoading) -> some View {
+    /// How many lanes have loaded, and each host that was asked.
+    private func loadingRow(_ loading: AgentHomeLoading, progress: LaneLoadProgress) -> some View {
         HStack(spacing: 10) {
-            if loading.hosts.isEmpty {
-                ProgressView().controlSize(.small)
-                Text("Loading sessions…").font(.callout).foregroundStyle(.secondary)
-            } else {
-                Text("Loading sessions…").font(.callout).foregroundStyle(.secondary)
-                ProgressView(value: Double(loading.hostsAnswered), total: Double(loading.hosts.count))
-                    .frame(maxWidth: 160)
-                    .accessibilityLabel("Hosts answered")
-                    .accessibilityValue("\(loading.hostsAnswered) of \(loading.hosts.count)")
-                ForEach(loading.hosts) { host in
-                    HStack(spacing: 3) {
-                        switch host.state {
-                        case .asking: ProgressView().controlSize(.mini)
-                        case .answered: Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                        case .unreachable: Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                        }
-                        Text(host.name)
+            Text(progress.title).font(.callout).monospacedDigit().foregroundStyle(.secondary)
+            ProgressView(value: Double(progress.finished), total: Double(max(progress.total, 1)))
+                .frame(maxWidth: 160)
+                .accessibilityLabel("Sessions loaded")
+                .accessibilityValue("\(progress.finished) of \(progress.total)")
+            ForEach(loading.hosts) { host in
+                HStack(spacing: 3) {
+                    switch host.state {
+                    case .asking: LaneLoadIndicator(stage: .checkingHost(host.name))
+                    case .answered: Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                    case .unreachable: Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
                     }
-                    .font(.caption)
-                    .help(host.state == .asking ? "Asking \(host.name) what it has running"
-                          : host.state == .answered ? "\(host.name) answered"
-                          : "\(host.name) did not answer; its sessions are unknown")
-                    .accessibilityElement(children: .combine)
-                    .accessibilityValue(host.state == .asking ? "asking" : host.state == .answered ? "answered" : "no answer")
+                    Text(host.name)
+                    if host.state == .unreachable {
+                        Button("Retry") { store.retryHost(host.name) }
+                            .controlSize(.mini)
+                            .accessibilityLabel("Retry \(host.name)")
+                    }
                 }
-                if loading.findingSessions {
-                    Text("Looking for detached sessions…").font(.caption).foregroundStyle(.secondary)
-                }
+                .font(.caption)
+                .help(host.state == .asking ? "Asking \(host.name) what it has running"
+                      : host.state == .answered ? "\(host.name) answered"
+                      : "\(host.name) did not answer; its sessions are unknown")
+                .accessibilityElement(children: .contain)
+                .accessibilityValue(host.state == .asking ? "asking" : host.state == .answered ? "answered" : "no answer")
+            }
+            if loading.findingSessions {
+                Text("Looking for sessions…").font(.caption).foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
         }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 6)
     }
 
     // MARK: Empty
