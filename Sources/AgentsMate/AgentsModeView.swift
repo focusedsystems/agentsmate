@@ -414,7 +414,17 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         Self.visibleLanes(store: store, query: searchText, filters: activeFilters)
     }
 
-    static func visibleLanes(store: AgentLaneStore, query rawQuery: String, filters: Set<LaneStatusFilter>) -> [AgentLane] {
+    /// A search that finds nothing shows every lane, as Show All does, without
+    /// the person having to ask: the search text stays, and the list comes back
+    /// narrowed again as soon as the text matches something.
+    static func visibleLanes(store: AgentLaneStore, query: String, filters: Set<LaneStatusFilter>) -> [AgentLane] {
+        let found = matchingLanes(store: store, query: query, filters: filters)
+        guard found.isEmpty, !query.trimmingCharacters(in: .whitespaces).isEmpty else { return found }
+        return store.listedLanes.filter { store.session(for: $0) != nil }
+    }
+
+    private static func matchingLanes(store: AgentLaneStore, query rawQuery: String,
+                                      filters: Set<LaneStatusFilter>) -> [AgentLane] {
         let query = rawQuery.trimmingCharacters(in: .whitespaces).lowercased()
         let sectionHits = query.isEmpty ? [] : lanesInSections(matching: query, groups: store.groups,
                                                                section: store.layout.section(of:))
