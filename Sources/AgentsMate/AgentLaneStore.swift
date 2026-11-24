@@ -1766,8 +1766,8 @@ public final class AgentLaneStore: ObservableObject {
     /// backend uses its folder, else the next free number from 2.
     func freeVariant(for lane: AgentLane) -> String? {
         guard let backend = backends[lane.backendID], backend.keepsRunningWhenDetached else { return nil }
-        let path = LaneStatusMatch.normalizedPath(lane.path)
-        let sharing = lanes.filter { $0.backendID == lane.backendID && LaneStatusMatch.normalizedPath($0.path) == path }
+        let path = normalizedPath(lane.path)
+        let sharing = lanes.filter { $0.backendID == lane.backendID && normalizedPath($0.path) == path }
         guard !sharing.isEmpty else { return nil }
         let used = Set(sharing.map { $0.variant ?? "1" })
         var n = 2
@@ -2011,7 +2011,91 @@ public final class AgentLaneStore: ObservableObject {
     }
 
     /// The lanes as the list shows them, grouped.
-    public var groups: [LaneGroup] {
+    public var groups: [LaneGroup] { listSnapshot.groups }
+
+    // MARK: Sidebar width
+
+    /// The least width the lane list takes, before its controls are measured.
+    public static let sidebarBaseMinimumWidth: CGFloat = 360
+
+    /// How wide the lane list must be for its filter bar: the status chips
+    /// (sized for two-digit counts) and the controls beside them, the gap
+    /// between, the bar's padding and some room, and never under
+    /// ``sidebarBaseMinimumWidth``.
+    static func sidebarMinimumWidth(chips: CGFloat, controls: CGFloat) -> CGFloat {
+        let padding: CGFloat = 20, gap: CGFloat = 4, room: CGFloat = 16
+        return max(sidebarBaseMinimumWidth, (chips + controls + gap + padding + room).rounded(.up))
+    }
+
+    /// The width the lane list needs, measured from its filter bar. A split
+    /// view or dock showing the list keeps it at least this wide.
+    @Published public internal(set) var sidebarMinimumWidth: CGFloat = AgentLaneStore.sidebarBaseMinimumWidth
+
+    // MARK: List snapshot
+
+    /// The list as the sidebar draws it. Worked out once for each change of
+    /// what it depends on (lanes, layout, the app's order, found sessions and,
+    /// for the recency sorts, each lane's last activity), so drawing the list
+    /// reads it rather than grouping and sorting again for every header and row.
+    public struct ListSnapshot: Equatable, Sendable {
+        /// The lanes in the app's default order (``defaultRepositoryOrder``).
+        public let orderedLanes: [AgentLane]
+        public let groups: [LaneGroup]
+        /// The rows ⌘1–⌘9 go to; see ``AgentLaneStore/numberedLanes``.
+        public let numberedLanes: [AgentLane]
+        /// The ⌘ number of each of ``numberedLanes``.
+        public let shortcutNumbers: [AgentLane.ID: Int]
+        /// Every section a lane can be moved to.
+        public let sectionNames: [String]
+        /// The ``LaneGroup/collapseKey`` of every group.
+        public let collapseKeys: Set<String>
+        /// How many groups are neither Pinned nor Detached.
+        public let regularGroupCount: Int
+    }
+
+    private struct ListSnapshotKey: Equatable {
+        var lanes: [AgentLane]
+        var layout: LaneLayout
+        var repositoryOrder: [String]
+        var detached: Set<AgentLane.ID>
+        var owners: [AgentLane.ID: AgentLane.ID]
+        var placesDetached: Bool
+        var activity: [Date?]
+    }
+
+    private var cachedListSnapshot: (key: ListSnapshotKey, value: ListSnapshot)?
+    /// How many times the snapshot has been worked out, for tests.
+    private(set) var listSnapshotBuilds = 0
+
+    /// The list as it stands; see ``ListSnapshot``.
+    public var listSnapshot: ListSnapshot {
+        let key = ListSnapshotKey(lanes: lanes, layout: layout, repositoryOrder: defaultRepositoryOrder,
+                                  detached: detachedIDs, owners: detachedOwners,
+                                  placesDetached: configuration.placesDetachedSessions,
+                                  activity: layout.sort == .manual ? [] : lanes.map { sessions[$0.id]?.lastActivity })
+        if let cached = cachedListSnapshot, cached.key == key { return cached.value }
+        let value = buildListSnapshot()
+        cachedListSnapshot = (key, value)
+        listSnapshotBuilds += 1
+        return value
+    }
+
+    /// The snapshot worked out from scratch, ignoring the cache.
+    func buildListSnapshot() -> ListSnapshot {
+        let ordered = computeOrderedLanes()
+        let groups = computeGroups(ordered)
+        let detached = detachedIDs
+        // A found session listed under a pinned row is not pinned itself.
+        let numbered = Array((groups.first(where: \.isPinned)?.lanes ?? []).filter { !detached.contains($0.id) }.prefix(9))
+        return ListSnapshot(orderedLanes: ordered, groups: groups, numberedLanes: numbered,
+                            shortcutNumbers: Dictionary(numbered.enumerated().map { ($1.id, $0 + 1) },
+                                                        uniquingKeysWith: { first, _ in first }),
+                            sectionNames: layout.orderedSections(for: ordered),
+                            collapseKeys: Set(groups.map(\.collapseKey)),
+                            regularGroupCount: groups.filter { !$0.isPinned && !$0.isDetached }.count)
+    }
+
+    private func computeGroups(_ orderedLanes: [AgentLane]) -> [LaneGroup] {
         let detached = detachedIDs
         var groups = layout.groups(for: orderedLanes.filter { !detached.contains($0.id) }) { [sessions] lane in
             sessions[lane.id]?.lastActivity
@@ -2045,10 +2129,7 @@ public final class AgentLaneStore: ObservableObject {
     /// The rows ⌘1–⌘9 go to: the pinned ones, in the order the list shows
     /// them. A row that is not pinned has no number, so pinning is how a
     /// person chooses which rows the keys reach.
-    public var numberedLanes: [AgentLane] {
-        // A found session listed under a pinned row is not pinned itself.
-        Array((groups.first(where: \.isPinned)?.lanes ?? []).filter { !detachedIDs.contains($0.id) }.prefix(9))
-    }
+    public var numberedLanes: [AgentLane] { listSnapshot.numberedLanes }
 
     /// Open the pinned row ⌘ and `index + 1` goes to.
     public func open(index: Int) {
@@ -2097,7 +2178,9 @@ public final class AgentLaneStore: ObservableObject {
 
     /// Whether folding the others would change anything.
     public func canCollapseOtherSections(than group: LaneGroup) -> Bool {
-        groups.count > 1 && Set(groups.map(\.collapseKey)).subtracting([group.collapseKey]) != layout.collapsed
+        let snapshot = listSnapshot
+        return snapshot.groups.count > 1
+            && snapshot.collapseKeys.subtracting([group.collapseKey]) != layout.collapsed
     }
 
     // MARK: Repository order
@@ -2109,18 +2192,25 @@ public final class AgentLaneStore: ObservableObject {
 
     /// The lanes in the app's default order (``defaultRepositoryOrder``),
     /// the rest after them as given. What the layout orders.
-    var orderedLanes: [AgentLane] {
+    var orderedLanes: [AgentLane] { listSnapshot.orderedLanes }
+
+    private func computeOrderedLanes() -> [AgentLane] {
         guard !defaultRepositoryOrder.isEmpty else { return lanes }
         var rank: [String: Int] = [:]
-        for (index, path) in defaultRepositoryOrder.enumerated() where rank[LaneLayout.repositoryKey(path)] == nil {
-            rank[LaneLayout.repositoryKey(path)] = index
+        for (index, path) in defaultRepositoryOrder.enumerated() {
+            let key = repositoryKey(path)
+            if rank[key] == nil { rank[key] = index }
         }
-        return lanes.enumerated().sorted { a, b in
-            let ra = rank[LaneLayout.repositoryKey(a.element.path)] ?? Int.max
-            let rb = rank[LaneLayout.repositoryKey(b.element.path)] ?? Int.max
-            return ra != rb ? ra < rb : a.offset < b.offset
-        }.map(\.element)
+        // Each lane's rank is looked up once, before the sort, so the
+        // comparator never normalizes a path.
+        let ranked = lanes.enumerated().map { (offset: $0.offset, rank: rank[repositoryKey($0.element.path)] ?? Int.max,
+                                               lane: $0.element) }
+        return ranked.sorted { a, b in a.rank != b.rank ? a.rank < b.rank : a.offset < b.offset }.map(\.lane)
     }
+
+    /// ``LaneLayout/repositoryKey(_:)``, kept per path because resolving
+    /// one reads the disk.
+    func repositoryKey(_ path: String) -> String { normalizedPath(path) }
 
     /// The rows the person can order, pinned ones in their place, in list
     /// order: sections in order, then lanes within each.
@@ -2135,13 +2225,13 @@ public final class AgentLaneStore: ObservableObject {
     /// list order: by section, then within each section.
     public var repositoryOrder: [String] {
         var seen = Set<String>()
-        return orderableRows.map { LaneLayout.repositoryKey($0.path) }.filter { seen.insert($0).inserted }
+        return orderableRows.map { repositoryKey($0.path) }.filter { seen.insert($0).inserted }
     }
 
     /// The section each folder's row is in, by ``LaneLayout/repositoryKey(_:)``.
     public func section(ofRepository path: String) -> String? {
-        let key = LaneLayout.repositoryKey(path)
-        return orderableRows.first { LaneLayout.repositoryKey($0.path) == key }.flatMap { layout.section(of: $0) }
+        let key = repositoryKey(path)
+        return orderableRows.first { repositoryKey($0.path) == key }.flatMap { layout.section(of: $0) }
     }
 
     /// Whether the person has an order of their own for sections or rows,
@@ -2155,12 +2245,12 @@ public final class AgentLaneStore: ObservableObject {
     public func orderedRepositories(_ paths: [String]) -> [String] {
         var rank: [String: Int] = [:]
         for (index, key) in repositoryOrder.enumerated() { rank[key] = index }
-        for (index, path) in defaultRepositoryOrder.enumerated() where rank[LaneLayout.repositoryKey(path)] == nil {
-            rank[LaneLayout.repositoryKey(path)] = rank.count + index
+        for (index, path) in defaultRepositoryOrder.enumerated() where rank[repositoryKey(path)] == nil {
+            rank[repositoryKey(path)] = rank.count + index
         }
         return paths.enumerated().sorted { a, b in
-            let ra = rank[LaneLayout.repositoryKey(a.element)] ?? Int.max
-            let rb = rank[LaneLayout.repositoryKey(b.element)] ?? Int.max
+            let ra = rank[repositoryKey(a.element)] ?? Int.max
+            let rb = rank[repositoryKey(b.element)] ?? Int.max
             return ra != rb ? ra < rb : a.offset < b.offset
         }.map(\.element)
     }
@@ -2171,9 +2261,9 @@ public final class AgentLaneStore: ObservableObject {
         let current = layout.orderedIDs(orderedLanes)
         var byKey: [String: [AgentLane.ID]] = [:]
         for lane in orderedLanes where !detachedIDs.contains(lane.id) {
-            byKey[LaneLayout.repositoryKey(lane.path), default: []].append(lane.id)
+            byKey[repositoryKey(lane.path), default: []].append(lane.id)
         }
-        let wanted = paths.flatMap { byKey[LaneLayout.repositoryKey($0)] ?? [] }
+        let wanted = paths.flatMap { byKey[repositoryKey($0)] ?? [] }
         let moving = Set(wanted)
         guard !moving.isEmpty else { return }
         var queue = wanted[...]
@@ -2195,7 +2285,7 @@ public final class AgentLaneStore: ObservableObject {
     }
 
     /// Every section a lane can be moved to.
-    public var sectionNames: [String] { layout.orderedSections(for: orderedLanes) }
+    public var sectionNames: [String] { listSnapshot.sectionNames }
 
     public func detach(_ id: AgentLane.ID) { sessions[id]?.detach() }
 

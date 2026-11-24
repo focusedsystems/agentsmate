@@ -55,7 +55,10 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
 
     /// The latest of the last output here and the last status report.
     public var lastActivity: Date? {
-        [lastOutputAt, record?.updatedAt].compactMap { $0 }.max()
+        switch (lastOutputAt, record?.updatedAt) {
+        case let (output?, report?): max(output, report)
+        case let (output, report): output ?? report
+        }
     }
 
     /// One line on what the agent is working on, when summaries are on.

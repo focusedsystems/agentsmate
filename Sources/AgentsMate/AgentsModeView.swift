@@ -45,6 +45,13 @@ public struct AgentLaneSidebar<Accessory: View>: View {
     /// needs a way to fill the window and come back.
     var inDock = false
 
+    /// The narrowest the list may be, whatever the controls above it need:
+    /// apps that put the sidebar in their own split view can start from it.
+    public static var minimumWidth: CGFloat { AgentLaneStore.sidebarBaseMinimumWidth }
+
+    @State private var chipsWidth: CGFloat = 0
+    @State private var controlsWidth: CGFloat = 0
+
     @AppStorage private var filterAttached: Bool
     @AppStorage private var filterRunning: Bool
     @AppStorage private var filterNeedsYou: Bool
@@ -86,6 +93,9 @@ public struct AgentLaneSidebar<Accessory: View>: View {
     }
 
     public var body: some View {
+        // Read once for the whole list; every header and row uses this copy.
+        let snapshot = store.listSnapshot
+        let flat = isFlat(snapshot)
         List(selection: selectionBinding) {
             if store.configuration.showsHome {
                 Section { AgentHomeSidebarRow(store: store).tag(Self.homeTag) }
@@ -97,14 +107,14 @@ public struct AgentLaneSidebar<Accessory: View>: View {
             // one list with no heading; Pinned and Detached keep theirs. The
             // lanes in no section never have a heading: they lead the list,
             // above the first section.
-            ForEach(displayedGroups) { group in
-                if isFlat || group.section == nil, !group.isPinned, !group.isDetached {
-                    Section { rows(group) }
+            ForEach(displayedGroups(snapshot, flat: flat)) { group in
+                if flat || group.section == nil, !group.isPinned, !group.isDetached {
+                    Section { rows(group, numbers: snapshot.shortcutNumbers) }
                 } else {
                     Section {
-                        if isExpanded(group) { rows(group) }
+                        if isExpanded(group) { rows(group, numbers: snapshot.shortcutNumbers) }
                     } header: {
-                        sectionHeader(group)
+                        sectionHeader(group, snapshot: snapshot)
                     }
                     .collapsible(false)
                 }
@@ -183,12 +193,12 @@ public struct AgentLaneSidebar<Accessory: View>: View {
     private var sessions: [AgentLaneSession] { store.lanes.compactMap { store.sessions[$0.id] } }
 
     @ViewBuilder
-    private func rows(_ group: LaneGroup) -> some View {
+    private func rows(_ group: LaneGroup, numbers: [AgentLane.ID: Int]) -> some View {
         ForEach(group.lanes) { lane in
             if let session = store.session(for: lane) {
                 let look = store.rowIcon(for: session)
                 LaneRow(session: session,
-                        shortcutNumber: shortcutNumbers[lane.id],
+                        shortcutNumber: numbers[lane.id],
                         isSplit: lane.id == store.splitID,
                         style: store.configuration.rowStyle,
                         icon: look.icon, tintHex: look.tintHex, showsIcon: showsIcons,
@@ -206,16 +216,15 @@ public struct AgentLaneSidebar<Accessory: View>: View {
 
     /// Whether the lanes show as one list with no section headings: the
     /// app turned them off, or there is only one section.
-    private var isFlat: Bool {
-        !showsHeadings
-            || store.groups.filter { !$0.isPinned && !$0.isDetached }.count <= 1
+    private func isFlat(_ snapshot: AgentLaneStore.ListSnapshot) -> Bool {
+        !showsHeadings || snapshot.regularGroupCount <= 1
     }
 
     /// ``visibleGroups``, with the sections run together into one headless
     /// group when the list is flat.
-    private var displayedGroups: [LaneGroup] {
-        let groups = visibleGroups
-        guard isFlat else { return groups }
+    private func displayedGroups(_ snapshot: AgentLaneStore.ListSnapshot, flat: Bool) -> [LaneGroup] {
+        let groups = visibleGroups(snapshot)
+        guard flat else { return groups }
         let regular = groups.filter { !$0.isPinned && !$0.isDetached }
         var out = groups.filter(\.isPinned)
         let lanes = regular.flatMap(\.lanes)
@@ -226,10 +235,10 @@ public struct AgentLaneSidebar<Accessory: View>: View {
 
     /// The groups with only the lanes the search and filters let through.
     /// While searching every group is shown open, so a match is never hidden.
-    private var visibleGroups: [LaneGroup] {
+    private func visibleGroups(_ snapshot: AgentLaneStore.ListSnapshot) -> [LaneGroup] {
         let visible = Set(visibleLanes.map(\.id))
         let filtering = isFiltering
-        return store.groups.compactMap { group in
+        return snapshot.groups.compactMap { group in
             var group = group
             group.lanes = group.lanes.filter { visible.contains($0.id) }
             if filtering, group.lanes.isEmpty { return nil }
@@ -239,11 +248,6 @@ public struct AgentLaneSidebar<Accessory: View>: View {
 
     private var isFiltering: Bool {
         !searchText.trimmingCharacters(in: .whitespaces).isEmpty || !activeFilters.isEmpty
-    }
-
-    /// The ⌘ number each pinned row is reached by; other rows have none.
-    private var shortcutNumbers: [AgentLane.ID: Int] {
-        Dictionary(uniqueKeysWithValues: store.numberedLanes.enumerated().map { ($1.id, $0 + 1) })
     }
 
     /// Open while searching or filtering, so a match is never hidden; the
@@ -290,7 +294,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
     }
 
     @ViewBuilder
-    private func sectionHeader(_ group: LaneGroup) -> some View {
+    private func sectionHeader(_ group: LaneGroup, snapshot: AgentLaneStore.ListSnapshot) -> some View {
         let title = group.title ?? labels.listTitle
         let movable = group.section != nil && !group.isPinned && !group.isDetached
         let expanded = isExpanded(group)
@@ -337,9 +341,9 @@ public struct AgentLaneSidebar<Accessory: View>: View {
                 if movable, let name = group.section {
                     Button("Rename Section") { beginRenaming(name) }
                     Button("Move Section Up") { store.moveSection(name, by: -1) }
-                        .disabled(store.sectionNames.first == name)
+                        .disabled(snapshot.sectionNames.first == name)
                     Button("Move Section Down") { store.moveSection(name, by: 1) }
-                        .disabled(store.sectionNames.last == name)
+                        .disabled(snapshot.sectionNames.last == name)
                     Button("Remove Section") { store.removeSection(name) }
                     Divider()
                 }
@@ -347,7 +351,8 @@ public struct AgentLaneSidebar<Accessory: View>: View {
             Button("New Section…") { menus.newSection() }
             Divider()
             Button("Collapse Other Sections") { store.collapseOtherSections(than: group) }
-                .disabled(!store.canCollapseOtherSections(than: group))
+                .disabled(!(snapshot.groups.count > 1
+                    && snapshot.collapseKeys.subtracting([group.collapseKey]) != store.layout.collapsed))
             Button("Collapse All") { store.setAllCollapsed(true) }
             Button("Expand All") { store.setAllCollapsed(false) }
         }
@@ -485,13 +490,36 @@ public struct AgentLaneSidebar<Accessory: View>: View {
     private var filterBar: some View {
         let all = sessions
         return HStack(spacing: 2) {
-            ForEach(LaneStatusFilter.allCases, id: \.self) { filter in
-                LaneFilterToggle(symbol: filter.symbol, symbolScale: filter.symbolScale, title: filter.title,
-                                 help: filter.help(noun: labels.laneNoun),
-                                 count: all.filter { filter.admits(Self.filterState($0)) }.count,
-                                 isOn: filterBinding(filter))
+            // Each half keeps its full size, so no count or button is ever
+            // cut; the list's minimum width is what the two need.
+            HStack(spacing: 2) {
+                ForEach(LaneStatusFilter.allCases, id: \.self) { filter in
+                    LaneFilterToggle(symbol: filter.symbol, symbolScale: filter.symbolScale, title: filter.title,
+                                     help: filter.help(noun: labels.laneNoun),
+                                     count: all.filter { filter.admits(Self.filterState($0)) }.count,
+                                     isOn: filterBinding(filter))
+                }
             }
+            .fixedSize()
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { chipsWidth = $0; reportWidth() }
             Spacer(minLength: 0)
+            filterBarControls
+                .fixedSize()
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { controlsWidth = $0; reportWidth() }
+        }
+    }
+
+    /// Tell the store how wide the list must be for the bar above it:
+    /// both halves, the gap between them, the bar's padding and some room.
+    private func reportWidth() {
+        let needed = AgentLaneStore.sidebarMinimumWidth(chips: chipsWidth, controls: controlsWidth)
+        if store.sidebarMinimumWidth != needed { store.sidebarMinimumWidth = needed }
+    }
+
+    /// The list's own controls at the right of the filter bar.
+    @ViewBuilder
+    private var filterBarControls: some View {
+        HStack(spacing: 2) {
             // The app's accessory and the + menu are the whole list's, so
             // they sit here rather than on a section's heading; each
             // section's heading keeps its own + for that section.
@@ -643,7 +671,8 @@ public struct AgentsModeView<Accessory: View, Empty: View>: View {
     public var body: some View {
         NavigationSplitView {
             AgentLaneSidebar(store: store, labels: labels, rowActions: rowActions) { accessory }
-                .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 420)
+                .navigationSplitViewColumnWidth(min: store.sidebarMinimumWidth, ideal: store.sidebarMinimumWidth,
+                                                max: max(520, store.sidebarMinimumWidth))
         } detail: {
             AgentLaneDetail(store: store, labels: labels, rowActions: rowActions) { empty }
         }
@@ -1156,8 +1185,13 @@ struct LaneFilterToggle: View {
                 Image(systemName: symbol)
                     .font(.system(size: 10 * symbolScale, weight: .semibold))
                     .foregroundStyle(isOn ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
-                Text("\(count)").font(.system(size: 11, weight: .medium)).monospacedDigit()
-                    .foregroundStyle(.secondary)
+                // Room for two digits whatever the count, so the bar is as
+                // wide at 5 as at 55 and the list's minimum covers both.
+                ZStack(alignment: .leading) {
+                    Text("88").hidden().accessibilityHidden(true)
+                    Text("\(count)").foregroundStyle(.secondary)
+                }
+                .font(.system(size: 11, weight: .medium)).monospacedDigit()
             }
             .padding(.horizontal, 5)
             .frame(height: 22)
