@@ -291,18 +291,7 @@ extension View {
     /// is declared either way (removing it left an empty glass pill) and only
     /// its content comes and goes.
     public func agentsSidebarToolbar(_ agent: AgentsToolbarAgent, visible: Bool) -> some View {
-        toolbar {
-            if #available(macOS 26.0, *) {
-                ToolbarItem(placement: .automatic) {
-                    if visible { AgentsToolbarButton(agent) }
-                }
-                .sharedBackgroundVisibility(.hidden)
-            } else {
-                ToolbarItem(placement: .automatic) {
-                    if visible { AgentsToolbarButton(agent) }
-                }
-            }
-        }
+        modifier(AgentsSidebarToolbar(agent: agent, visible: visible))
     }
 
     /// Gives the window the toolbar's chrome: the width the tab bar needs,
@@ -535,5 +524,38 @@ public struct AgentsToolbarStrip<ID: Hashable, Trailing: View>: View {
         .padding(.horizontal, 12)
         .frame(width: width, height: 52)
         .background(Color(nsColor: .windowBackgroundColor))
+    }
+}
+
+/// The sidebar column's Agents item. The availability check is made on the
+/// view, not inside the toolbar builder, so no conditional toolbar content
+/// is built: an app target linking an older SwiftUI cannot resolve one.
+private struct AgentsSidebarToolbar: ViewModifier {
+    let agent: AgentsToolbarAgent
+    let visible: Bool
+
+    func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) {
+            content.toolbar { AgentsSidebarItem(agent: agent, visible: visible) }
+        } else {
+            content.toolbar {
+                ToolbarItem(placement: .automatic) {
+                    if visible { AgentsToolbarButton(agent) }
+                }
+            }
+        }
+    }
+}
+
+@available(macOS 26.0, *)
+private struct AgentsSidebarItem: ToolbarContent {
+    let agent: AgentsToolbarAgent
+    let visible: Bool
+
+    var body: some ToolbarContent {
+        ToolbarItem(placement: .automatic) {
+            if visible { AgentsToolbarButton(agent) }
+        }
+        .sharedBackgroundVisibility(.hidden)
     }
 }
