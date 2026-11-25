@@ -211,10 +211,8 @@ private struct CollapsingTabBarGlass: ViewModifier {
     func body(content: Content) -> some View {
         if !drawsGlass {
             content.background(Color.primary.opacity(0.07), in: Capsule())
-        } else if #available(macOS 26.0, *) {
-            content.glassEffect(in: .capsule)
         } else {
-            content.background(.ultraThinMaterial, in: Capsule())
+            content.glassEffect(in: .capsule)
         }
     }
 }
