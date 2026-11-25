@@ -58,12 +58,17 @@ final class UsageFooterTests: XCTestCase {
                     .frame(width: 260)
                     .background(Color(nsColor: .windowBackgroundColor))
                     .environment(\.colorScheme, scheme)
-                let renderer = ImageRenderer(content: view)
-                renderer.scale = 2
-                let image = try XCTUnwrap(renderer.nsImage)
-                XCTAssertGreaterThan(image.size.height, 20)
-                if let dir, let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
-                   let png = rep.representation(using: .png, properties: [:]) {
+                // ImageRenderer draws a native ProgressView as a placeholder, so the
+                // footer is drawn by an offscreen hosting view that never joins a window.
+                let host = NSHostingView(rootView: view)
+                host.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
+                let size = host.fittingSize
+                host.frame = NSRect(origin: .zero, size: size)
+                host.layoutSubtreeIfNeeded()
+                let rep = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+                host.cacheDisplay(in: host.bounds, to: rep)
+                XCTAssertGreaterThan(size.height, 20)
+                if let dir, let png = rep.representation(using: .png, properties: [:]) {
                     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
                     try png.write(to: dir.appendingPathComponent("usage-footer-\(name)-\(scheme == .dark ? "dark" : "light").png"))
                 }
