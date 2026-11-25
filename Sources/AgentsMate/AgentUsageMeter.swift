@@ -33,7 +33,14 @@ public final class AgentUsageModel: ObservableObject {
         // background queue rather than Swift's concurrency pool.
         DispatchQueue.global(qos: .background).async {
             let now = Date()
-            let read = sources.compactMap { $0.read()?.current(at: now) }
+            // A source that reads nothing still gets its agent's row, as
+            // unknown, so both meters show whichever agent the app runs.
+            let read = sources.compactMap { source -> AgentUsage? in
+                if let usage = source.read() { return usage.current(at: now) }
+                return source.unknownAgent.map {
+                    AgentUsage(agent: $0, windows: [], note: AgentUsage.unknownNote, readAt: now)
+                }
+            }
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.refreshing = false
@@ -55,6 +62,7 @@ public final class AgentUsageModel: ObservableObject {
 /// passes still takes its window away.
 public final class KeyValueUsageCommandSource: AgentUsageSource, @unchecked Sendable {
     public let agent: String
+    public var unknownAgent: String? { agent }
     public let command: [String]
     public let interval: TimeInterval
     public let maxInterval: TimeInterval
@@ -217,5 +225,29 @@ public struct AgentUsageMeter: View {
             lines.append(usage.depletedUntil.map { resetLine($0) } ?? "No reset time reported")
         }
         return lines.joined(separator: "\n")
+    }
+}
+
+/// The foot of the Agents sidebar: a divider over the Claude and Codex
+/// meters. The lane list insets it at its bottom edge, so every app built on
+/// AgentsMate carries the same one.
+public struct AgentUsageFooter: View {
+    @ObservedObject var model: AgentUsageModel
+    var barBackground: Bool
+
+    /// `barBackground` backs the footer with the bar material, for a dock
+    /// whose list sits on its own panel.
+    public init(model: AgentUsageModel, barBackground: Bool = false) {
+        self.model = model
+        self.barBackground = barBackground
+    }
+
+    public var body: some View {
+        VStack(spacing: 0) {
+            Divider()
+            AgentUsageMeter(model: model)
+                .padding(.horizontal, 12).padding(.vertical, 8)
+        }
+        .background(barBackground ? AnyShapeStyle(.bar) : AnyShapeStyle(.clear))
     }
 }

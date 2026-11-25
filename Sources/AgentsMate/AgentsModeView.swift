@@ -126,12 +126,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         .background(LaneListKeys(store: store))
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if let usage = store.usage {
-                VStack(spacing: 0) {
-                    Divider()
-                    AgentUsageMeter(model: usage)
-                        .padding(.horizontal, 12).padding(.vertical, 8)
-                }
-                .background(inDock ? AnyShapeStyle(.bar) : AnyShapeStyle(.clear))
+                AgentUsageFooter(model: usage, barBackground: inDock)
             }
         }
         .modifier(LaneMenuSheets(store: store, presentation: menus))
