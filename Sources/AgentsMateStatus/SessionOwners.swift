@@ -190,10 +190,10 @@ public enum SessionOwners {
                               peers: () -> Set<String>, isRunning: (String) -> Bool = { _ in true },
                               now: Date = Date()) -> Decision {
         if !isShared { return Decision(owner: me, reason: .unshared) }
-        let running = { (app: String) in app == me || isRunning(app) }
+        func running(_ app: String) -> Bool { app == me || isRunning(app) }
         if let entry = snapshot.owner(for: keys, now: now), running(entry.app) { return Decision(owner: entry.app, reason: .recorded) }
         if let creator = snapshot.creator(for: keys), running(creator) { return Decision(owner: creator, reason: .creator) }
-        return Decision(owner: (peers().filter(running).union([me])).min() ?? me, reason: .tieBreak)
+        return Decision(owner: (peers().filter { running($0) }.union([me])).min() ?? me, reason: .tieBreak)
     }
 
     // MARK: Other apps listing a session
