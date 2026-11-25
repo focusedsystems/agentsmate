@@ -32,6 +32,9 @@ public struct LaneTranscript: Equatable, Sendable {
     public private(set) var prompts: [String] = []
     /// The text of the agent's last reply.
     public private(set) var lastReply: String?
+    /// The title the person gave a Claude conversation (`/rename`), the last
+    /// one written to the file. Nil when it was never renamed.
+    public private(set) var sessionTitle: String?
     /// GitHub and Azure DevOps pull request links from the agent's replies,
     /// in the order they first appeared.
     public private(set) var pullRequestLinks: [URL] = []
@@ -200,6 +203,10 @@ public struct LaneTranscript: Equatable, Sendable {
                 taskStatus(attachment)
             default: break
             }
+        case "custom-title":
+            if let title = object["customTitle"] as? String { setSessionTitle(title) }
+        case "agent-name":
+            if let title = object["agentName"] as? String { setSessionTitle(title) }
         case "queue-operation":
             // A notice queued for the agent's next turn arrives here first.
             if object["operation"] as? String == "enqueue", let content = object["content"] as? String {
@@ -207,6 +214,11 @@ public struct LaneTranscript: Equatable, Sendable {
             }
         default: break
         }
+    }
+
+    private mutating func setSessionTitle(_ title: String) {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        sessionTitle = trimmed.isEmpty ? nil : String(trimmed.prefix(200))
     }
 
     private mutating func userText(_ text: String, meta: Bool) {

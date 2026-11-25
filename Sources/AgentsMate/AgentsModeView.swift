@@ -509,7 +509,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
     /// Whether a search finds the lane: by its name, folder, summary or the
     /// person's recent prompts in it.
     static func matches(_ session: AgentLaneSession, query: String) -> Bool {
-        matches(query: query, in: [session.title, session.lane.path, session.summary ?? ""] + session.recentPrompts)
+        matches(query: query, in: [session.title, session.subtitle ?? "", session.lane.path, session.summary ?? ""] + session.recentPrompts)
     }
 
     /// The lanes a search finds by the name of their section: every lane of
@@ -859,6 +859,13 @@ struct LaneRow: View {
                 }
                 let detail = detailText
                 let status = statusLine
+                if let subtitle = session.subtitle {
+                    Text(subtitle)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
                 if let detail {
                     Text(detail)
                         .font(.caption)
@@ -983,6 +990,7 @@ struct LaneRow: View {
         let status = session.isOrphan ? "Running, nothing attached"
             : session.needsAttention ? "\(session.status.title), new" : session.status.title
         var parts = [loadStage?.title ?? status]
+        if let subtitle = session.subtitle { parts.append(subtitle) }
         if let notice = session.renameNotice { parts.append(notice) }
         if let summary = session.summary, !summary.isEmpty { parts.append(summary) }
         parts += session.displayedPullRequests.map(\.accessibilityDescription)
@@ -1039,6 +1047,7 @@ struct LaneRow: View {
 
     private var helpText: String {
         var lines = ["\(session.title) — \(session.status.title)", session.shortDirectory]
+        if let subtitle = session.subtitle { lines.insert(subtitle, at: 1) }
         if let summary = session.summary, !summary.isEmpty { lines.append(summary) }
         if !session.recentPrompts.isEmpty {
             lines.append("Recent requests:")

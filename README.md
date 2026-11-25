@@ -82,6 +82,17 @@ semibold beneath it. Search matches the summary and the person's recent
 prompts, the row's hover adds the agent's last reply, and the row's menu and
 the Agent menu have Copy Summary and Copy Last Prompt.
 
+A row also shows the title the person gave its session as a subtitle between
+the name and the summary: a Claude `/rename` (read from the conversation file)
+or a Codex thread name (read from Codex's `session_index.jsonl`). A leading
+"<row name> · " is dropped, since the row already says it, and the row's own
+name never changes. It follows a rename on the next transcript sweep, and
+`displayed.json` rows carry it as `session_title`.
+
+Terminals start one ⌘+ step above `Configuration.baseFontSize`
+(`AgentLaneStore.defaultFontStep`), so every app's default is a point larger
+without changing its own base. Zoom adds to that size and ⌘0 returns to it.
+
 ## Inbox and messaging
 
 `AgentInboxView` lists every lane that has stopped for the person. Asking You

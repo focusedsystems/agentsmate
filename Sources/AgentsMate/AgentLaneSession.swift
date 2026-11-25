@@ -77,6 +77,18 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
         return liveHint
     }
 
+    /// The title the person gave the agent's session (`/rename`, a Codex
+    /// thread name), as the agent wrote it.
+    @Published public internal(set) var sessionTitle: String?
+
+    /// The session title as the row shows it under the row's name: without a
+    /// leading "<row name> · ", and nil when it adds nothing.
+    public var subtitle: String? { SessionTitle.subtitle(sessionTitle, rowName: title) }
+
+    func update(sessionTitle title: String?) {
+        if title != sessionTitle { sessionTitle = title }
+    }
+
     /// One line on what the agent is working on, when summaries are on.
     @Published public internal(set) var summary: String?
     /// The person's last few prompts in this lane, from its conversation file.

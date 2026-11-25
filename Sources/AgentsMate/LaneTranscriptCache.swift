@@ -40,6 +40,31 @@ struct LaneTranscriptCache: Sendable {
     private(set) var codexFiles: [String: String] = [:]
     private var codexMisses: [String: Date] = [:]
     var environment: [String: String] = ProcessInfo.processInfo.environment
+    private var codexNames: [String: String] = [:]
+    private var codexIndexStamp: String?
+
+    /// The title the person gave the lane's session, from its conversation
+    /// file (Claude) or Codex's name index. Call after ``read(_:now:)``.
+    mutating func title(source: Source, record: LaneStatus?) -> String? {
+        if let record, record.agent == "codex", let thread = record.sessionID, !thread.isEmpty {
+            refreshCodexNames()
+            return codexNames[thread]
+        }
+        if case .codexThread(let thread) = source {
+            refreshCodexNames()
+            return codexNames[thread]
+        }
+        return path(for: source).flatMap { readers[$0]?.sessionTitle }
+    }
+
+    private mutating func refreshCodexNames() {
+        let url = SessionTitle.codexIndex(environment: environment)
+        let info = try? FileManager.default.attributesOfItem(atPath: url.path)
+        let stamp = "\((info?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0)/\((info?[.size] as? NSNumber) ?? 0)"
+        guard stamp != codexIndexStamp else { return }
+        codexIndexStamp = stamp
+        codexNames = SessionTitle.codexNames(in: url)
+    }
 
     func path(for source: Source) -> String? {
         switch source {

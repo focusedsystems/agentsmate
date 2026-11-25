@@ -162,7 +162,7 @@ extension AgentLaneStore {
             folder: lane.directory?.path, state: session.status.exportState, attached: session.isAttached,
             selected: !isHomeShown && selectedID == lane.id, isParallel: parallel,
             isTopLevel: !(nested && parallel), collapsed: collapsed, column: column,
-            ownerApp: ownerApp(of: session))
+            ownerApp: ownerApp(of: session), sessionTitle: session.subtitle)
     }
 
     /// Everything the sidebar and All Agents show now, in the order they show it.

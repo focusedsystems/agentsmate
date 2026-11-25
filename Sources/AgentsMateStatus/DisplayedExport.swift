@@ -145,11 +145,16 @@ public struct DisplayedExport: Codable, Equatable, Sendable {
         /// lane that is not shared. Nil when this app cannot tell. Added
         /// without a new schema version; a file without it reads as nil.
         public var ownerApp: String?
+        /// The subtitle the row shows under its name: the session's title
+        /// (`/rename`, a Codex thread name) without a leading "<row name> · ".
+        /// Nil when the row shows none. Added without a new schema version.
+        public var sessionTitle: String?
 
         public init(section: String? = nil, title: String, laneID: String, backend: String, agent: String? = nil,
                     sessionID: String? = nil, attachedSessionID: String? = nil, sessionName: String? = nil, host: String? = nil, folder: String? = nil,
                     state: State, attached: Bool = false, selected: Bool = false, isParallel: Bool = false,
-                    isTopLevel: Bool = true, collapsed: Bool = false, column: String? = nil, ownerApp: String? = nil) {
+                    isTopLevel: Bool = true, collapsed: Bool = false, column: String? = nil, ownerApp: String? = nil,
+                    sessionTitle: String? = nil) {
             self.section = section
             self.title = title
             self.laneID = laneID
@@ -168,13 +173,15 @@ public struct DisplayedExport: Codable, Equatable, Sendable {
             self.collapsed = collapsed
             self.column = column
             self.ownerApp = ownerApp
+            self.sessionTitle = sessionTitle
         }
 
         enum CodingKeys: String, CodingKey {
             case section, title, laneID = "lane_id", backend, agent, sessionID = "session_id",
                  attachedSessionID = "attached_session_id",
                  sessionName = "session_name", host, folder, state, attached, selected,
-                 isParallel = "is_parallel", isTopLevel = "is_top_level", collapsed, column, ownerApp = "owner_app"
+                 isParallel = "is_parallel", isTopLevel = "is_top_level", collapsed, column, ownerApp = "owner_app",
+                 sessionTitle = "session_title"
         }
 
         public func encode(to encoder: Encoder) throws {
@@ -197,6 +204,7 @@ public struct DisplayedExport: Codable, Equatable, Sendable {
             try c.encode(collapsed, forKey: .collapsed)
             try c.encode(column, forKey: .column)
             try c.encode(ownerApp, forKey: .ownerApp)
+            try c.encode(sessionTitle, forKey: .sessionTitle)
         }
     }
 

@@ -29,7 +29,7 @@ ISO 8601 UTC.
    "session_id": "ab12cd34", "attached_session_id": "ab12cd34", "session_name": null, "host": "host-a",
    "folder": "/work/repo", "state": "working", "attached": true, "selected": false,
    "is_parallel": false, "is_top_level": true, "collapsed": false, "column": null,
-   "owner_app": "com.example.app"}],
+   "owner_app": "com.example.app", "session_title": "Quarterly review"}],
  "all_agents": [], "all_agents_selected": false}
 ```
 
@@ -58,6 +58,7 @@ A row:
 - `is_parallel`: a session found for a lane's folder, shown beside or under that lane. `is_top_level`: false when it is indented under its lane.
 - `collapsed`: its section is folded, so the sidebar does not draw the row until it is opened. Such rows are listed.
 - `owner_app`: the bundle id of the app that notifies, badges the Dock and plays sounds for the session: the one the person last worked in for it, else the one that created it, else the lowest bundle id among the apps listing it; this app's own id for a lane that is not shared. Null when the app cannot tell. Added without a new schema version; a file without it reads as null. See [session-owner.md](session-owner.md).
+- `session_title`: the subtitle the row shows under its name: the title the person gave the agent's session (a Claude `/rename`, a Codex thread name) with a leading "<row name> · " removed, since the row already says that. Null when the row shows none. Added without a new schema version; a file without it reads as null.
 - `column`: null in `rows`; in `all_agents`, `needs_you`, `working`, `idle_or_done` or `not_running`. A card's `section` is its area and its `selected` is false.
 
 ## Reading and comparing
