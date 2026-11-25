@@ -161,7 +161,8 @@ extension AgentLaneStore {
             host: liveHost(for: lane) ?? backend.flatMap(DetachedSessions.laneHost) ?? lane.host,
             folder: lane.directory?.path, state: session.status.exportState, attached: session.isAttached,
             selected: !isHomeShown && selectedID == lane.id, isParallel: parallel,
-            isTopLevel: !(nested && parallel), collapsed: collapsed, column: column)
+            isTopLevel: !(nested && parallel), collapsed: collapsed, column: column,
+            ownerApp: ownerApp(of: session))
     }
 
     /// Everything the sidebar and All Agents show now, in the order they show it.

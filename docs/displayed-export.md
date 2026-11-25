@@ -28,7 +28,8 @@ ISO 8601 UTC.
   {"section": "Group A", "title": "Lane one", "lane_id": "lane-1", "backend": "claude-bg", "agent": "claude",
    "session_id": "ab12cd34", "attached_session_id": "ab12cd34", "session_name": null, "host": "host-a",
    "folder": "/work/repo", "state": "working", "attached": true, "selected": false,
-   "is_parallel": false, "is_top_level": true, "collapsed": false, "column": null}],
+   "is_parallel": false, "is_top_level": true, "collapsed": false, "column": null,
+   "owner_app": "com.example.app"}],
  "all_agents": [], "all_agents_selected": false}
 ```
 
@@ -56,6 +57,7 @@ A row:
 - `attached`: whether the terminal here is attached. `selected`: the row is the open one (never while All Agents is showing).
 - `is_parallel`: a session found for a lane's folder, shown beside or under that lane. `is_top_level`: false when it is indented under its lane.
 - `collapsed`: its section is folded, so the sidebar does not draw the row until it is opened. Such rows are listed.
+- `owner_app`: the bundle id of the app that notifies, badges the Dock and plays sounds for the session: the one the person last worked in for it, else the one that created it, else the lowest bundle id among the apps listing it; this app's own id for a lane that is not shared. Null when the app cannot tell. Added without a new schema version; a file without it reads as null. See [session-owner.md](session-owner.md).
 - `column`: null in `rows`; in `all_agents`, `needs_you`, `working`, `idle_or_done` or `not_running`. A card's `section` is its area and its `selected` is false.
 
 ## Reading and comparing

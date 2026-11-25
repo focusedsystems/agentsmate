@@ -297,6 +297,8 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
     @Published public private(set) var metadata: LaneSessionMetadata?
     /// Called when the agent changes into a state that wants a person.
     var onWantsAttention: ((AgentLaneSession) -> Void)?
+    /// The person clicked in this lane's terminal, typed into it or pasted into it.
+    var onUserInteraction: ((AgentLaneSession) -> Void)?
     /// Called when the agent's session file names a section for the lane.
     var onSectionFromAgent: ((String) -> Void)?
     private var metadataURL: URL?
@@ -384,6 +386,7 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
         view.scrollSensitivity = configuration.scrollSensitivity
         view.registerForDraggedTypes(AgentTerminalView.droppedTypes)
         view.onShortcut = { [weak self] shortcut in self?.onShortcut?(shortcut) ?? false }
+        view.onUserInteraction = { [weak self] in if let self { self.onUserInteraction?(self) } }
         view.shortcutResolver = { [weak self] event in self?.shortcutResolver?(event) }
         view.onOpenLink = { [weak self] url in self?.onOpenLink?(url) ?? false }
         view.onOutput = { [weak self] in
