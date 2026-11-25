@@ -78,7 +78,7 @@ final class SessionOwnerTests: XCTestCase {
         a.open("one")
         a.ownership?.flush()
         b.ownership?.isRunning = { _ in false }
-        XCTAssertFalse(notifies(a) == false, "the owner is running and owns it")
+        XCTAssertTrue(notifies(a), "the owner is running and owns it")
         XCTAssertTrue(notifies(b), "app.a is closed, so app.b speaks for it")
         a.ownership?.isRunning = { _ in false }
         b.ownership?.isRunning = { $0 == "app.a" }
