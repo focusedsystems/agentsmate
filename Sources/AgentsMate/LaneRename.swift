@@ -67,11 +67,11 @@ public enum AgentRenameOutcome: Equatable, Sendable {
     public var notice: String? {
         switch self {
         case .sent, .notSupported, .disabled, .notAttached: nil
-        case .agentNotInForeground: "Agent not renamed: it isn’t running here"
-        case .busy: "Agent not renamed: it is working"
-        case .askingPermission: "Agent not renamed: it is asking permission"
-        case .inputNotEmpty: "Agent not renamed: its input has text"
-        case .inputUnknown: "Agent not renamed: input line unclear"
+        case .agentNotInForeground: "Agent rename waits: it isn’t running here"
+        case .busy: "Agent rename waits: it is working"
+        case .askingPermission: "Agent rename waits: it is asking permission"
+        case .inputNotEmpty: "Agent rename waits: its input has text"
+        case .inputUnknown: "Agent rename waits: input line unclear"
         }
     }
 

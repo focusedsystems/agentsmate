@@ -85,9 +85,10 @@ the Agent menu have Copy Summary and Copy Last Prompt.
 A row also shows the title the person gave its session as a subtitle between
 the name and the summary: a Claude `/rename` (read from the conversation file)
 or a Codex thread name (read from Codex's `session_index.jsonl`). A leading
-"<row name> · " is dropped, since the row already says it, and the row's own
-name never changes. It follows a rename on the next transcript sweep, and
-`displayed.json` rows carry it as `session_title`.
+"<row name> · " is dropped, since the row already says it, and the subtitle is
+hidden when it is the row's name. The row's name and the title stay in sync both
+ways (see "Renaming the agent's session"). It follows a rename on the next
+transcript sweep, and `displayed.json` rows carry it as `session_title`.
 
 Terminals start one ⌘+ step above `Configuration.baseFontSize`
 (`AgentLaneStore.defaultFontStep`), so every app's default is a point larger
@@ -257,6 +258,40 @@ The person's switch is `AgentsModeKeys.renameAgentSession` ("Rename the agent's
 session too" in `AgentLaneSettingsSection`), on by default and shown when a
 registered backend can rename. `store.renameAgentSession(_:to:)` sends the
 command by itself and returns an `AgentRenameOutcome`.
+
+### Row to session: typed, queued until idle
+
+Neither agent offers a rename for a live session from outside. `claude` takes a
+name only at launch (`--name`), `claude agents` and its daemon have no rename,
+and Codex's app-server `thread/name/set` only reaches threads that server has
+loaded, not a terminal session running its own. Writing `session_index.jsonl`
+is not picked up by a running Codex, and writing an agent's files is not ours
+to do. So the one route that works on a live session is the agent's own
+`/rename`, typed at its input line under the rules above.
+
+A rename that cannot be typed yet (the agent is working, asking permission, has
+text in its input, is not in front, or the lane is not attached) is queued, not
+dropped. Each transcript sweep retries it, and it is typed once the agent is
+idle with an empty input line. Renaming the row again replaces the queued name.
+An agent that has no `renameCommand`, or the switch being off, drops it.
+
+### Session to row
+
+When the agent's session title changes (a Claude `/rename`, a Codex thread
+name), the row's name becomes that title. The title must read the same on two
+sweeps in a row, so one in the middle of changing is not taken. Adopting a title
+only sets the row's name; it never queues a rename back. While a row rename is
+queued or just typed, the agent's old title cannot overwrite it, until the title
+shows the new name or 30 seconds pass. A title the row already holds, or has
+already settled with (kept in the defaults under `AgentsModeKeys.titleSync`), is
+ignored. The switch above turns both directions off.
+
+### Empty name
+
+An empty name returns the row to its automatic name and drops any queued
+rename. Claude Code and Codex have no command that clears a session title, so
+the agent's title is left alone, and the title it has at that moment is marked
+settled so it is not taken back as the row's name. A later change to it is.
 
 ## Lanes that survive anything
 

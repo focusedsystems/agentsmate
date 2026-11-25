@@ -85,6 +85,9 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
     /// leading "<row name> · ", and nil when it adds nothing.
     public var subtitle: String? { SessionTitle.subtitle(sessionTitle, rowName: title) }
 
+    /// What is settled between this row's name and the agent's session title.
+    var titleSync = LaneTitleSync()
+
     func update(sessionTitle title: String?) {
         if title != sessionTitle { sessionTitle = title }
     }

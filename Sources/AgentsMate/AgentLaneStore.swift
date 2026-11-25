@@ -1856,7 +1856,15 @@ public final class AgentLaneStore: ObservableObject {
     public func rename(_ id: AgentLane.ID, to name: String?) {
         let before = sessions[id]?.customTitle
         setName(id, to: name)
-        if let value = sessions[id]?.customTitle, value != before { renameAgentSession(id, to: value) }
+        guard let session = sessions[id] else { return }
+        if let value = session.customTitle {
+            guard value != before else { return }
+            session.titleSync.rowRenamed(to: value)
+            flushPendingRename(id, showNotice: true)
+        } else {
+            session.titleSync.rowReset(sessionTitle: session.sessionTitle)
+            saveTitleSync(id)
+        }
     }
 
     /// The row's name only, as a restored or duplicated lane takes it.
@@ -1882,6 +1890,51 @@ public final class AgentLaneStore: ObservableObject {
         if outcome == .sent, let command { session.typeCommand(command) }
         session.showRenameNotice(outcome.notice)
         return outcome
+    }
+
+    /// Type a queued rename into the lane's agent if it can take it now. A
+    /// lane that is busy, asking permission, has text typed, or whose agent
+    /// is not in front keeps the rename queued for the next sweep; one that
+    /// cannot rename at all drops it.
+    func flushPendingRename(_ id: AgentLane.ID, showNotice: Bool = false) {
+        guard let session = sessions[id], let name = session.titleSync.pending else { return }
+        let command = session.backend.renameCommand.flatMap { LaneRename.command(format: $0, name: name) }
+        let outcome = AgentRenameOutcome.decide(command: command, enabled: renamesAgentSession,
+                                                attached: session.isAttached, agentInForeground: session.acceptsText,
+                                                state: session.record?.state, input: session.readInputLine)
+        switch outcome {
+        case .sent:
+            if let command { session.typeCommand(command) }
+            session.titleSync.typed()
+            session.showRenameNotice(nil)
+        case .notSupported, .disabled:
+            session.titleSync.rowReset(sessionTitle: session.sessionTitle)
+            saveTitleSync(id)
+        case .notAttached, .agentNotInForeground, .busy, .askingPermission, .inputNotEmpty, .inputUnknown:
+            if showNotice { session.showRenameNotice(outcome.notice) }
+        }
+    }
+
+    /// Retry every queued rename.
+    func flushPendingRenames() {
+        for (id, session) in sessions where session.titleSync.hasPending { flushPendingRename(id) }
+    }
+
+    /// Take a session title read from the agent: the row follows it when it
+    /// is a change the row has not already made or sent.
+    func adopt(sessionTitle title: String?, for id: AgentLane.ID) {
+        guard let session = sessions[id] else { return }
+        session.update(sessionTitle: title)
+        guard renamesAgentSession else { return }
+        let before = session.titleSync
+        if let name = session.titleSync.observe(title: title, rowName: session.customTitle) { setName(id, to: name) }
+        if session.titleSync != before { saveTitleSync(id) }
+    }
+
+    private func saveTitleSync(_ id: AgentLane.ID) {
+        var all = defaults.dictionary(forKey: keys.titleSync) as? [String: String] ?? [:]
+        all[id] = sessions[id]?.titleSync.acknowledged
+        defaults.set(all, forKey: keys.titleSync)
     }
 
     /// The person's switch for renaming the agent's session with its lane,
@@ -2275,6 +2328,7 @@ public final class AgentLaneStore: ObservableObject {
         session.onAttentionChange = { [weak self] _ in self?.updateBadge() }
         session.onUserInteraction = { [weak self] session in self?.claimOwnership(of: session) }
         session.customTitle = layout.names[id]
+        session.titleSync = LaneTitleSync(acknowledged: (defaults.dictionary(forKey: keys.titleSync) as? [String: String])?[id])
         session.onShortcut = { [weak self] shortcut in self?.handle(shortcut, from: id) ?? false }
         session.shortcutResolver = { [weak self] event in self?.shortcuts.terminalShortcut(for: event) }
         session.onOpenLink = { [weak self] url in self?.onOpenLink?(url, id) ?? false }
@@ -2986,6 +3040,7 @@ public final class AgentLaneStore: ObservableObject {
     /// for files whose size or modification time changed. Skipped while the
     /// last read is still going.
     func refreshTranscripts() {
+        flushPendingRenames()
         guard !readingTranscripts else { return }
         var wanted: [AgentLane.ID: LaneTranscriptCache.Source] = [:]
         var records: [AgentLane.ID: LaneStatus] = [:]
@@ -3005,7 +3060,8 @@ public final class AgentLaneStore: ObservableObject {
                 self.readingTranscripts = false
                 self.transcripts = cache
                 var selectedChanged = false
-                for (id, title) in titles { self.sessions[id]?.update(sessionTitle: title) }
+                for (id, title) in titles { self.adopt(sessionTitle: title, for: id) }
+                self.flushPendingRenames()
                 for (id, source) in wanted {
                     guard let path = cache.path(for: source), let transcript = changed[path] else { continue }
                     self.sessions[id]?.update(transcript: transcript)
@@ -3156,6 +3212,8 @@ public struct AgentsModeKeys: Sendable {
     public var summarizeSessions: String { prefix + "summarizeSessions" }
     /// The person's switch for renaming the agent's session with its lane.
     public var renameAgentSession: String { prefix + "renameAgentSession" }
+    /// The agent session title each row has already settled with, by lane.
+    public var titleSync: String { prefix + "titleSync" }
     /// The person's sidebar shape, over the app's defaults
     /// (``AgentSidebarSettingsSection``).
     public var showsSectionHeadings: String { prefix + "showsSectionHeadings" }

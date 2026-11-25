@@ -210,3 +210,89 @@ final class PromptLineScreenTests: XCTestCase {
         XCTAssertEqual(screen(["last login", "user@host ~ % "], cursor: (2, 15)), .unknown)
     }
 }
+
+final class LaneTitleSyncTests: XCTestCase {
+    private let t0 = Date(timeIntervalSince1970: 1_000_000)
+
+    func testASessionTitleBecomesTheRowNameOnceItHoldsSteady() {
+        var sync = LaneTitleSync()
+        XCTAssertNil(sync.observe(title: "Entra · Update Managed Identities", rowName: "Entra 2", now: t0))
+        XCTAssertEqual(sync.observe(title: "Entra · Update Managed Identities", rowName: "Entra 2", now: t0),
+                       "Entra · Update Managed Identities")
+        XCTAssertNil(sync.observe(title: "Entra · Update Managed Identities", rowName: "Entra · Update Managed Identities", now: t0))
+    }
+
+    func testATitleStillChangingIsNotTakenEarly() {
+        var sync = LaneTitleSync()
+        XCTAssertNil(sync.observe(title: "One", rowName: "Row", now: t0))
+        XCTAssertNil(sync.observe(title: "Two", rowName: "Row", now: t0))
+        XCTAssertEqual(sync.observe(title: "Two", rowName: "Row", now: t0), "Two")
+    }
+
+    func testARowNameWaitsForTheAgentAndTheOldTitleDoesNotOverwriteIt() {
+        var sync = LaneTitleSync(acknowledged: "Old")
+        sync.rowRenamed(to: "New")
+        for _ in 0..<3 { XCTAssertNil(sync.observe(title: "Old", rowName: "New", now: t0)) }
+        XCTAssertTrue(sync.hasPending)
+        sync.typed(now: t0)
+        XCTAssertFalse(sync.hasPending)
+        XCTAssertNil(sync.observe(title: "Old", rowName: "New", now: t0.addingTimeInterval(5)))
+        XCTAssertNil(sync.observe(title: "Old", rowName: "New", now: t0.addingTimeInterval(5)))
+    }
+
+    func testTheRenameDoesNotEchoBack() {
+        var sync = LaneTitleSync(acknowledged: "Old")
+        sync.rowRenamed(to: "New  name")
+        sync.typed(now: t0)
+        XCTAssertNil(sync.observe(title: "New name", rowName: "New  name", now: t0))
+        XCTAssertEqual(sync.acknowledged, "New name")
+        for _ in 0..<3 { XCTAssertNil(sync.observe(title: "New name", rowName: "New  name", now: t0)) }
+    }
+
+    func testATypedRenameThatNeverShowsStopsBlockingAfterTheWindow() {
+        var sync = LaneTitleSync(acknowledged: "Old")
+        sync.rowRenamed(to: "New")
+        sync.typed(now: t0)
+        let later = t0.addingTimeInterval(LaneTitleSync.awaitingWindow + 1)
+        XCTAssertNil(sync.observe(title: "Other", rowName: "New", now: later))
+        XCTAssertEqual(sync.observe(title: "Other", rowName: "New", now: later), "Other")
+    }
+
+    func testAnEmptyRenameDropsTheQueueAndLeavesTheSessionTitleSettled() {
+        var sync = LaneTitleSync()
+        sync.rowRenamed(to: "New")
+        sync.rowReset(sessionTitle: "Agent title")
+        XCTAssertFalse(sync.hasPending)
+        for _ in 0..<3 { XCTAssertNil(sync.observe(title: "Agent title", rowName: nil, now: t0)) }
+        XCTAssertNil(sync.observe(title: nil, rowName: nil, now: t0))
+        XCTAssertNil(sync.observe(title: "Changed", rowName: nil, now: t0))
+        XCTAssertEqual(sync.observe(title: "Changed", rowName: nil, now: t0), "Changed")
+    }
+
+    @MainActor
+    func testTheStoreAdoptsAndKeepsARowRenameQueuedUntilItCanBeTyped() {
+        let defaults = UserDefaults(suiteName: "titlesync-\(UUID().uuidString)")!
+        let store = AgentLaneStore(configuration: .init(termProgram: "test", sessionFileDirectory: nil, summaryCacheFile: nil,
+                                                        pullRequestLedgerFile: nil, pullRequestSeedFile: nil),
+                                   backends: [CommandLaneBackend(id: "claude", displayName: "Claude", command: "claude")],
+                                   statusFeed: nil, defaults: defaults)
+        store.sync(lanes: [AgentLane(id: "a", title: "A", backendID: "claude")])
+        store.adopt(sessionTitle: "From agent", for: "a")
+        XCTAssertNil(store.sessions["a"]?.customTitle)
+        store.adopt(sessionTitle: "From agent", for: "a")
+        XCTAssertEqual(store.sessions["a"]?.customTitle, "From agent")
+        XCTAssertEqual(store.sessions["a"]?.subtitle, nil)
+        XCTAssertFalse(store.sessions["a"]?.titleSync.hasPending ?? true, "adopting never queues a rename back")
+
+        store.rename("a", to: "Mine")
+        XCTAssertTrue(store.sessions["a"]?.titleSync.hasPending ?? false, "not attached here, so it stays queued")
+        for _ in 0..<3 { store.adopt(sessionTitle: "From agent", for: "a") }
+        XCTAssertEqual(store.sessions["a"]?.customTitle, "Mine")
+
+        store.rename("a", to: nil)
+        XCTAssertNil(store.sessions["a"]?.customTitle)
+        XCTAssertFalse(store.sessions["a"]?.titleSync.hasPending ?? true)
+        for _ in 0..<3 { store.adopt(sessionTitle: "From agent", for: "a") }
+        XCTAssertNil(store.sessions["a"]?.customTitle, "the settled session title is not taken back")
+    }
+}

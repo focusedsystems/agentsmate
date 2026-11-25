@@ -1,7 +1,7 @@
 import Foundation
 
 /// The title a person gave an agent's session: a Claude `/rename`, or a Codex
-/// thread's name. A row shows it under its own name, which never changes.
+/// thread's name. A row takes it as its name when it changes, and a row's rename goes back to it.
 public enum SessionTitle {
     /// The separator some agents put between a row's name and the title.
     static let separator = "·"
