@@ -125,7 +125,16 @@ If nothing takes it within 20 seconds it goes on the clipboard instead.
 
 ## Usage meter
 
-`Configuration.usageSources` fills the meter at the sidebar's foot.
+The sidebar's foot always carries the Claude and Codex meters
+(`AgentUsageFooter`), whichever backend the app defaults to. With no
+`Configuration.usageSources` an app gets `AgentUsageSources.standard()`:
+Claude from the status-line cache under `~/.claude`, Codex from its own
+session files. An agent with no current reading stays in the footer as "Usage
+unknown". An app whose agents run on another Mac passes
+`AgentUsageSources.standard(claudeHost:)` to read Claude's cache from that
+host over `ssh`.
+
+`Configuration.usageSources` replaces the defaults.
 `KeyValueUsageFileSource` reads the `KEY=VALUE` file a status-line helper
 writes. A window whose reset has passed is left out, and a file older than an
 hour (`maxAge`) counts for nothing, so an agent with no current reading shows

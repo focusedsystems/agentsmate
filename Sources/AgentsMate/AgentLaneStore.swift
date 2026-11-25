@@ -69,8 +69,10 @@ public final class AgentLaneStore: ObservableObject {
         /// `~/Library/Caches/<bundle id>/agent-summaries.json`, or the process
         /// name in place of the bundle id when there is none.
         public static var defaultSummaryCacheFile: URL { LaneSummaryCache.defaultURL() }
-        /// Where to read the agents' usage limits; the lane sidebar shows a
-        /// meter at its foot when there are any.
+        /// Where to read the agents' usage limits; the lane sidebar always
+        /// shows the meters at its foot. The default is Claude's status-line
+        /// cache and Codex's session files on this Mac
+        /// (``AgentUsageSources/standard(claudeHost:)``).
         public var usageSources: [any AgentUsageSource]
         /// What Reopen As offers, in order. Each names a registered backend;
         /// a choice's ``LaneReopenChoice/kind`` gives it that kind's shortcut.
@@ -214,7 +216,7 @@ public final class AgentLaneStore: ObservableObject {
                         .appendingPathComponent("agentsmate-sessions", isDirectory: true),
                     cycleSkipsUnstarted: Bool = false, workspaceFile: URL? = nil,
                     showsRowMetadata: Bool = false, notifies: Bool = false, summaryModel: String? = nil,
-                    usageSources: [any AgentUsageSource] = [], reopenChoices: [LaneReopenChoice] = [],
+                    usageSources: [any AgentUsageSource] = AgentUsageSources.standard(), reopenChoices: [LaneReopenChoice] = [],
                     codexSummaryModel: String? = nil, summarizers: [any LaneSummarizing] = [],
                     summaryCacheFile: URL? = Configuration.defaultSummaryCacheFile, rowStyle: LaneRowStyle = .standard,
                     inboxWindowID: String? = nil, messageWindowID: String? = nil,
