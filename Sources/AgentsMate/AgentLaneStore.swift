@@ -1965,11 +1965,16 @@ public final class AgentLaneStore: ObservableObject {
     @discardableResult
     public func duplicate(_ id: AgentLane.ID, backendID: String? = nil, focus: Bool = true) -> AgentLaneSession? {
         guard let source = lanes.first(where: { $0.id == id }), let session = sessions[id] else { return nil }
+        guard canDuplicate(id, backendID: backendID) else { return nil }
         var lane = source
         lane.id = UUID().uuidString
         lane.isClosable = true
         if source.directory == nil { lane.directory = URL(fileURLWithPath: session.currentDirectory) }
         lane.backendID = backendID ?? duplicateBackendID(for: source, in: lane.directory)
+        // A Claude background session is started by this Mac's own `claude`,
+        // so a copy that will run one is a lane on this Mac, whatever name
+        // the registry gave this Mac in the source row.
+        if backends[lane.backendID] is ClaudeBackgroundLaneBackend { lane.host = nil }
         lane.section = layout.section(of: source)
         lane.statusMatch = nil
         // The copy is a lane of its own, not another view of the same session.
@@ -1989,6 +1994,25 @@ public final class AgentLaneStore: ObservableObject {
         let added = add(lane, focus: focus, after: id)
         setName(lane.id, to: name)
         return added
+    }
+
+    /// Whether `host` names this Mac: nil, one of its own names, or the name
+    /// the hosts registry gives it.
+    func isThisMac(_ host: String?) -> Bool {
+        guard let host, !host.isEmpty else { return true }
+        let names = AgentHosts.thisMacNames.union(liveSelfName.map { [$0] } ?? []).map { $0.lowercased() }
+        return names.contains(host.lowercased())
+    }
+
+    /// Whether a duplicate of a lane can work. A Claude background session
+    /// is started by `claude` on this Mac, so a lane on another host cannot
+    /// be copied onto it; the menu leaves that choice off rather than start
+    /// something that only prints a refusal.
+    public func canDuplicate(_ id: AgentLane.ID, backendID: String? = nil) -> Bool {
+        guard let source = lanes.first(where: { $0.id == id }) else { return false }
+        let target = backendID ?? duplicateBackendID(for: source, in: source.directory)
+        guard backends[target] is ClaudeBackgroundLaneBackend else { return true }
+        return isThisMac(source.host)
     }
 
     /// Names a copy must not take: every row's title and session name, and

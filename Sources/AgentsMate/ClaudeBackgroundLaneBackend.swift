@@ -37,6 +37,17 @@ public struct ClaudeBackgroundLaneBackend: LaneBackend {
     /// one file per lane id, for the store to bind to the row.
     public var startedIDDirectory: URL = ClaudeBackgroundLaneBackend.defaultStartedIDDirectory
 
+    /// Names that mean this Mac, compared ignoring case. A lane whose host is
+    /// one of them runs here, the same as a lane with no host.
+    public var localHostNames: Set<String> = AgentHosts.thisMacNames
+
+    /// Whether `host` is another machine: set, and not one of this Mac's names.
+    func isRemote(_ host: String?) -> Bool {
+        guard let host, !host.isEmpty else { return false }
+        let names = Set(localHostNames.map { $0.lowercased() })
+        return !names.contains(host.lowercased())
+    }
+
     /// Which row holds which short id, kept by the store, so a name never
     /// resolves to a session another row already has.
     public var holders = SessionHolders()
@@ -172,7 +183,7 @@ public struct ClaudeBackgroundLaneBackend: LaneBackend {
         let claude = claude.isEmpty ? "claude" : claude
         let name = sessionName(for: lane) ?? name(lane)
         let line: String
-        if lane.host?.isEmpty == false {
+        if isRemote(lane.host) {
             line = Self.refusal("“\(name)” runs on another host, so it cannot be resumed here.")
         } else if let id = lane.agentSessionID, HostSessions.isValidAgentID(id) {
             if let full = conversationID(for: lane) {
@@ -232,7 +243,7 @@ public struct ClaudeBackgroundLaneBackend: LaneBackend {
         if let id = lane.agentSessionID, HostSessions.isValidAgentID(id) { return .one(id) }
         if let id = startedID(for: lane) { return .one(id) }
         // This Mac's list says nothing about another host's sessions.
-        if let host = lane.host, !host.isEmpty { return .elsewhere(host) }
+        if let host = lane.host, isRemote(host) { return .elsewhere(host) }
         // A row that must start its own session never takes one by name.
         if lane.startsNewSession { return .none }
         guard let data = try? Data(contentsOf: agentsListCache) else { return .none }
