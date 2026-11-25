@@ -18,14 +18,14 @@ public enum LaneRename {
     }
 
     /// The name as one plain line: control characters and line breaks
-    /// become spaces, runs of spaces collapse, and it is cut to 100
+    /// become spaces, runs of spaces collapse, and it is cut to 200
     /// characters, so typing it can never submit or edit anything early.
     public static func cleanName(_ name: String) -> String {
         let flat = String(String.UnicodeScalarView(name.unicodeScalars.map {
             CharacterSet.controlCharacters.contains($0) || CharacterSet.newlines.contains($0) ? " " : $0
         }))
         let words = flat.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        return String(words.prefix(100))
+        return String(words.prefix(200))
     }
 
     /// The text to type: `format` with its `%@` replaced by the cleaned
@@ -67,11 +67,11 @@ public enum AgentRenameOutcome: Equatable, Sendable {
     public var notice: String? {
         switch self {
         case .sent, .notSupported, .disabled, .notAttached: nil
-        case .agentNotInForeground: "Agent not renamed: it isn’t running here"
-        case .busy: "Agent not renamed: it is working"
-        case .askingPermission: "Agent not renamed: it is asking permission"
-        case .inputNotEmpty: "Agent not renamed: its input has text"
-        case .inputUnknown: "Agent not renamed: input line unclear"
+        case .agentNotInForeground: "Agent rename waits: it isn’t running here"
+        case .busy: "Agent rename waits: it is working"
+        case .askingPermission: "Agent rename waits: it is asking permission"
+        case .inputNotEmpty: "Agent rename waits: its input has text"
+        case .inputUnknown: "Agent rename waits: input line unclear"
         }
     }
 
