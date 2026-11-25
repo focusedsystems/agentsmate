@@ -185,6 +185,19 @@ public final class AgentLaneStore: ObservableObject {
         /// The AgentsMate commit the app was built from, for that file; when
         /// nil, the `AgentsMateCommit` key of the app's Info.plist.
         public var agentsMateCommit: String?
+        /// Where apps record which of them the person last worked in for each
+        /// session (``SessionOwners``), so that only that app notifies and
+        /// badges the Dock for it. Nil turns the gate off: every app notifies.
+        /// The default is ``defaultSessionOwnerFile``: nothing outside an app bundle.
+        public var sessionOwnerFile: URL?
+        /// The bundle id this app records itself under in ``sessionOwnerFile``;
+        /// nil is the running bundle's.
+        public var ownerAppID: String?
+        /// Whether a lane's repository is shared with another app. A lane it
+        /// says is not shared is always this app's to notify about; nil
+        /// treats every lane that way, so an app that cannot tell notifies as
+        /// it always did.
+        public var isLaneShared: (@Sendable (_ lane: AgentLane) -> Bool)?
 
         /// `~/Library/Caches/<bundle id>/agent-pull-requests.json`.
         public static var defaultPullRequestLedgerFile: URL { PullRequestLedgerCache.defaultURL() }
@@ -219,7 +232,13 @@ public final class AgentLaneStore: ObservableObject {
                     parallelSessions: ParallelSessionPlacement = .topLevel,
                     liveSnapshotFile: URL? = LiveSessionSnapshot.standardURL, opensActiveOnly: Bool = true,
                     displayedExportFile: URL? = Configuration.defaultDisplayedExportFile,
-                    agentsMateCommit: String? = nil) {
+                    agentsMateCommit: String? = nil,
+                    sessionOwnerFile: URL? = Configuration.defaultSessionOwnerFile,
+                    ownerAppID: String? = nil,
+                    isLaneShared: (@Sendable (_ lane: AgentLane) -> Bool)? = nil) {
+            self.sessionOwnerFile = sessionOwnerFile
+            self.ownerAppID = ownerAppID
+            self.isLaneShared = isLaneShared
             self.displayedExportFile = displayedExportFile
             self.agentsMateCommit = agentsMateCommit
             self.liveSnapshotFile = liveSnapshotFile
@@ -444,6 +463,7 @@ public final class AgentLaneStore: ObservableObject {
             MainActor.assumeIsolated { self?.apply(notes: notes) }
         }
         statusFeed?.start()
+        startSessionOwnership()
         startDisplayedExport()
         if statusFeed != nil { startTranscripts() }
         if configuration.showsRowMetadata { startRowMetadata() }
@@ -556,7 +576,11 @@ public final class AgentLaneStore: ObservableObject {
     /// schemes, `file:` among them, are dropped.
     public var onOpenLink: ((URL, AgentLane.ID) -> Bool)?
 
-    private var notifier: LaneNotifier?
+    var notifier: LaneNotifier?
+    /// Which app the person last worked in for each session, when configured.
+    var ownership: SessionOwnership?
+    /// Set while the store opens a lane the person did not ask for, as at launch.
+    var suppressOwnerClaim = false
     /// The agents' usage limits, when the app gave usage sources.
     public private(set) var usage: AgentUsageModel?
 
@@ -592,7 +616,9 @@ public final class AgentLaneStore: ObservableObject {
     private func laneWantsAttention(_ session: AgentLaneSession) {
         guard configuration.notifies else { return }
         let lookingAtIt = session.isShown && NSApp.isActive
-        if !lookingAtIt { notifier?.post(for: session) }
+        // A session another app owns is shown and badged nowhere here: the
+        // app the person last worked in for it speaks for it.
+        if !lookingAtIt, shouldNotify(for: session) { notifier?.post(for: session) }
         updateBadge()
     }
 
@@ -606,7 +632,10 @@ public final class AgentLaneStore: ObservableObject {
     func updateBadge() {
         // From the lanes themselves, not the cached list, which may not have
         // caught up with a change that has just been made.
-        let count = listedLanes.filter { sessions[$0.id]?.needsAttention == true }.count
+        let count = listedLanes.filter { lane in
+            guard let session = sessions[lane.id], session.needsAttention else { return false }
+            return ownsSession(session)
+        }.count
         badgeCount = count
         guard configuration.notifies, LaneNotifier.isAvailable else { return }
         NSApp.dockTile.badgeLabel = count > 0 ? String(count) : nil
@@ -1573,6 +1602,10 @@ public final class AgentLaneStore: ObservableObject {
     public func openSelectedOnShow(focus: Bool = true) {
         guard firstShowPending else {
             if isHomeShown { return }
+            // Showing the lanes again is not the person working in the selected one.
+            let before = suppressOwnerClaim
+            suppressOwnerClaim = true
+            defer { suppressOwnerClaim = before }
             return openSelected(focus: focus)
         }
         firstShowPending = false
@@ -1600,7 +1633,11 @@ public final class AgentLaneStore: ObservableObject {
         guard let session = sessions[id] else { return }
         session.resumeOnStart = false
         session.attachOnlyLaunch = launch
+        // Reattaching what was open at launch is not the person working in it.
+        let before = suppressOwnerClaim
+        suppressOwnerClaim = true
         open(id, focus: focus)
+        suppressOwnerClaim = before
     }
 
     // MARK: Lane hosts
@@ -1800,6 +1837,7 @@ public final class AgentLaneStore: ObservableObject {
     @discardableResult
     public func send(_ text: String, to id: AgentLane.ID? = nil, submit: Bool = false) -> SendResult {
         if let session = (id ?? selectedID).flatMap({ sessions[$0] }), session.send(text, submit: submit) {
+            claimOwnership(of: session)
             return .sent
         }
         NSPasteboard.general.clearContents()
@@ -1993,6 +2031,7 @@ public final class AgentLaneStore: ObservableObject {
         }
         let added = add(lane, focus: focus, after: id)
         setName(lane.id, to: name)
+        if let added { claimOwnership(of: added, created: true) }
         return added
     }
 
@@ -2132,7 +2171,9 @@ public final class AgentLaneStore: ObservableObject {
         // one as theirs: the lane stays where its + was pressed.
         layout.move(lane.id, to: section)
         if group.isPinned { layout.setPinned(lane.id, true) }
-        return add(lane, focus: focus)
+        let added = add(lane, focus: focus)
+        if let added { claimOwnership(of: added, created: true) }
+        return added
     }
 
     /// Ask for a folder, then open a lane in `group` there on the agent a
@@ -2230,6 +2271,7 @@ public final class AgentLaneStore: ObservableObject {
         let id = lane.id
         session.onWantsAttention = { [weak self] session in self?.laneWantsAttention(session) }
         session.onAttentionChange = { [weak self] _ in self?.updateBadge() }
+        session.onUserInteraction = { [weak self] session in self?.claimOwnership(of: session) }
         session.customTitle = layout.names[id]
         session.onShortcut = { [weak self] shortcut in self?.handle(shortcut, from: id) ?? false }
         session.shortcutResolver = { [weak self] event in self?.shortcuts.terminalShortcut(for: event) }
@@ -2265,6 +2307,7 @@ public final class AgentLaneStore: ObservableObject {
         if id == splitID { splitID = selectedID == id ? nil : selectedID }
         selectedID = id
         let starting = !session.isAttached
+        if !suppressOwnerClaim { claimOwnership(of: session) }
         start(session)
         if focus { session.wantsFocus = true }
         updateShown()

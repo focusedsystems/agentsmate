@@ -8,6 +8,8 @@ open class AgentTerminalView: LocalProcessTerminalView {
     /// Answers a shortcut pressed while the terminal has focus. Returns
     /// whether it was handled; an unhandled one goes on to the menus.
     public var onShortcut: ((TerminalShortcut) -> Bool)?
+    /// Called when the person clicks in the terminal, types into it or pastes into it.
+    var onUserInteraction: (() -> Void)?
     /// Turns a key press into a shortcut under the person's bindings; nil
     /// uses the built-in keys.
     public var shortcutResolver: ((NSEvent) -> TerminalShortcut?)?
@@ -191,7 +193,12 @@ open class AgentTerminalView: LocalProcessTerminalView {
             if event.type == .leftMouseDown || event.type == .leftMouseUp {
                 let dropCommand = MainActor.assumeIsolated { () -> Bool in
                     guard event.window === self.window else { return false }
-                    if event.type == .leftMouseDown { self.selectsOnShift(event) }
+                    if event.type == .leftMouseDown {
+                        self.selectsOnShift(event)
+                        if !self.isHiddenOrHasHiddenAncestor, self.bounds.contains(self.convert(event.locationInWindow, from: nil)) {
+                            self.onUserInteraction?()
+                        }
+                    }
                     return self.handleLinkClick(event)
                 }
                 return dropCommand ? Self.withoutCommand(event) ?? event : event
@@ -199,7 +206,9 @@ open class AgentTerminalView: LocalProcessTerminalView {
             let handled = MainActor.assumeIsolated { () -> Bool in
                 guard event.window === self.window else { return false }
                 if event.type == .keyDown {
-                    return self.window?.firstResponder === self && self.handleKeyDown(event)
+                    guard self.window?.firstResponder === self else { return false }
+                    self.onUserInteraction?()
+                    return self.handleKeyDown(event)
                 }
                 guard !self.isHiddenOrHasHiddenAncestor,
                       self.bounds.contains(self.convert(event.locationInWindow, from: nil)) else { return false }
@@ -465,6 +474,7 @@ open class AgentTerminalView: LocalProcessTerminalView {
     /// Edit › Paste: what ``pasteboard`` holds, typed in the way Terminal
     /// does it. See ``PasteContent`` for the order.
     open override func paste(_ sender: Any) {
+        onUserInteraction?()
         guard let bytes = pasteInput() else { return }
         send(bytes)
     }

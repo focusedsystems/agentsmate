@@ -15,7 +15,7 @@ import Foundation
 ///  "rows": [{"section": "Heading", "title": "…", "lane_id": "…", "backend": "tmux", "agent": "claude",
 ///            "session_id": null, "attached_session_id": null, "session_name": "lane-a", "host": "host-a", "folder": "/path",
 ///            "state": "working", "attached": true, "selected": false, "is_parallel": false,
-///            "is_top_level": true, "collapsed": false, "column": null}],
+///            "is_top_level": true, "collapsed": false, "column": null, "owner_app": "com.example.app"}],
 ///  "all_agents": [], "all_agents_selected": false}
 /// ```
 ///
@@ -139,11 +139,17 @@ public struct DisplayedExport: Codable, Equatable, Sendable {
         public var collapsed: Bool
         /// All Agents only: `needs_you`, `working`, `idle_or_done` or `not_running`.
         public var column: String?
+        /// The bundle id of the app that notifies about this session: the one
+        /// the person last worked in for it, or, when none has, the one the
+        /// fallback order picks (``SessionOwners``). This app's own id for a
+        /// lane that is not shared. Nil when this app cannot tell. Added
+        /// without a new schema version; a file without it reads as nil.
+        public var ownerApp: String?
 
         public init(section: String? = nil, title: String, laneID: String, backend: String, agent: String? = nil,
                     sessionID: String? = nil, attachedSessionID: String? = nil, sessionName: String? = nil, host: String? = nil, folder: String? = nil,
                     state: State, attached: Bool = false, selected: Bool = false, isParallel: Bool = false,
-                    isTopLevel: Bool = true, collapsed: Bool = false, column: String? = nil) {
+                    isTopLevel: Bool = true, collapsed: Bool = false, column: String? = nil, ownerApp: String? = nil) {
             self.section = section
             self.title = title
             self.laneID = laneID
@@ -161,13 +167,14 @@ public struct DisplayedExport: Codable, Equatable, Sendable {
             self.isTopLevel = isTopLevel
             self.collapsed = collapsed
             self.column = column
+            self.ownerApp = ownerApp
         }
 
         enum CodingKeys: String, CodingKey {
             case section, title, laneID = "lane_id", backend, agent, sessionID = "session_id",
                  attachedSessionID = "attached_session_id",
                  sessionName = "session_name", host, folder, state, attached, selected,
-                 isParallel = "is_parallel", isTopLevel = "is_top_level", collapsed, column
+                 isParallel = "is_parallel", isTopLevel = "is_top_level", collapsed, column, ownerApp = "owner_app"
         }
 
         public func encode(to encoder: Encoder) throws {
@@ -189,6 +196,7 @@ public struct DisplayedExport: Codable, Equatable, Sendable {
             try c.encode(isTopLevel, forKey: .isTopLevel)
             try c.encode(collapsed, forKey: .collapsed)
             try c.encode(column, forKey: .column)
+            try c.encode(ownerApp, forKey: .ownerApp)
         }
     }
 
