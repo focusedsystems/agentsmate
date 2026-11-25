@@ -82,6 +82,17 @@ semibold beneath it. Search matches the summary and the person's recent
 prompts, the row's hover adds the agent's last reply, and the row's menu and
 the Agent menu have Copy Summary and Copy Last Prompt.
 
+A row also shows the title the person gave its session as a subtitle between
+the name and the summary: a Claude `/rename` (read from the conversation file)
+or a Codex thread name (read from Codex's `session_index.jsonl`). A leading
+"<row name> · " is dropped, since the row already says it, and the row's own
+name never changes. It follows a rename on the next transcript sweep, and
+`displayed.json` rows carry it as `session_title`.
+
+Terminals start one ⌘+ step above `Configuration.baseFontSize`
+(`AgentLaneStore.defaultFontStep`), so every app's default is a point larger
+without changing its own base. Zoom adds to that size and ⌘0 returns to it.
+
 ## Inbox and messaging
 
 `AgentInboxView` lists every lane that has stopped for the person. Asking You
@@ -125,7 +136,16 @@ If nothing takes it within 20 seconds it goes on the clipboard instead.
 
 ## Usage meter
 
-`Configuration.usageSources` fills the meter at the sidebar's foot.
+The sidebar's foot always carries the Claude and Codex meters
+(`AgentUsageFooter`), whichever backend the app defaults to. With no
+`Configuration.usageSources` an app gets `AgentUsageSources.standard()`:
+Claude from the status-line cache under `~/.claude`, Codex from its own
+session files. An agent with no current reading stays in the footer as "Usage
+unknown". An app whose agents run on another Mac passes
+`AgentUsageSources.standard(claudeHost:)` to read Claude's cache from that
+host over `ssh`.
+
+`Configuration.usageSources` replaces the defaults.
 `KeyValueUsageFileSource` reads the `KEY=VALUE` file a status-line helper
 writes. A window whose reset has passed is left out, and a file older than an
 hour (`maxAge`) counts for nothing, so an agent with no current reading shows

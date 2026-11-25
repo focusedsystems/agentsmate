@@ -69,8 +69,10 @@ public final class AgentLaneStore: ObservableObject {
         /// `~/Library/Caches/<bundle id>/agent-summaries.json`, or the process
         /// name in place of the bundle id when there is none.
         public static var defaultSummaryCacheFile: URL { LaneSummaryCache.defaultURL() }
-        /// Where to read the agents' usage limits; the lane sidebar shows a
-        /// meter at its foot when there are any.
+        /// Where to read the agents' usage limits; the lane sidebar always
+        /// shows the meters at its foot. The default is Claude's status-line
+        /// cache and Codex's session files on this Mac
+        /// (``AgentUsageSources/standard(claudeHost:)``).
         public var usageSources: [any AgentUsageSource]
         /// What Reopen As offers, in order. Each names a registered backend;
         /// a choice's ``LaneReopenChoice/kind`` gives it that kind's shortcut.
@@ -214,7 +216,7 @@ public final class AgentLaneStore: ObservableObject {
                         .appendingPathComponent("agentsmate-sessions", isDirectory: true),
                     cycleSkipsUnstarted: Bool = false, workspaceFile: URL? = nil,
                     showsRowMetadata: Bool = false, notifies: Bool = false, summaryModel: String? = nil,
-                    usageSources: [any AgentUsageSource] = [], reopenChoices: [LaneReopenChoice] = [],
+                    usageSources: [any AgentUsageSource] = AgentUsageSources.standard(), reopenChoices: [LaneReopenChoice] = [],
                     codexSummaryModel: String? = nil, summarizers: [any LaneSummarizing] = [],
                     summaryCacheFile: URL? = Configuration.defaultSummaryCacheFile, rowStyle: LaneRowStyle = .standard,
                     inboxWindowID: String? = nil, messageWindowID: String? = nil,
@@ -546,7 +548,7 @@ public final class AgentLaneStore: ObservableObject {
         func haystack(_ lane: AgentLane) -> String {
             let session = sessions[lane.id]
             return [session?.title ?? lane.title, lane.path, session?.rowMetadata.branch ?? "", layout.section(of: lane) ?? "",
-                    session?.summary ?? ""]
+                    session?.subtitle ?? "", session?.summary ?? ""]
                 .joined(separator: " ").lowercased()
         }
         let hits = ordered.filter { lane in let text = haystack(lane); return words.allSatisfy(text.contains) }
@@ -2736,18 +2738,26 @@ public final class AgentLaneStore: ObservableObject {
 
     // MARK: Text size
 
+    /// How far above the app's ``Configuration/baseFontSize`` a terminal
+    /// starts: one ⌘+ step, so the default reads larger in every app. Zoom
+    /// adds to it and ⌘0 returns to it.
+    public static let defaultFontStep: CGFloat = 1
+
+    /// The size terminals start at and ⌘0 returns to.
+    public var defaultFontSize: CGFloat { configuration.baseFontSize + Self.defaultFontStep }
+
     public var fontSize: CGFloat {
-        min(max(configuration.baseFontSize + fontOffset, Self.fontSizeRange.lowerBound), Self.fontSizeRange.upperBound)
+        min(max(defaultFontSize + fontOffset, Self.fontSizeRange.lowerBound), Self.fontSizeRange.upperBound)
     }
 
     public var font: NSFont { .monospacedSystemFont(ofSize: fontSize, weight: .regular) }
 
     public func adjustFont(by points: CGFloat) {
         let target = min(max(fontSize + points, Self.fontSizeRange.lowerBound), Self.fontSizeRange.upperBound)
-        setFontOffset(target - configuration.baseFontSize)
+        setFontOffset(target - defaultFontSize)
     }
 
-    /// Back to the app's or the system's size.
+    /// Back to the default size.
     public func resetFont() { setFontOffset(0) }
 
     private func setFontOffset(_ offset: CGFloat) {
@@ -2978,8 +2988,9 @@ public final class AgentLaneStore: ObservableObject {
     func refreshTranscripts() {
         guard !readingTranscripts else { return }
         var wanted: [AgentLane.ID: LaneTranscriptCache.Source] = [:]
+        var records: [AgentLane.ID: LaneStatus] = [:]
         for (id, session) in sessions {
-            if let source = LaneTranscriptCache.Source(session.record) { wanted[id] = source }
+            if let source = LaneTranscriptCache.Source(session.record) { wanted[id] = source; records[id] = session.record }
         }
         guard !wanted.isEmpty else { return }
         readingTranscripts = true
@@ -2987,11 +2998,14 @@ public final class AgentLaneStore: ObservableObject {
         Task.detached(priority: .background) {
             var cache = cache
             let changed = cache.read(Set(wanted.values))
+            var titles: [AgentLane.ID: String?] = [:]
+            for (id, source) in wanted { titles[id] = cache.title(source: source, record: records[id]) }
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 self.readingTranscripts = false
                 self.transcripts = cache
                 var selectedChanged = false
+                for (id, title) in titles { self.sessions[id]?.update(sessionTitle: title) }
                 for (id, source) in wanted {
                     guard let path = cache.path(for: source), let transcript = changed[path] else { continue }
                     self.sessions[id]?.update(transcript: transcript)

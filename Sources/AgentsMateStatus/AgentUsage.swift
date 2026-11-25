@@ -83,6 +83,13 @@ public struct AgentUsage: Equatable, Sendable {
 /// Somewhere usage can be read from without a network call.
 public protocol AgentUsageSource: Sendable {
     func read() -> AgentUsage?
+    /// The agent the meter still names, as "Usage unknown", when a read
+    /// gives nothing. Nil leaves the agent out until it reports.
+    var unknownAgent: String? { get }
+}
+
+public extension AgentUsageSource {
+    var unknownAgent: String? { nil }
 }
 
 /// Whether someone is signed in to an agent on this Mac, from the files the
@@ -119,6 +126,7 @@ public enum AgentSignIn {
 /// forward a week at a time.
 public struct CodexSessionUsageSource: AgentUsageSource {
     public let root: URL
+    public var unknownAgent: String? { "Codex" }
     let signedIn: @Sendable () -> Bool
     let limits: CodexLimitsReader?
     let cache: CodexResetCache?
@@ -480,6 +488,7 @@ enum CommandLocator {
 public struct KeyValueUsageFileSource: AgentUsageSource {
     public let url: URL
     public let agent: String
+    public var unknownAgent: String? { agent }
     /// How old a reading may be and still count; nil, any age.
     public let maxAge: TimeInterval?
     let signedIn: @Sendable () -> Bool
