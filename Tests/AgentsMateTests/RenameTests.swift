@@ -133,7 +133,7 @@ final class AgentRenameTests: XCTestCase {
         XCTAssertEqual(LaneRename.command(format: "/rename %@", name: "two\nlines\r\tand\u{1B}[31m"), "/rename two lines and [31m")
         XCTAssertNil(LaneRename.command(format: "/rename %@", name: " \n "))
         XCTAssertNil(LaneRename.command(format: "/rename", name: "x"))
-        XCTAssertEqual(LaneRename.cleanName(String(repeating: "a", count: 300)).count, 100)
+        XCTAssertEqual(LaneRename.cleanName(String(repeating: "a", count: 300)).count, 200)
     }
 
     func testBackendsKnowTheirRenameCommand() {

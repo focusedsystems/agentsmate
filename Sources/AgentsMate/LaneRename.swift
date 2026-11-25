@@ -18,14 +18,14 @@ public enum LaneRename {
     }
 
     /// The name as one plain line: control characters and line breaks
-    /// become spaces, runs of spaces collapse, and it is cut to 100
+    /// become spaces, runs of spaces collapse, and it is cut to 200
     /// characters, so typing it can never submit or edit anything early.
     public static func cleanName(_ name: String) -> String {
         let flat = String(String.UnicodeScalarView(name.unicodeScalars.map {
             CharacterSet.controlCharacters.contains($0) || CharacterSet.newlines.contains($0) ? " " : $0
         }))
         let words = flat.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        return String(words.prefix(100))
+        return String(words.prefix(200))
     }
 
     /// The text to type: `format` with its `%@` replaced by the cleaned
