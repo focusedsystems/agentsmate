@@ -2855,7 +2855,13 @@ public final class AgentLaneStore: ObservableObject {
         case .biggerFont: adjustFont(by: 1)
         case .smallerFont: adjustFont(by: -1)
         case .resetFont: resetFont()
-        case .reopen(let kind): return reopen(id, kind: kind)
+        case .reopen(let kind):
+            // ⇧⌘C and ⇧⌘X switch agents in every app, whether or not it lists
+            // Reopen As choices; the rest of the kinds are the app's choices.
+            if kind == .claudeRemote || kind == .codexRemote, let agent = kind.agentKind {
+                return switchAgent(id, to: agent)
+            }
+            return reopen(id, kind: kind)
         }
         return true
     }

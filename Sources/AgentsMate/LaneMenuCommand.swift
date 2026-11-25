@@ -5,7 +5,7 @@ import AppKit
 /// shortcut and action serves the row's contextual menu and the menu bar's
 /// Agent menu, so both list the same thing in every app.
 public enum LaneMenuCommand: String, CaseIterable, Sendable {
-    case open, reattach, resume, resumeHere, detach, message, markRead
+    case open, reattach, resume, resumeHere, switchToClaude, switchToCodex, detach, message, markRead
     case changeIcon, rename, automaticName, pin
     case close, stop
     case copyBranch, copyPath, copySummary, copyLastPrompt, showInFinder, copySessionName
@@ -19,6 +19,8 @@ public enum LaneMenuCommand: String, CaseIterable, Sendable {
         case .reattach: state.keepsRunningWhenDetached ? "Reattach" : "Start Again"
         case .resume: "Resume"
         case .resumeHere: "Resume Here (Stop Background)"
+        case .switchToClaude: "Switch to Claude"
+        case .switchToCodex: "Switch to Codex"
         case .detach: "Detach"
         case .message: "Message Agent…"
         case .markRead: "Mark Read"
@@ -45,6 +47,8 @@ public enum LaneMenuCommand: String, CaseIterable, Sendable {
     public var shortcutAction: LaneShortcutAction? {
         switch self {
         case .reattach: .reattach
+        case .switchToClaude: .reopenClaudeRemote
+        case .switchToCodex: .reopenCodexRemote
         case .message: .messageAgent
         default: nil
         }
@@ -55,6 +59,8 @@ public enum LaneMenuCommand: String, CaseIterable, Sendable {
         switch self {
         case .resume: "Continue this stopped session's conversation in this pane"
         case .resumeHere: "Stop the background session, then continue its conversation in this pane"
+        case .switchToClaude, .switchToCodex:
+            "Run this lane on the other agent. The session it was on keeps running."
         case .reattach:
             state.keepsRunningWhenDetached ? "Attach this session here" : "End this terminal and start the lane again"
         case .detach: "Close the terminal here and leave the agent running"
@@ -123,6 +129,7 @@ public enum LaneMenuPlan {
     private static func laneItems(_ s: LaneMenuState) -> [LaneMenuItem] {
         var items: [LaneMenuItem] = [.command(.open), .command(.reattach)]
         if s.canResume { items += [.command(.resume), .command(.resumeHere)] }
+        items += [.command(.switchToClaude), .command(.switchToCodex)]
         if s.hasReopenChoices { items.append(.submenu(.reopenAs)) }
         items += [.command(.detach), .command(.message)]
         if s.needsAttention { items.append(.command(.markRead)) }
@@ -195,6 +202,8 @@ extension AgentLaneStore {
         case .resume: return !isBackgroundLive(id)
         case .resumeHere: return isBackgroundLive(id)
         // Detaching a lane whose session ends with its terminal would end it.
+        case .switchToClaude: return canSwitch(id, to: .claude)
+        case .switchToCodex: return canSwitch(id, to: .codex)
         case .detach: return session.isAttached && session.backend.keepsRunningWhenDetached
         case .stop: return canStop(id)
         case .copySummary: return !(session.summary?.isEmpty ?? true)
@@ -211,6 +220,8 @@ extension AgentLaneStore {
         case .reattach: reattach(lane.id)
         case .resume: resumeBackground(lane.id, stoppingBackground: false)
         case .resumeHere: resumeBackground(lane.id, stoppingBackground: true)
+        case .switchToClaude: switchAgent(lane.id, to: .claude)
+        case .switchToCodex: switchAgent(lane.id, to: .codex)
         case .detach: detach(lane.id)
         case .message: if let openWindow { _ = showMessageAgent(to: lane.id, openWindow: openWindow) }
         case .markRead: markRead(lane.id)
@@ -253,5 +264,34 @@ struct LaneMenuButton: View {
         .laneShortcut(command.shortcutAction.flatMap { store.shortcuts.binding(for: $0) })
         .disabled(!store.isEnabled(command, for: session))
         .help(command.help(for: state) ?? "")
+    }
+}
+
+extension AgentLaneStore {
+    /// The backend that runs `agent` for a lane: in the mode the lane is in
+    /// now (a session that outlives the terminal, or run directly), else the
+    /// other mode, else none.
+    func switchBackendID(for id: AgentLane.ID, to agent: LaneAgentKind) -> String? {
+        let current = lanes.first { $0.id == id }.flatMap { agentKind(ofBackend: $0.backendID) }
+        let modes = [current?.isRemote ?? true, !(current?.isRemote ?? true)]
+        for remote in modes {
+            if let kind = LaneReopenChoice.Kind(agent: agent.rawValue, remote: remote), let backend = backendID(forAgent: kind) {
+                return backend
+            }
+        }
+        return nil
+    }
+
+    func canSwitch(_ id: AgentLane.ID, to agent: LaneAgentKind) -> Bool {
+        sessions[id] != nil && switchBackendID(for: id, to: agent) != nil
+    }
+
+    /// Run a lane on `agent`: the row keeps its place, name and folder, and
+    /// the session it was on keeps running. False when no backend runs it.
+    @discardableResult
+    public func switchAgent(_ id: AgentLane.ID, to agent: LaneAgentKind) -> Bool {
+        guard sessions[id] != nil, let backend = switchBackendID(for: id, to: agent) else { return false }
+        reopen(id, as: backend)
+        return true
     }
 }

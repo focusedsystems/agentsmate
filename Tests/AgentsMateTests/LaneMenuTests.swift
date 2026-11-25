@@ -45,7 +45,7 @@ final class LaneMenuTests: XCTestCase {
     func testTheMenuListsTheSameItemsInTheSameOrder() {
         XCTAssertEqual(LaneMenuPlan.items(full()), [
             .command(.open), .command(.reattach), .command(.resume), .command(.resumeHere),
-            .submenu(.reopenAs), .command(.detach), .command(.message), .command(.markRead),
+            .command(.switchToClaude), .command(.switchToCodex), .submenu(.reopenAs), .command(.detach), .command(.message), .command(.markRead),
             .command(.changeIcon), .command(.rename), .command(.automaticName),
             .submenu(.duplicate), .submenu(.switchAgent), .submenu(.runOn),
             .divider, .command(.pin), .submenu(.moveToSection),
@@ -101,6 +101,12 @@ final class LaneMenuTests: XCTestCase {
                        LaneKeyBinding("r", command: true, shift: true))
         XCTAssertEqual(LaneMenuCommand.message.shortcutAction.flatMap { bindings.binding(for: $0) },
                        LaneKeyBinding("k", command: true, option: true))
+        XCTAssertEqual(LaneMenuCommand.switchToClaude.title(for: LaneMenuState()), "Switch to Claude")
+        XCTAssertEqual(LaneMenuCommand.switchToCodex.title(for: LaneMenuState()), "Switch to Codex")
+        XCTAssertEqual(LaneMenuCommand.switchToClaude.shortcutAction.flatMap { bindings.binding(for: $0) },
+                       LaneKeyBinding("c", command: true, shift: true))
+        XCTAssertEqual(LaneMenuCommand.switchToCodex.shortcutAction.flatMap { bindings.binding(for: $0) },
+                       LaneKeyBinding("x", command: true, shift: true))
         // Close and Stop have no key: Close's terminal key, ⌘W, is Close Window's in the menu bar.
         XCTAssertNil(LaneMenuCommand.close.shortcutAction)
         XCTAssertNil(LaneMenuCommand.stop.shortcutAction)
@@ -179,5 +185,78 @@ final class LaneMenuTests: XCTestCase {
         XCTAssertFalse(backend.canStop(lane), "with no id, Stop would only detach")
         lane.agentSessionID = "abc123"
         XCTAssertTrue(backend.canStop(lane))
+    }
+
+    // MARK: Switch to Claude and Switch to Codex
+
+    private func key(_ characters: String, _ flags: NSEvent.ModifierFlags, code: UInt16) -> NSEvent {
+        NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: 0,
+                         context: nil, characters: characters, charactersIgnoringModifiers: characters.lowercased(),
+                         isARepeat: false, keyCode: code)!
+    }
+
+    func testTerminalKeysResolveToTheSwitchCommands() {
+        let bindings = LaneShortcutBindings()
+        XCTAssertEqual(bindings.terminalShortcut(for: key("C", [.command, .shift], code: 8)), .reopen(.claudeRemote))
+        XCTAssertEqual(bindings.terminalShortcut(for: key("X", [.command, .shift], code: 7)), .reopen(.codexRemote))
+        // Keys no lane command owns are left for the menu bar.
+        XCTAssertNil(bindings.terminalShortcut(for: key(",", .command, code: 43)))
+        XCTAssertNil(bindings.terminalShortcut(for: key("P", [.command, .shift], code: 35)))
+    }
+
+    func testAFocusedTerminalLeavesWhatItDoesNotHandleToTheMenuBar() {
+        let view = AgentTerminalView(frame: NSRect(x: 0, y: 0, width: 400, height: 200))
+        let bindings = LaneShortcutBindings()
+        view.shortcutResolver = { bindings.terminalShortcut(for: $0) }
+        var received: [TerminalShortcut] = []
+        var answer = false
+        view.onShortcut = { received.append($0); return answer }
+        // The store did not take it (no backend to switch to): the key goes on to the menu item.
+        XCTAssertFalse(view.handleKeyDown(key("C", [.command, .shift], code: 8)))
+        XCTAssertEqual(received, [.reopen(.claudeRemote)])
+        answer = true
+        XCTAssertTrue(view.handleKeyDown(key("X", [.command, .shift], code: 7)))
+        // An unbound ⌘ key is never taken.
+        received = []
+        XCTAssertFalse(view.handleKeyDown(key("P", [.command, .shift], code: 35)))
+        XCTAssertTrue(received.isEmpty)
+    }
+
+    private func switching() -> (AgentLaneStore, SpyBackend, SpyBackend) {
+        var claude = SpyBackend(); claude.id = "cl"
+        var codex = SpyBackend(); codex.id = "cx"
+        var config = AgentLaneStore.Configuration(termProgram: "T", sessionFileDirectory: nil, notifies: false,
+                                                  findsDetachedSessions: false, sharedLanes: nil,
+                                                  liveSnapshotFile: nil, opensActiveOnly: false, displayedExportFile: nil)
+        config.defaultsPrefix = "switch.\(UUID().uuidString)."
+        config.reopenChoices = [LaneReopenChoice("Claude", backendID: "cl", kind: .claudeRemote),
+                                LaneReopenChoice("Codex", backendID: "cx", kind: .codexRemote)]
+        let store = AgentLaneStore(configuration: config, backends: [claude, codex], statusFeed: nil,
+                                   defaults: UserDefaults(suiteName: "agentsmate-switch-\(UUID().uuidString)")!)
+        return (store, claude, codex)
+    }
+
+    func testSwitchRunsTheLaneOnTheOtherAgentWithoutStoppingTheFirst() throws {
+        let (store, claude, codex) = switching()
+        store.sync(lanes: [AgentLane(id: "a", title: "A", backendID: "cl", isClosable: true)])
+        let session = try XCTUnwrap(store.sessions["a"])
+        XCTAssertTrue(store.isEnabled(.switchToClaude, for: session))
+        XCTAssertTrue(store.isEnabled(.switchToCodex, for: session))
+        XCTAssertTrue(store.switchAgent("a", to: .codex))
+        XCTAssertEqual(store.lanes.first?.backendID, "cx")
+        XCTAssertEqual(claude.stops.count + codex.stops.count, 0, "the session it was on keeps running")
+        XCTAssertTrue(store.handle(.reopen(.claudeRemote), from: "a"))
+        XCTAssertEqual(store.lanes.first?.backendID, "cl")
+        store.detachAll()
+    }
+
+    func testSwitchNeedsABackendThatRunsTheAgent() throws {
+        let spy = SpyBackend()
+        let store = store(spy)
+        store.sync(lanes: [AgentLane(id: "a", title: "A", backendID: "spy", isClosable: true)])
+        let session = try XCTUnwrap(store.sessions["a"])
+        XCTAssertFalse(store.isEnabled(.switchToClaude, for: session))
+        XCTAssertFalse(store.switchAgent("a", to: .claude))
+        store.detachAll()
     }
 }
