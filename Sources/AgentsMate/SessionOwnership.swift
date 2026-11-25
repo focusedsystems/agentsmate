@@ -35,6 +35,10 @@ final class SessionOwnership {
     static let backstopInterval: TimeInterval = 60
     /// Called on the main actor after the file changed.
     var onChange: (() -> Void)?
+    /// Whether an app with this bundle id is running. Replaced in tests.
+    var isRunning: (String) -> Bool = { id in
+        !NSRunningApplication.runningApplications(withBundleIdentifier: id).isEmpty
+    }
 
     init(store: AgentLaneStore, file: URL, appID: String, isShared: (@Sendable (AgentLane) -> Bool)?, watches: Bool = true) {
         self.store = store
@@ -64,7 +68,8 @@ final class SessionOwnership {
         let keys = keys(for: session)
         let shared = isShared?(session.lane) ?? false
         return SessionOwners.decide(keys: keys, me: appID, isShared: shared, snapshot: snapshot,
-                                    peers: { self.peerApps(for: keys, now: now) }, now: now)
+                                    peers: { self.peerApps(for: keys, now: now) },
+                                    isRunning: isRunning, now: now)
     }
 
     func owns(_ session: AgentLaneSession, fresh: Bool = false) -> Bool {

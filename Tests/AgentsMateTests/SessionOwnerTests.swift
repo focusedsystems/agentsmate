@@ -73,6 +73,19 @@ final class SessionOwnerTests: XCTestCase {
         XCTAssertTrue(b.shouldNotify(for: copy!))
     }
 
+    func testAClosedOwnerHandsTheSessionToTheAppThatIsRunning() {
+        let a = store("app.a"), b = store("app.b")
+        a.open("one")
+        a.ownership?.flush()
+        b.ownership?.isRunning = { _ in false }
+        XCTAssertFalse(notifies(a) == false, "the owner is running and owns it")
+        XCTAssertTrue(notifies(b), "app.a is closed, so app.b speaks for it")
+        a.ownership?.isRunning = { _ in false }
+        b.ownership?.isRunning = { $0 == "app.a" }
+        XCTAssertTrue(notifies(a))
+        XCTAssertFalse(notifies(b), "the owner is running again")
+    }
+
     func testAnUnsharedLaneIsAlwaysOwned() {
         let a = store("app.a", shared: { _ in false }), b = store("app.b", shared: { _ in false })
         a.open("one")

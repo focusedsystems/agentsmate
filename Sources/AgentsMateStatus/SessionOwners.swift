@@ -182,12 +182,18 @@ public enum SessionOwners {
     /// (`me`) for an unshared lane; else the app that last worked in it; else
     /// the app that created it; else the lowest bundle id among `peers` (the
     /// other apps that list the session) and `me`.
+    ///
+    /// An app that is not running (`isRunning` says no; this app always is)
+    /// cannot notify, so it is passed over at each step and the next applies:
+    /// an alert that needs the person is never left to a closed app.
     public static func decide(keys: Keys, me: String, isShared: Bool, snapshot: Snapshot,
-                              peers: () -> Set<String>, now: Date = Date()) -> Decision {
+                              peers: () -> Set<String>, isRunning: (String) -> Bool = { _ in true },
+                              now: Date = Date()) -> Decision {
         if !isShared { return Decision(owner: me, reason: .unshared) }
-        if let entry = snapshot.owner(for: keys, now: now) { return Decision(owner: entry.app, reason: .recorded) }
-        if let creator = snapshot.creator(for: keys) { return Decision(owner: creator, reason: .creator) }
-        return Decision(owner: (peers().union([me])).min() ?? me, reason: .tieBreak)
+        let running = { (app: String) in app == me || isRunning(app) }
+        if let entry = snapshot.owner(for: keys, now: now), running(entry.app) { return Decision(owner: entry.app, reason: .recorded) }
+        if let creator = snapshot.creator(for: keys), running(creator) { return Decision(owner: creator, reason: .creator) }
+        return Decision(owner: (peers().filter(running).union([me])).min() ?? me, reason: .tieBreak)
     }
 
     // MARK: Other apps listing a session

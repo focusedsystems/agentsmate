@@ -133,6 +133,20 @@ final class SessionOwnersTests: XCTestCase {
         XCTAssertEqual(SessionOwners.decide(keys: keys, me: "app.m", isShared: true, snapshot: none, peers: { [] }, now: now).owner, "app.m")
     }
 
+    func testAnOwnerThatIsNotRunningIsPassedOver() {
+        let peers: () -> Set<String> = { ["app.c", "app.b"] }
+        let entry = SessionOwners.Entry(app: "app.z", at: now, createdBy: "app.y")
+        let snapshot = SessionOwners.Snapshot(entries: ["s1": entry])
+        func decide(_ running: Set<String>) -> SessionOwners.Decision {
+            SessionOwners.decide(keys: keys, me: "app.m", isShared: true, snapshot: snapshot, peers: peers,
+                                 isRunning: { running.contains($0) }, now: now)
+        }
+        XCTAssertEqual(decide(["app.z", "app.y"]), .init(owner: "app.z", reason: .recorded))
+        XCTAssertEqual(decide(["app.y", "app.b"]), .init(owner: "app.y", reason: .creator), "owner closed: the creator")
+        XCTAssertEqual(decide(["app.c", "app.b"]), .init(owner: "app.b", reason: .tieBreak), "both closed: lowest running id")
+        XCTAssertEqual(decide([]), .init(owner: "app.m", reason: .tieBreak), "nothing else running: this app")
+    }
+
     func testPeersAreTheOtherAppsListingTheSession() throws {
         let home = FileManager.default.temporaryDirectory.appendingPathComponent("peers-\(UUID().uuidString)", isDirectory: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: home) }
