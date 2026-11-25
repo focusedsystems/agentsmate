@@ -152,20 +152,17 @@ public struct AgentLaneSidebar<Accessory: View>: View {
             Text("Typed into \(store.messageAlertTarget.flatMap { store.sessions[$0]?.title } ?? "the agent") and sent. A \(labels.laneNoun) not attached here is attached in the background first. If nothing takes it, it goes on the clipboard instead.")
         }
         .onChange(of: store.messageAlertTarget) { if store.messageAlertTarget != nil { message = "" } }
-        .modifier(SidebarSearch(text: $searchText, prompt: "Search \(labels.laneNoun)s", enabled: !inDock))
         .safeAreaInset(edge: .top, spacing: 0) {
             VStack(spacing: 0) {
                 filterBar(progress: store.laneLoadProgress(stages))
                     .padding(.horizontal, 10)
                     .frame(height: AgentsModeMetrics.headerRowHeight)
-                // A dock is not a split view's sidebar, which is the only
-                // place the system draws a sidebar search field, so the
-                // dock's list carries its own.
-                if inDock {
-                    AgentsSearchField(text: $searchText, prompt: "Search \(labels.laneNoun)s", controlSize: .small)
-                        .padding(.horizontal, 10)
-                        .padding(.bottom, 6)
-                }
+                // The field belongs to the top of the list in every host. The
+                // system's own sidebar search moves into the toolbar when the
+                // sidebar collapses, which would put a second field there.
+                AgentsSearchField(text: $searchText, prompt: "Search \(labels.laneNoun)s", controlSize: .small)
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 6)
                 Divider()
             }
             // The bar material, as a standard sidebar header has, so rows
@@ -1472,22 +1469,5 @@ struct AgentAccessoryLaneButton: View {
         .help(accessory.label)
         .accessibilityLabel(accessory.label)
         .accessibilityAddTraits(selected ? .isSelected : [])
-    }
-}
-
-/// The system's sidebar search field, where the list sits in a split view's
-/// sidebar; a dock draws its own, so it turns this off.
-private struct SidebarSearch: ViewModifier {
-    @Binding var text: String
-    let prompt: String
-    let enabled: Bool
-
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if enabled {
-            content.searchable(text: $text, placement: .sidebar, prompt: prompt)
-        } else {
-            content
-        }
     }
 }
