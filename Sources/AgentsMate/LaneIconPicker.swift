@@ -31,6 +31,9 @@ public struct LaneIconPicker: View {
 
     private static let columns = 10
     private static let cell: CGFloat = 36
+    private static let margin: CGFloat = 20
+    /// Ten icon cells wide, so the grid's adaptive columns come to exactly `columns`.
+    private static let contentWidth: CGFloat = cell * CGFloat(columns) + 20
 
     public init(icon: LaneIcon, tintHex: String?, laneTitle: String? = nil, canReset: Bool = false,
                 onReset: (() -> Void)? = nil, onChoose: @escaping (LaneIcon, String?) -> Void) {
@@ -61,12 +64,10 @@ public struct LaneIconPicker: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
-            TextField("Search icons", text: $query)
-                .textFieldStyle(.roundedBorder)
-                .focused($focus, equals: .search)
-                .onSubmit { pickHighlighted() }
-                .onKeyPress(.downArrow) { focus = .grid; return .handled }
-                .accessibilityLabel("Search icons")
+            AgentsSearchField(text: $query, prompt: "Search icons",
+                              isFocused: Binding(get: { focus == .search },
+                                                 set: { if $0 { focus = .search } else if focus == .search { focus = nil } }),
+                              onSubmit: { pickHighlighted() }, onMoveDown: { focus = .grid })
             Picker("Icon set", selection: $kind) {
                 ForEach(Kind.allCases) { Text($0.rawValue).tag($0) }
             }
@@ -78,8 +79,8 @@ public struct LaneIconPicker: View {
             Divider()
             footer
         }
-        .padding(16)
-        .frame(width: Self.cell * CGFloat(Self.columns) + 16 * 2 + 20)
+        .padding(Self.margin)
+        .frame(width: Self.contentWidth + Self.margin * 2)
         .onAppear { focus = .search }
         .onChange(of: kind) { _, _ in highlighted = 0 }
         .onChange(of: query) { _, _ in highlighted = 0 }
@@ -106,7 +107,7 @@ public struct LaneIconPicker: View {
                 if shown.isEmpty {
                     ContentUnavailableView.search(text: query).frame(maxWidth: .infinity, minHeight: 160)
                 } else {
-                    LazyVGrid(columns: Array(repeating: GridItem(.fixed(Self.cell), spacing: 0), count: Self.columns),
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: Self.cell, maximum: Self.cell), spacing: 0)],
                               spacing: 0) {
                         ForEach(Array(shown.enumerated()), id: \.element) { index, name in
                             cellView(name, index: index)
@@ -190,13 +191,17 @@ public struct LaneIconPicker: View {
     private var colourRow: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Colour").font(.subheadline).foregroundStyle(.secondary)
-            HStack(spacing: 6) {
-                swatch(name: "Default", hex: nil, color: .accentColor)
-                ForEach(LaneIconColors.presets, id: \.hex) { preset in
-                    swatch(name: preset.name, hex: preset.hex, color: Color(laneHex: preset.hex) ?? .gray)
+            HStack(alignment: .top, spacing: 8) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 26, maximum: 26), spacing: 4)],
+                          alignment: .leading, spacing: 4) {
+                    swatch(name: "Default", hex: nil, color: .accentColor)
+                    ForEach(LaneIconColors.presets, id: \.hex) { preset in
+                        swatch(name: preset.name, hex: preset.hex, color: Color(laneHex: preset.hex) ?? .gray)
+                    }
                 }
                 ColorPicker("Custom colour", selection: $customColor, supportsOpacity: false)
                     .labelsHidden()
+                    .fixedSize()
                     .help("Choose any colour")
                     .accessibilityLabel("Custom colour")
             }

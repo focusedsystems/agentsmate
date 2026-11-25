@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Names what the field searches; clicking it switches the scope.
+/// Names what the field searches; choosing it in the magnifier's menu switches the scope.
 public struct AgentsToolbarSearchScope {
     public var title: String
     public var help: String
@@ -13,9 +13,8 @@ public struct AgentsToolbarSearchScope {
     }
 }
 
-/// The window's one search field, in the toolbar's right: a magnifier, an
-/// optional chip naming what it searches, the text, and the shortcut that
-/// reaches it. What it searches and what it finds belong to the app, which
+/// The window's one search field, in the toolbar's right: the system's search
+/// field, with what it searches and the shortcut that reaches it in its prompt. What it searches and what it finds belong to the app, which
 /// supplies the text, the results and their popover.
 public struct AgentsToolbarSearchField<Results: View>: View {
     private let text: Binding<String>
@@ -36,7 +35,7 @@ public struct AgentsToolbarSearchField<Results: View>: View {
     /// Off only offscreen, where a popover cannot show.
     private var showsPopover = true
 
-    @FocusState private var focused: Bool
+    @State private var focused = false
 
     /// `focusRequest` puts the cursor in the field whenever it changes, which
     /// is how ⌘K and ⌘F reach it from anywhere in the window.
@@ -72,80 +71,25 @@ public struct AgentsToolbarSearchField<Results: View>: View {
     }
 
     public var body: some View {
-        HStack(spacing: 6) {
-            if isSearching {
-                ProgressView()
-                    .controlSize(.small)
-                    .frame(width: 16, height: 16)
-                    .accessibilityLabel("Searching")
-            } else {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(focused ? Color.accentColor : .secondary)
-                    .onTapGesture { focused = true }
-            }
-            if let scope {
-                Button(action: scope.action) {
-                    Text(scope.title)
-                        .font(.system(size: 11 * fontScale, weight: .medium))
-                        .foregroundStyle(Color.accentColor)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 1)
-                        .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 4))
+        // `hint` rides in the prompt: the field is the system's search field,
+        // which has no room for a badge of its own.
+        AgentsSearchField(text: text, prompt: "\(prompt)  \(hint)", isFocused: $focused, focusRequest: focusRequest,
+                          fontScale: fontScale, scope: scope, identifier: identifier,
+                          onSubmit: onSubmit, onClear: onClear, onFocusChange: onFocusChange)
+            .overlay(alignment: .trailing) {
+                if isSearching {
+                    ProgressView()
+                        .controlSize(.small)
+                        .padding(.trailing, 30)
+                        .accessibilityLabel("Searching")
                 }
-                .buttonStyle(.plain)
-                .help(scope.help)
             }
-            if showsPopover {
-                TextField("", text: text, prompt: Text(prompt).foregroundStyle(.secondary))
-                    .textFieldStyle(.plain)
-                    .focused($focused)
-                    .onSubmit(onSubmit)
-                    .onExitCommand {
-                        onClear()
-                        focused = false
-                    }
-            } else {
-                // Offscreen a text field draws as a placeholder box.
-                Text(prompt)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(width: width)
+            .fixedSize(horizontal: true, vertical: false)
+            .help(help)
+            .popover(isPresented: showsPopover ? showResults : .constant(false), arrowEdge: .bottom) {
+                results()
             }
-            if text.wrappedValue.isEmpty {
-                Text(hint)
-                    .font(.system(size: 10 * fontScale, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 1)
-                    .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 4))
-            } else {
-                Button {
-                    onClear()
-                    focused = false
-                } label: {
-                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Clear search")
-            }
-        }
-        .font(.system(size: 13 * fontScale))
-        .padding(.horizontal, 10)
-        .frame(width: width, height: 28)
-        .fixedSize(horizontal: true, vertical: false)
-        .accessibilityIdentifier(identifier)
-        .contentShape(Rectangle())
-        .onTapGesture { focused = true }
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(focused ? Color.accentColor : Color.secondary.opacity(0.35), lineWidth: focused ? 1.5 : 1)
-        )
-        .help(help)
-        .onChange(of: focusRequest) { _, _ in focused = true }
-        .onChange(of: focused) { _, now in onFocusChange(now) }
-        .popover(isPresented: showsPopover ? showResults : .constant(false), arrowEdge: .bottom) {
-            results()
-        }
     }
 }
 
