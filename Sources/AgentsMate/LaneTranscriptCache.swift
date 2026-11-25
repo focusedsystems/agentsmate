@@ -14,11 +14,13 @@ enum TranscriptSchedule {
 /// The lanes' conversation readers, by file. A value, so a background task
 /// can take it, read, and hand it back.
 struct LaneTranscriptCache: Sendable {
-    /// Where a lane's conversation is: the file its hooks named, or a Codex
-    /// thread whose file is found by id.
+    /// Where a lane's conversation is: the file its hooks named, a Codex
+    /// thread whose file is found by id, or a Claude session (a background
+    /// one, whose record names no file) found by its id and folder.
     enum Source: Hashable, Sendable {
         case path(String)
         case codexThread(String)
+        case claudeSession(id: String, directory: String?)
 
         init?(_ record: LaneStatus?) {
             guard let record else { return nil }
@@ -26,6 +28,8 @@ struct LaneTranscriptCache: Sendable {
                 self = .path(path)
             } else if record.agent == "codex", let thread = record.sessionID, !thread.isEmpty {
                 self = .codexThread(thread)
+            } else if record.agent == "claude", let id = record.sessionID, LaneTranscriptCache.isSessionID(id) {
+                self = .claudeSession(id: id, directory: record.directory)
             } else {
                 return nil
             }
@@ -36,8 +40,35 @@ struct LaneTranscriptCache: Sendable {
     /// looked for again.
     static let codexRetry: TimeInterval = 120
 
+    /// Whether `id` is a full Claude session id (a UUID), the name of its
+    /// conversation file. A background session's short id is not.
+    static func isSessionID(_ id: String) -> Bool { UUID(uuidString: id) != nil }
+
+    /// The Claude conversation file `<projects>/<encoded folder>/<id>.jsonl`:
+    /// in the folder's own directory when it is there, else in whichever
+    /// project directory holds it (the session may have moved folders).
+    static func claudeSessionFile(id: String, directory: String?, environment: [String: String]) -> String? {
+        guard isSessionID(id) else { return nil }
+        let fm = FileManager.default
+        let home = environment["CLAUDE_CONFIG_DIR"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
+            ?? fm.homeDirectoryForCurrentUser.appendingPathComponent(".claude", isDirectory: true)
+        let projects = home.appendingPathComponent("projects", isDirectory: true)
+        let name = id + ".jsonl"
+        if let directory, !directory.isEmpty {
+            let encoded = String(directory.unicodeScalars.map { CharacterSet.alphanumerics.contains($0) ? Character($0) : "-" })
+            let url = projects.appendingPathComponent(encoded, isDirectory: true).appendingPathComponent(name)
+            if fm.fileExists(atPath: url.path) { return url.path }
+        }
+        for folder in (try? fm.contentsOfDirectory(atPath: projects.path)) ?? [] where !folder.hasPrefix(".") {
+            let url = projects.appendingPathComponent(folder, isDirectory: true).appendingPathComponent(name)
+            if fm.fileExists(atPath: url.path) { return url.path }
+        }
+        return nil
+    }
+
     private(set) var readers: [String: LaneTranscript] = [:]
     private(set) var codexFiles: [String: String] = [:]
+    private(set) var claudeFiles: [String: String] = [:]
     private var codexMisses: [String: Date] = [:]
     var environment: [String: String] = ProcessInfo.processInfo.environment
     private var codexNames: [String: String] = [:]
@@ -70,6 +101,7 @@ struct LaneTranscriptCache: Sendable {
         switch source {
         case .path(let path): path
         case .codexThread(let thread): codexFiles[thread]
+        case .claudeSession(let id, _): claudeFiles[id]
         }
     }
 
@@ -86,6 +118,15 @@ struct LaneTranscriptCache: Sendable {
                     codexMisses[thread] = nil
                 } else {
                     codexMisses[thread] = now
+                }
+            }
+            if case .claudeSession(let id, let directory) = source, claudeFiles[id] == nil {
+                if let missed = codexMisses[id], now.timeIntervalSince(missed) < Self.codexRetry { continue }
+                if let found = Self.claudeSessionFile(id: id, directory: directory, environment: environment) {
+                    claudeFiles[id] = found
+                    codexMisses[id] = nil
+                } else {
+                    codexMisses[id] = now
                 }
             }
             if let path = path(for: source) { paths.insert(path) }

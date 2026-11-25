@@ -36,6 +36,7 @@ final class TranscriptReadingTests: XCTestCase {
         XCTAssertEqual(LaneTranscriptCache.Source(LaneStatus(agent: "claude", state: .done, event: "Stop", transcriptPath: "/t.jsonl")), .path("/t.jsonl"))
         XCTAssertEqual(LaneTranscriptCache.Source(LaneStatus(agent: "codex", state: .done, sessionID: "th", event: "agent-turn-complete")), .codexThread("th"))
         XCTAssertNil(LaneTranscriptCache.Source(LaneStatus(agent: "claude", state: .done, sessionID: "s", event: "Stop")))
+        XCTAssertNil(LaneTranscriptCache.Source(LaneStatus(agent: "claude", state: .done, sessionID: "ab12cd34", event: "claude agents")), "a short id names no file")
         XCTAssertNil(LaneTranscriptCache.Source(nil))
     }
 
