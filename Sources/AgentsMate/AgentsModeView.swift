@@ -162,13 +162,9 @@ public struct AgentLaneSidebar<Accessory: View>: View {
                 // place the system draws a sidebar search field, so the
                 // dock's list carries its own.
                 if inDock {
-                    TextField("Search \(labels.laneNoun)s", text: $searchText)
-                        .textFieldStyle(.roundedBorder)
-                        .controlSize(.small)
-                        .onExitCommand { searchText = "" }
+                    AgentsSearchField(text: $searchText, prompt: "Search \(labels.laneNoun)s", controlSize: .small)
                         .padding(.horizontal, 10)
                         .padding(.bottom, 6)
-                        .accessibilityLabel("Search \(labels.laneNoun)s")
                 }
                 Divider()
             }

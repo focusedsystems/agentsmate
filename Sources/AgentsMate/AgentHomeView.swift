@@ -19,7 +19,7 @@ public struct AgentHomeView: View {
     @State private var selection: AgentLane.ID?
     @State private var query = ""
     @FocusState private var boardFocused: Bool
-    @FocusState private var searchFocused: Bool
+    @State private var searchFocused = false
 
     @AppStorage private var filterAttached: Bool
     @AppStorage private var filterRunning: Bool
@@ -258,29 +258,12 @@ public struct AgentHomeView: View {
     }
 
     private var searchField: some View {
-        HStack(spacing: 4) {
-            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField("Filter", text: $query)
-                .textFieldStyle(.plain)
-                .focused($searchFocused)
-                .onExitCommand { query = ""; boardFocused = true }
-                .onSubmit { boardFocused = true }
-            if !query.isEmpty {
-                Button { query = "" } label: {
-                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .help("Clear the filter")
-                .accessibilityLabel("Clear filter")
-            }
-        }
-        .padding(.horizontal, 6)
-        .frame(width: 200, height: 22)
-        .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .textBackgroundColor)))
-        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color(nsColor: .separatorColor)))
-        .help("Filter by name, folder, section, summary or your recent prompts; or just start typing on the board")
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Filter sessions")
+        AgentsSearchField(text: $query, prompt: "Filter", isFocused: $searchFocused, controlSize: .small,
+                          identifier: "AgentHomeFilter",
+                          onSubmit: { boardFocused = true }, onClear: { query = ""; boardFocused = true })
+            .frame(width: 200)
+            .help("Filter by name, folder, section, summary or your recent prompts; or just start typing on the board")
+            .accessibilityLabel("Filter sessions")
     }
 
     /// How many lanes have loaded, and each host that was asked.
