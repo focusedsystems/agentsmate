@@ -40,10 +40,11 @@ public enum SessionTitle {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return [:] }
         defer { try? handle.close() }
         let size = (try? handle.seekToEnd()) ?? 0
-        let start = size > bytes ? size - bytes : 0
+        // One byte before the window says whether it starts on a line.
+        let start = size > bytes ? size - bytes - 1 : 0
         try? handle.seek(toOffset: start)
         guard let data = try? handle.readToEnd() else { return [:] }
-        return codexNames(parsing: data, droppingFirstLine: start > 0)
+        return codexNames(parsing: data, droppingFirstLine: start > 0 && data.first != 0x0A)
     }
 
     static func codexNames(parsing data: Data, droppingFirstLine: Bool = false) -> [String: String] {
