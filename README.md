@@ -236,8 +236,10 @@ Renaming a lane (`store.rename(_:to:)`) also renames the agent's own session
 when its backend has a `renameCommand`: a format with `%@` for the name.
 `CommandLaneBackend` sets `/rename %@` when its `statusAgent` or its command's
 program is `claude` or `codex`, and nil otherwise; set the property to change
-it or turn it off. `ClaudeBackgroundLaneBackend` has none, because its lanes
-attach their session by name.
+it or turn it off. `ClaudeBackgroundLaneBackend` has it too: an attached row
+(`claude attach` running in its pane) is Claude Code's own input line, so it is
+typed there the same way. A row that is not attached keeps the rename queued;
+renaming never attaches or wakes a session.
 
 The command is typed only when it cannot disturb anything:
 

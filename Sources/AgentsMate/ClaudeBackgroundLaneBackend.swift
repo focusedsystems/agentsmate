@@ -13,6 +13,10 @@ public struct ClaudeBackgroundLaneBackend: LaneBackend {
     public var displayName: String
     /// The `claude` command; a bare name is found on the login shell's PATH.
     public var claude: String
+    /// Once a row is attached (`claude attach` running in its pane) it is
+    /// Claude Code's own input line, so `/rename` is typed there like any
+    /// other lane's, and only while the pane is attached and idle.
+    public var renameCommand: String? = LaneRename.slashRename
     /// Extra arguments for a new session, such as `--model`.
     public var startArguments: [String]
     /// The session name for a lane. It must be the same on every device so

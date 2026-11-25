@@ -144,8 +144,7 @@ final class AgentRenameTests: XCTestCase {
         XCTAssertNil(CommandLaneBackend.tmuxLane(id: "t", displayName: "T", command: "lane-wrapper", statusAgent: nil).renameCommand)
         XCTAssertNil(CommandLaneBackend.shell.renameCommand)
         XCTAssertNil(CommandLaneBackend(id: "v", displayName: "Vim", command: "vim").renameCommand)
-        // Background sessions are attached by name, so renaming one is left alone.
-        XCTAssertNil(ClaudeBackgroundLaneBackend().renameCommand)
+        XCTAssertEqual(ClaudeBackgroundLaneBackend().renameCommand, "/rename %@")
         var off = CommandLaneBackend(id: "c", displayName: "Claude", command: "claude")
         off.renameCommand = nil
         XCTAssertNil(off.renameCommand)
@@ -267,6 +266,23 @@ final class LaneTitleSyncTests: XCTestCase {
         XCTAssertNil(sync.observe(title: nil, rowName: nil, now: t0))
         XCTAssertNil(sync.observe(title: "Changed", rowName: nil, now: t0))
         XCTAssertEqual(sync.observe(title: "Changed", rowName: nil, now: t0), "Changed")
+    }
+
+    @MainActor
+    func testABackgroundClaudeRowQueuesItsRenameUntilItIsAttachedAndNeverStartsIt() {
+        let defaults = UserDefaults(suiteName: "titlesync-bg-\(UUID().uuidString)")!
+        let backend = ClaudeBackgroundLaneBackend()
+        let store = AgentLaneStore(configuration: .init(termProgram: "test", sessionFileDirectory: nil, summaryCacheFile: nil,
+                                                        pullRequestLedgerFile: nil, pullRequestSeedFile: nil),
+                                   backends: [backend], statusFeed: nil, defaults: defaults)
+        store.sync(lanes: [AgentLane(id: "b", title: "B", backendID: backend.id)])
+        let session = store.sessions["b"]
+        store.rename("b", to: "Mine")
+        XCTAssertTrue(session?.titleSync.hasPending ?? false)
+        store.flushPendingRenames()
+        XCTAssertTrue(session?.titleSync.hasPending ?? false, "still queued, not dropped")
+        XCTAssertEqual(session?.isAttached, false, "renaming never attaches or wakes the session")
+        XCTAssertEqual(store.renameAgentSession("b", to: "Mine"), .notAttached)
     }
 
     @MainActor
