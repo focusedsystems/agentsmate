@@ -331,19 +331,18 @@ final class DetachedStoreTests: XCTestCase {
 
         // A row added for the session's folder claims it; closing the row
         // without stopping, the default, lists the session again.
-        XCTAssertFalse(store.configuration.closeStopsLane, "closing a row leaves its session running by default")
         store.add(AgentLane(id: "b", title: "B", directory: URL(fileURLWithPath: "/tmp/b"), backendID: "fake", isClosable: true),
                   open: false)
         XCTAssertTrue(store.detachedIDs.isEmpty)
         store.close("b")
         XCTAssertEqual(store.detachedIDs, [row.id])
 
-        // Closing it with a stop does not.
+        // The old option no longer makes closing stop the session.
         store.configuration.closeStopsLane = true
         store.add(AgentLane(id: "c", title: "C", directory: URL(fileURLWithPath: "/tmp/b"), backendID: "fake", isClosable: true),
                   open: false)
         store.close("c")
-        XCTAssertTrue(store.detachedIDs.isEmpty)
+        XCTAssertEqual(store.detachedIDs, [row.id], "close never ends the session")
 
         store.sweepForDetachedSessions()
         await waitFor { !store.detachedIDs.isEmpty }

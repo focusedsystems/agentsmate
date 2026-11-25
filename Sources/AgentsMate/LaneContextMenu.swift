@@ -14,6 +14,13 @@ final class LaneMenuPresentation: ObservableObject {
     @Published var newSectionName = ""
     /// The row a New Section… from its menu moves into the new section.
     @Published var newSectionLane: AgentLane.ID?
+    /// The lane Stop Agent… is asking about.
+    @Published var pendingStop: PendingStop?
+
+    struct PendingStop: Equatable {
+        var id: AgentLane.ID
+        var title: String
+    }
 
     struct PendingSwitch: Equatable {
         var id: AgentLane.ID
@@ -75,6 +82,16 @@ struct LaneMenuSheets: ViewModifier {
             } message: {
                 Text("Leave it empty to go back to the automatic name.")
             }
+            .alert("Stop \(presentation.pendingStop?.title ?? "this agent")?",
+                   isPresented: Binding(get: { presentation.pendingStop != nil },
+                                        set: { if !$0 { presentation.pendingStop = nil } })) {
+                Button("Stop Agent", role: .destructive) {
+                    if let p = presentation.pendingStop { store.stop(p.id) }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This ends the agent's process. Its conversation is kept, and opening the lane again resumes it. Close leaves the agent running instead.")
+            }
             .alert("Switch the agent?", isPresented: Binding(get: { presentation.pendingSwitch != nil },
                                                              set: { if !$0 { presentation.pendingSwitch = nil } })) {
                 Button("Switch") {
@@ -89,14 +106,17 @@ struct LaneMenuSheets: ViewModifier {
 
 private struct IconRequest: Identifiable { let id: AgentLane.ID }
 
-/// A lane's contextual menu: the same commands wherever a lane is listed,
-/// the sidebar and All Agents alike. A found (detached) session gets its own,
-/// shorter menu.
+/// A lane's menu: the same commands, in the same order, with the same names
+/// and shortcuts, wherever a lane is listed (the sidebar, All Agents, the menu
+/// bar's Agent menu) and in every app. ``LaneMenuPlan`` is the list; an app
+/// adds its own items after the shared ones with `rowActions`.
 struct LaneContextMenu: View {
     @ObservedObject var store: AgentLaneStore
     @ObservedObject var session: AgentLaneSession
-    let presentation: LaneMenuPresentation
     var rowActions: [LaneAction] = []
+    /// Commands left out because the menu already lists them.
+    var hiding: Set<LaneMenuCommand> = []
+    var reveal: () -> Void = {}
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
@@ -104,91 +124,73 @@ struct LaneContextMenu: View {
             Button("Retry \(host)") { store.retryHost(host) }
             Divider()
         }
-        if store.isDetached(session.id) {
-            detachedMenu
-        } else {
-            laneMenu
+        let state = store.menuState(for: session, hasAppItems: !rowActions.isEmpty)
+        let items = Self.visible(LaneMenuPlan.items(state), hiding: hiding)
+        ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+            render(item)
         }
     }
 
-    /// Resume and Resume Here for a Claude background row.
-    @ViewBuilder
-    private func resumeItems(_ id: AgentLane.ID) -> some View {
-        if store.canResumeBackground(id) {
-            let live = store.isBackgroundLive(id)
-            Button("Resume") { store.resumeBackground(id, stoppingBackground: false) }
-                .disabled(live)
-                .help("Continue this stopped session's conversation in this pane")
-            Button("Resume Here (Stop Background)") { store.resumeBackground(id, stoppingBackground: true) }
-                .disabled(!live)
-                .help("Stop the background session, then continue its conversation in this pane")
+    /// The plan without the hidden commands, and without a divider left
+    /// at an end or doubled.
+    static func visible(_ items: [LaneMenuItem], hiding: Set<LaneMenuCommand>) -> [LaneMenuItem] {
+        var result: [LaneMenuItem] = []
+        for item in items {
+            if case .command(let command) = item, hiding.contains(command) { continue }
+            if item == .divider, result.isEmpty || result.last == .divider { continue }
+            result.append(item)
         }
+        if result.last == .divider { result.removeLast() }
+        return result
     }
 
-    /// A session found running with no row: reattach it here, adopt it
-    /// into a section, or end it.
     @ViewBuilder
-    private var detachedMenu: some View {
+    private func render(_ item: LaneMenuItem) -> some View {
         let lane = session.lane
-        Button("Reattach") { store.reattach(lane.id) }
-            .help("Attach this session here; the row stays where it is listed")
-        resumeItems(lane.id)
-        DetachedAdoptMenu(store: store, id: lane.id)
-        Divider()
-        Button("Stop Session") { store.stop(lane.id) }
-            .disabled(!store.canStop(lane.id))
-            .help("End the session; its row goes with it")
-        Divider()
-        if lane.directory != nil {
-            Button("Copy Path") { Self.copy(session.currentDirectory) }
-            Button("Show in Finder") {
-                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: session.currentDirectory)])
-            }
-        }
-        Button("Copy Session Name") { Self.copy(lane.sessionName ?? lane.title) }
-    }
-
-    @ViewBuilder
-    private var laneMenu: some View {
-        let lane = session.lane
-        Button("Open \(session.title)") { store.open(lane.id) }
-        Button("Reattach") { store.reattach(lane.id) }
-            .disabled(!session.isStarted)
-        resumeItems(lane.id)
-        if !store.configuration.reopenChoices.isEmpty {
-            Menu("Reopen As") {
-                ForEach(store.configuration.reopenChoices, id: \.self) { choice in
-                    Button(choice.title) { store.reopen(lane.id, choice: choice) }
-                        .disabled(choice.kind != .sameAgent && choice.backendID == lane.backendID && session.isAttached)
+        switch item {
+        case .divider:
+            Divider()
+        case .command(let command):
+            LaneMenuButton(store: store, session: session, command: command, reveal: reveal)
+        case .ports:
+            ForEach(session.rowMetadata.ports, id: \.self) { port in
+                Button("Open localhost:\(port)") {
+                    if let url = URL(string: "http://localhost:\(port)") { NSWorkspace.shared.open(url) }
                 }
             }
-        }
-        Button("Detach") { store.detach(lane.id) }
-            .disabled(!session.isAttached)
-        Button("Message…") { store.showMessageAgent(to: lane.id, openWindow: openWindow) }
-        if session.needsAttention {
-            Button("Mark Read") { store.markRead(lane.id) }
-        }
-        Button("Change Icon…") { presentation.choosingIcon = lane.id }
-        Button("Rename…") { presentation.rename(session) }
-        if session.customTitle != nil {
-            Button("Use Automatic Name") { store.rename(lane.id, to: nil) }
-        }
-        Menu("Duplicate") {
-            Button("Same Agent") { store.duplicate(lane.id) }
-                .disabled(!store.canDuplicate(lane.id))
-            Divider()
-            ForEach(store.availableBackends, id: \.id) { backend in
-                Button(backend.displayName) { store.duplicate(lane.id, backendID: backend.id) }
-                    .disabled(!store.canDuplicate(lane.id, backendID: backend.id))
+        case .appItems:
+            ForEach(rowActions) { action in
+                Button(action.title) { action.perform(lane) }
+                    .disabled(!action.isEnabled(lane))
             }
-        }
-        if lane.isClosable {
+        case .submenu(.reopenAs):
+            Menu("Reopen As") {
+                ForEach(Array(store.configuration.reopenChoices.enumerated()), id: \.offset) { _, choice in
+                    Button(choice.title) {
+                        reveal()
+                        store.reopen(lane.id, choice: choice)
+                    }
+                    .laneShortcut(store.reopenMenuBinding(for: choice))
+                    .disabled(choice.kind != .sameAgent && choice.backendID == lane.backendID && session.isAttached)
+                }
+            }
+        case .submenu(.duplicate):
+            Menu("Duplicate") {
+                Button("Same Agent") { store.duplicate(lane.id) }
+                    .disabled(!store.canDuplicate(lane.id))
+                Divider()
+                ForEach(store.availableBackends, id: \.id) { backend in
+                    Button(backend.displayName) { store.duplicate(lane.id, backendID: backend.id) }
+                        .disabled(!store.canDuplicate(lane.id, backendID: backend.id))
+                }
+            }
+        case .submenu(.switchAgent):
             Menu("Switch Agent") {
                 ForEach(store.availableBackends, id: \.id) { backend in
                     Button(backend.displayName) {
+                        reveal()
                         if session.status == .running {
-                            presentation.pendingSwitch = .init(id: lane.id, backendID: backend.id, title: session.title)
+                            store.menus.pendingSwitch = .init(id: lane.id, backendID: backend.id, title: session.title)
                         } else {
                             store.switchBackend(lane.id, to: backend.id)
                         }
@@ -196,66 +198,27 @@ struct LaneContextMenu: View {
                     .disabled(backend.id == lane.backendID)
                 }
             }
-        }
-        if !store.runOnHosts(for: lane.id).isEmpty {
-            LaneRunOnMenu(store: store, id: lane.id)
-        }
-        Divider()
-        Button(store.layout.pinned.contains(lane.id) ? "Unpin" : "Pin") {
-            store.setPinned(lane.id, !store.layout.pinned.contains(lane.id))
-        }
-        Menu("Move to Section") {
-            Button("None") { store.move(lane.id, to: nil) }
-                .disabled(store.layout.section(of: lane) == nil)
-            if !store.sectionNames.isEmpty { Divider() }
-            ForEach(store.sectionNames, id: \.self) { name in
-                Button(name) { store.move(lane.id, to: name) }
-                    .disabled(store.layout.section(of: lane) == name)
+        case .submenu(.runOn):
+            LaneRunOnMenu(store: store, id: lane.id, reveal: reveal)
+        case .submenu(.adopt):
+            DetachedAdoptMenu(store: store, id: lane.id)
+        case .submenu(.moveToSection):
+            Menu("Move to Section") {
+                Button("None") { store.move(lane.id, to: nil) }
+                    .disabled(store.layout.section(of: lane) == nil)
+                if !store.sectionNames.isEmpty { Divider() }
+                ForEach(store.sectionNames, id: \.self) { name in
+                    Button(name) { store.move(lane.id, to: name) }
+                        .disabled(store.layout.section(of: lane) == name)
+                }
+                Divider()
+                Button("New Section…") {
+                    reveal()
+                    store.menus.newSection(moving: lane.id)
+                }
             }
-            Divider()
-            Button("New Section…") { presentation.newSection(moving: lane.id) }
-        }
-        Divider()
-        if store.canStop(lane.id) {
-            Button("Stop Lane") { store.stop(lane.id) }
-                .help("End the session; its conversation resumes when the lane is opened again")
-        }
-        if lane.isClosable {
-            Button("Close") { store.close(lane.id) }
-        }
-        Divider()
-        if !session.displayedPullRequests.isEmpty {
+        case .submenu(.pullRequests):
             PullRequestsMenu(pullRequests: session.displayedPullRequests, store: store)
         }
-        ForEach(session.rowMetadata.ports, id: \.self) { port in
-            Button("Open localhost:\(port)") {
-                if let url = URL(string: "http://localhost:\(port)") { NSWorkspace.shared.open(url) }
-            }
-        }
-        if let branch = session.rowMetadata.branch {
-            Button("Copy Branch Name") { Self.copy(branch) }
-        }
-        Button("Copy Path") { Self.copy(session.currentDirectory) }
-        if store.summariesAvailable {
-            Button("Copy Summary") { store.copySummary(of: lane.id) }
-                .disabled(session.summary?.isEmpty ?? true)
-        }
-        Button("Copy Last Prompt") { store.copyLastPrompt(of: lane.id) }
-            .disabled(session.recentPrompts.isEmpty)
-        Button("Show in Finder") {
-            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: session.currentDirectory)])
-        }
-        if !rowActions.isEmpty {
-            Divider()
-            ForEach(rowActions) { action in
-                Button(action.title) { action.perform(lane) }
-                    .disabled(!action.isEnabled(lane))
-            }
-        }
-    }
-
-    private static func copy(_ text: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
     }
 }

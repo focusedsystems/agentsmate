@@ -344,9 +344,12 @@ the same session goes then rather than at the next sweep.
 
 Closing a row ends its terminal here and nothing else: the session it attached
 keeps running, shows in the Detached section, and is the same conversation
-when it is opened again. Stop Session (or Stop Lane) is what ends it.
-`Configuration.closeStopsLane` turns on stopping at close for an app that wants
-closing to work like closing a tmux workspace; it is off by default.
+when it is opened again. Stop Agent… (after a confirmation) is what ends it.
+The row's menu names them apart, Close (Keep Running) and Stop Agent…, and
+every app shows the same menu, defined once in `LaneMenuPlan`; an app adds its
+own items after the shared ones through `rowActions`. The menu bar's Agent menu
+lists the selected lane's same commands. `Configuration.closeStopsLane` is no
+longer used: closing never stops a session.
 
 A Detached row's menu, and the Agent menu for the selected one:
 
@@ -355,7 +358,7 @@ A Detached row's menu, and the Agent menu for the selected one:
 - **Adopt Into Section** moves it into a section, attaches it, and keeps it
   as a lane of the person's own, so the restore snapshot and workspaces
   record it with its session's name (`AgentLane.sessionName`).
-- **Stop Session** ends it, where the backend can (tmux by name, `claude stop`).
+- **Stop Agent…** ends it, where the backend can (tmux by name, `claude stop`).
 
 Detached rows are left out of the restore snapshot and workspaces; the next
 launch finds them again. `Configuration.findsDetachedSessions` (on by default)

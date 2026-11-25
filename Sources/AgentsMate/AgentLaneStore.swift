@@ -29,12 +29,10 @@ public final class AgentLaneStore: ObservableObject {
         /// Mark lanes whose session runs with no terminal attached anywhere.
         /// Off for an app whose lanes are kept running on purpose.
         public var highlightsOrphans: Bool
-        /// Closing a lane the person opened also stops its session, as
-        /// closing a workspace in a terminal multiplexer does. Off by
-        /// default: a lane attaches a session that outlives the app, so
-        /// closing its row only ends the terminal here, the session is listed
-        /// as a found session (``findsDetachedSessions``), and Stop is what
-        /// ends it.
+        /// No longer used. Closing a lane never stops its session: a lane
+        /// attaches a session that outlives the app, so closing its row only
+        /// ends the terminal here, the session is listed as a found session
+        /// (``findsDetachedSessions``), and Stop Agent is what ends it.
         public var closeStopsLane: Bool
         /// Where each lane's `$AGENTSMATE_SESSION` file lives, for agents to
         /// label their row. Nil turns the files off.
@@ -537,6 +535,10 @@ public final class AgentLaneStore: ObservableObject {
 
     /// Whether Go to Lane… is showing.
     @Published public var paletteVisible = false
+
+    /// The dialogs a lane's menu asks for. One for the store, so the menu bar
+    /// and every row's menu ask through the same ones.
+    let menus = LaneMenuPresentation()
 
     /// Lanes matching `query`, best first: every word must appear in the
     /// name, folder, branch, section or summary; a match at the start of the name
@@ -2718,14 +2720,12 @@ public final class AgentLaneStore: ObservableObject {
         return session.backend.canStop(session.lane)
     }
 
-    /// End and remove a lane the person opened. Its session keeps running
-    /// unless ``Configuration/closeStopsLane`` is on.
+    /// Hide a lane the person opened and end its terminal here. Never ends
+    /// the agent's session: a session that outlives its terminal (tmux, a
+    /// Claude background session) keeps running and is listed as Detached;
+    /// ``stop(_:)`` is what ends it.
     public func close(_ id: AgentLane.ID) {
         guard let index = lanes.firstIndex(where: { $0.id == id }), lanes[index].isClosable else { return }
-        if configuration.closeStopsLane, let session = sessions[id], session.backend.canStop(session.lane) {
-            session.backend.stop(session.lane)
-            forgetDiscovered(claimedBy: session.lane, backend: session.backend)
-        }
         let decision = willCloseLane?(lanes[index], sessions[id]?.isAttached == true) ?? .remove
         if decision == .keepRow {
             // The row stays, its terminal ended, ready to start again.
@@ -2855,7 +2855,13 @@ public final class AgentLaneStore: ObservableObject {
         case .biggerFont: adjustFont(by: 1)
         case .smallerFont: adjustFont(by: -1)
         case .resetFont: resetFont()
-        case .reopen(let kind): return reopen(id, kind: kind)
+        case .reopen(let kind):
+            // ⇧⌘C and ⇧⌘X switch agents in every app, whether or not it lists
+            // Reopen As choices; the rest of the kinds are the app's choices.
+            if kind == .claudeRemote || kind == .codexRemote, let agent = kind.agentKind {
+                return switchAgent(id, to: agent)
+            }
+            return reopen(id, kind: kind)
         }
         return true
     }

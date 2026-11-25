@@ -95,7 +95,10 @@ extension AgentLaneStore {
     /// the app's own views. A focused terminal or lane list takes the keys
     /// itself either way.
     public func reopenMenuBinding(for choice: LaneReopenChoice) -> LaneKeyBinding? {
-        guard lanesHaveKeyboard, configuration.shortcuts.contains(.reopen), let kind = choice.kind else { return nil }
+        // Claude and Codex (remote) are Switch to Claude and Switch to Codex on
+        // the lane's menu, which owns ⇧⌘C and ⇧⌘X in every app.
+        guard lanesHaveKeyboard, configuration.shortcuts.contains(.reopen), let kind = choice.kind,
+              kind != .claudeRemote, kind != .codexRemote else { return nil }
         return shortcuts.binding(for: kind.shortcutAction)
     }
 }

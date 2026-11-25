@@ -141,33 +141,15 @@ public struct AgentLaneCommands: Commands {
                 }
             }
             .disabled(selectedGroup.map { !store.canAddLane(to: $0) } ?? true)
-            Button("Reattach") {
-                reveal()
-                if let id = store.selectedID { store.reattach(id) }
+            // The selected lane's own menu, the one its row shows: the same
+            // commands, names and shortcuts. Mark Read and Message Agent are
+            // listed above, where Mark Read also follows the inbox's selection.
+            if let session = store.selected {
+                LaneContextMenu(store: store, session: session, hiding: [.markRead, .message], reveal: reveal)
+            } else {
+                Text("No \(noun) Selected")
             }
-            .laneShortcut(store.shortcuts.binding(for: .reattach))
-            .disabled(store.selectedID == nil)
-            Button("Resume") {
-                reveal()
-                if let id = store.selectedID { store.resumeBackground(id, stoppingBackground: false) }
-            }
-            .disabled(store.selectedID.map { !store.canResumeBackground($0) || store.isBackgroundLive($0) } ?? true)
-            Button("Resume Here (Stop Background)") {
-                reveal()
-                if let id = store.selectedID { store.resumeBackground(id, stoppingBackground: true) }
-            }
-            .disabled(store.selectedID.map { !store.canResumeBackground($0) || !store.isBackgroundLive($0) } ?? true)
-            LaneReopenMenu(store: store, reveal: reveal)
-            LaneRunOnMenu(store: store, id: store.selectedID, reveal: reveal)
-            Button("Detach") {
-                if let id = store.selectedID { store.detach(id) }
-            }
-            .disabled(!store.selectedIsAttached)
-            Button("Stop Lane") {
-                if let id = store.selectedID { store.stop(id) }
-            }
-            .disabled(store.selectedID.map { !store.canStop($0) } ?? true)
-            DetachedAdoptMenu(store: store, id: store.selectedID)
+            Divider()
             Button("Look for Detached Sessions") { store.sweepForDetachedSessions() }
                 .disabled(!store.configuration.findsDetachedSessions)
             Button("Clear Screen") { store.clearSelected() }
@@ -199,24 +181,6 @@ public struct AgentLaneCommands: Commands {
                 .disabled(store.sectionNames.isEmpty && store.layout.pinned.isEmpty)
             Button("Expand All Sections") { store.setAllCollapsed(false) }
                 .disabled(store.layout.collapsed.isEmpty)
-            if let id = store.selectedID {
-                Button(store.layout.pinned.contains(id) ? "Unpin \(noun)" : "Pin \(noun)") {
-                    store.setPinned(id, !store.layout.pinned.contains(id))
-                }
-            }
-            Divider()
-            if store.summariesAvailable {
-                Button("Copy Summary") { if let id = store.selectedID { store.copySummary(of: id) } }
-                    .disabled(store.selected?.summary?.isEmpty ?? true)
-            }
-            Button("Copy Last Prompt") { if let id = store.selectedID { store.copyLastPrompt(of: id) } }
-                .disabled(store.selected?.recentPrompts.isEmpty ?? true)
-            Button("Show \(noun) in Finder") {
-                if let path = store.selected?.currentDirectory {
-                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
-                }
-            }
-            .disabled(store.selected == nil)
         }
     }
 

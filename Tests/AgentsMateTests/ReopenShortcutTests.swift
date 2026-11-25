@@ -99,13 +99,14 @@ final class ReopenByKindTests: XCTestCase {
     func testMenuShowsTheKeysOnlyWhileTheLanesHaveTheKeyboard() {
         let store = makeStore()
         let remote = store.configuration.reopenChoices[1]
-        XCTAssertNil(store.reopenMenuBinding(for: remote), "elsewhere the app keeps ⇧⌘C")
+        XCTAssertNil(store.reopenMenuBinding(for: remote))
         store.lanesHaveKeyboard = true
-        XCTAssertEqual(store.reopenMenuBinding(for: remote)?.display, "⇧⌘C")
+        // ⇧⌘C and ⇧⌘X are Switch to Claude and Switch to Codex, not Reopen As items.
+        XCTAssertNil(store.reopenMenuBinding(for: remote), "the Switch items own ⇧⌘C")
         XCTAssertEqual(store.reopenMenuBinding(for: .sameAgent())?.display, "⌥⌘R")
         XCTAssertNil(store.reopenMenuBinding(for: LaneReopenChoice("Other", backendID: "claude")), "no kind, no key")
-        store.shortcuts.set(nil, for: .reopenClaudeRemote)
-        XCTAssertNil(store.reopenMenuBinding(for: remote))
+        store.shortcuts.set(nil, for: .reopenSameAgent)
+        XCTAssertNil(store.reopenMenuBinding(for: .sameAgent()))
     }
 
     func testAStoreWithoutReopenKeysLeavesThem() {

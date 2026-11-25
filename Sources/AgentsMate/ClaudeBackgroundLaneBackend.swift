@@ -332,6 +332,10 @@ public struct ClaudeBackgroundLaneBackend: LaneBackend {
 
     public var canStop: Bool { true }
 
+    /// Only a lane bound to one session by its id can be stopped; without
+    /// the id `claude stop` has nothing to name.
+    public func canStop(_ lane: AgentLane) -> Bool { attachID(for: lane) != nil }
+
     /// `claude stop` ends the session and keeps its conversation. Only by
     /// id: a name can match several sessions, or part of another's name.
     public func stop(_ lane: AgentLane) {
