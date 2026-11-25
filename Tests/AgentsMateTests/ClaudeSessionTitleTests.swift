@@ -21,8 +21,16 @@ final class ClaudeSessionTitleTests: XCTestCase {
         return url
     }
 
+    private func json(_ object: [String: Any]) -> String {
+        String(decoding: try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]), as: UTF8.self)
+    }
+
+    private func prompt(_ text: String) -> String {
+        json(["type": "user", "message": ["role": "user", "content": text]])
+    }
+
     private func rename(_ title: String) -> String {
-        Fixture.line(["type": "agent-name", "agentName": title, "sessionId": id])
+        json(["type": "agent-name", "agentName": title, "sessionId": id])
     }
 
     private var record: LaneStatus {
@@ -34,7 +42,7 @@ final class ClaudeSessionTitleTests: XCTestCase {
     }
 
     func testTheFileIsFoundInTheFoldersProjectDirectory() throws {
-        let url = try write("-work-My-Repo-v2", [Fixture.prompt("hi"), rename("Release review")])
+        let url = try write("-work-My-Repo-v2", [prompt("hi"), rename("Release review")])
         XCTAssertEqual(LaneTranscriptCache.claudeSessionFile(id: id, directory: "/work/My Repo.v2", environment: ["CLAUDE_CONFIG_DIR": home.path]), url.path)
     }
 
@@ -51,7 +59,7 @@ final class ClaudeSessionTitleTests: XCTestCase {
         let now = Date()
         _ = cache.read([source], now: now)
         XCTAssertNil(cache.title(source: source, record: record), "no file yet")
-        let url = try write("-work-My-Repo-v2", [Fixture.prompt("hi"), rename("First")])
+        let url = try write("-work-My-Repo-v2", [prompt("hi"), rename("First")])
         _ = cache.read([source], now: now.addingTimeInterval(1))
         XCTAssertNil(cache.path(for: source), "a miss waits before looking again")
         _ = cache.read([source], now: now.addingTimeInterval(LaneTranscriptCache.codexRetry + 1))
