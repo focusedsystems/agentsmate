@@ -88,6 +88,17 @@ public struct AgentHosts: Equatable, Sendable {
             && name.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || "._-".contains($0)) }
     }
 
+    /// The names this Mac answers to: its host name and that name without
+    /// its domain, and its user-facing name.
+    public static var thisMacNames: Set<String> {
+        var names: Set<String> = []
+        for raw in [ProcessInfo.processInfo.hostName, Foundation.Host.current().localizedName ?? ""] where !raw.isEmpty {
+            names.insert(raw)
+            if let short = raw.split(separator: ".").first { names.insert(String(short)) }
+        }
+        return names
+    }
+
     /// The first host with role hub.
     public var hub: Host? { hosts.first { $0.role == .hub } }
 

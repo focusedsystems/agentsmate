@@ -176,9 +176,11 @@ struct LaneContextMenu: View {
         }
         Menu("Duplicate") {
             Button("Same Agent") { store.duplicate(lane.id) }
+                .disabled(!store.canDuplicate(lane.id))
             Divider()
             ForEach(store.availableBackends, id: \.id) { backend in
                 Button(backend.displayName) { store.duplicate(lane.id, backendID: backend.id) }
+                    .disabled(!store.canDuplicate(lane.id, backendID: backend.id))
             }
         }
         if lane.isClosable {
