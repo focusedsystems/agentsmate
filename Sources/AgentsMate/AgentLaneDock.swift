@@ -12,6 +12,7 @@ import AppKit
 public struct AgentLaneDock<Accessory: View, Empty: View>: View {
     @ObservedObject var store: AgentLaneStore
     let labels: AgentsModeLabels
+    let rowActions: [LaneAction]
     let accessory: Accessory
     let empty: Empty
 
@@ -24,10 +25,13 @@ public struct AgentLaneDock<Accessory: View, Empty: View>: View {
     static var minimumHeight: Double { 120 }
     static var closeBelow: Double { 80 }
 
-    public init(store: AgentLaneStore, labels: AgentsModeLabels = .init(),
+    /// `rowActions` are the app's own items on every lane's menu, after the
+    /// shared ones.
+    public init(store: AgentLaneStore, labels: AgentsModeLabels = .init(), rowActions: [LaneAction] = [],
                 @ViewBuilder accessory: () -> Accessory, @ViewBuilder empty: () -> Empty) {
         self.store = store
         self.labels = labels
+        self.rowActions = rowActions
         self.accessory = accessory()
         self.empty = empty()
         _height = AppStorage(wrappedValue: 280, store.keys.dockHeight)
@@ -39,10 +43,10 @@ public struct AgentLaneDock<Accessory: View, Empty: View>: View {
             VStack(spacing: 0) {
                 if !store.dockMaximized { divider }
                 HStack(spacing: 0) {
-                    AgentLaneSidebar(store: store, labels: labels, inDock: true) { accessory }
+                    AgentLaneSidebar(store: store, labels: labels, rowActions: rowActions, inDock: true) { accessory }
                         .frame(width: shownListWidth)
                     listDivider
-                    AgentLaneDetail(store: store, labels: labels) { empty }
+                    AgentLaneDetail(store: store, labels: labels, rowActions: rowActions) { empty }
                 }
                 .frame(height: store.dockMaximized ? nil : CGFloat(liveHeight ?? height))
                 .frame(maxHeight: store.dockMaximized ? .infinity : nil)

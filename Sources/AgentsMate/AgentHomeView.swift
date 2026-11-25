@@ -15,7 +15,6 @@ public struct AgentHomeView: View {
     let labels: AgentsModeLabels
     let rowActions: [LaneAction]
 
-    @StateObject private var menus = LaneMenuPresentation()
     @State private var selection: AgentLane.ID?
     @State private var query = ""
     @FocusState private var boardFocused: Bool
@@ -73,7 +72,6 @@ public struct AgentHomeView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .controlBackgroundColor))
-        .modifier(LaneMenuSheets(store: store, presentation: menus))
         .onAppear { DispatchQueue.main.async { boardFocused = true } }
         .onChange(of: query) { store.displayedHomeSearch = query }
     }
@@ -135,8 +133,7 @@ public struct AgentHomeView: View {
                                 .id(item.id)
                                 .onTapGesture { open(item.id) }
                                 .contextMenu {
-                                    LaneContextMenu(store: store, session: session, presentation: menus,
-                                                    rowActions: rowActions)
+                                    LaneContextMenu(store: store, session: session, rowActions: rowActions)
                                 }
                                 .accessibilityAction { open(item.id) }
                         }

@@ -65,7 +65,6 @@ public struct AgentLaneSidebar<Accessory: View>: View {
     @State private var renaming: String?
     @State private var sectionName = ""
     @FocusState private var renameFocused: Bool
-    @StateObject private var menus = LaneMenuPresentation()
     @State private var savingWorkspace = false
     @State private var workspaceName = ""
     @State private var message = ""
@@ -89,8 +88,9 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         _parallelPlacement = AppStorage(wrappedValue: shape.parallel.rawValue, keys.parallelSessions)
     }
 
-    init(store: AgentLaneStore, labels: AgentsModeLabels, inDock: Bool, @ViewBuilder accessory: () -> Accessory) {
-        self.init(store: store, labels: labels, accessory: accessory)
+    init(store: AgentLaneStore, labels: AgentsModeLabels, rowActions: [LaneAction] = [], inDock: Bool,
+         @ViewBuilder accessory: () -> Accessory) {
+        self.init(store: store, labels: labels, rowActions: rowActions, accessory: accessory)
         self.inDock = inDock
     }
 
@@ -129,7 +129,6 @@ public struct AgentLaneSidebar<Accessory: View>: View {
                 AgentUsageFooter(model: usage, barBackground: inDock)
             }
         }
-        .modifier(LaneMenuSheets(store: store, presentation: menus))
         .alert("Save Lanes as Workspace", isPresented: $savingWorkspace) {
             TextField("Name", text: $workspaceName)
             Button("Save") { store.saveWorkspace(named: workspaceName.trimmingCharacters(in: .whitespaces)) }
@@ -175,7 +174,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         }
         .contextMenu(forSelectionType: AgentLane.ID.self) { ids in
             if let id = ids.first, let session = store.sessions[id] {
-                LaneContextMenu(store: store, session: session, presentation: menus, rowActions: rowActions)
+                LaneContextMenu(store: store, session: session, rowActions: rowActions)
             }
         } primaryAction: { ids in
             if let id = ids.first { store.open(id) }
@@ -372,7 +371,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
                     Divider()
                 }
             }
-            Button("New Section…") { menus.newSection() }
+            Button("New Section…") { store.menus.newSection() }
             Divider()
             Button("Collapse Other Sections") { store.collapseOtherSections(than: group) }
                 .disabled(!(snapshot.groups.count > 1
@@ -607,7 +606,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
                     }
                 }
                 Divider()
-                Button("New Section…") { menus.newSection() }
+                Button("New Section…") { store.menus.newSection() }
                 Button("Collapse Other Sections") { store.collapseOtherSectionsThanSelected() }
                     .disabled(store.selectedID.flatMap { store.group(containing: $0) }
                         .map { !store.canCollapseOtherSections(than: $0) } ?? true)
@@ -695,6 +694,9 @@ public struct AgentLaneDetail<Empty: View>: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .textBackgroundColor))
         .agentLanePalette(store)
+        // The dialogs every lane menu asks for (rename, icon, stop, switch,
+        // new section) are presented here, once, whichever menu asked.
+        .modifier(LaneMenuSheets(store: store, presentation: store.menus))
         .onAppear {
             store.isShowing = true
             store.openSelectedOnShow()

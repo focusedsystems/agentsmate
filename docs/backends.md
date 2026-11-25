@@ -73,11 +73,10 @@ its Claude lanes' `backendID` to it.
 A backend that can end its session sets `canStop` and implements `stop`:
 `ClaudeBackgroundLaneBackend` runs `claude stop`, and a `CommandLaneBackend`
 runs its `stopCommand` (killing the tmux session, say). The lane's menu gains
-Stop Lane. The conversation is kept, so opening the lane resumes it.
+Stop Agent…, which asks first. The conversation is kept, so opening the lane resumes it.
 
-Closing a row never stops its session unless the app turns on
-`closeStopsLane`, which is off by default: the session outlives the row as it
-outlives the app, and shows in the Detached section until it is attached
+Closing a row never stops its session (`closeStopsLane` is no longer used):
+the session outlives the row as it outlives the app, and shows in the Detached section until it is attached
 again or stopped.
 
 Add a `LanePresenceSource` (`TmuxPresenceSource` lists tmux sessions with
