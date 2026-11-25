@@ -12,7 +12,7 @@ same one other terminals and devices see.
 - **`agentsmate-status`**: the Claude Code hook and Codex notify writer that
   feeds lane status. See [docs/status-feed.md](docs/status-feed.md).
 
-macOS 14 or later. SwiftTerm is held below 1.12, whose Metal shaders do not
+macOS 27 or later. SwiftTerm is held below 1.12, whose Metal shaders do not
 build with the Command Line Tools alone.
 
 ## Use

@@ -18,7 +18,7 @@ permanent, commit messages and pull requests included.
   and Codex `notify` through `agentsmate-status`, or read from a daemon's own
   session list. Do not infer it from terminal output or bells.
 - **SwiftTerm stays below 1.12** (its Metal shaders do not build with the
-  Command Line Tools). macOS 14 minimum, Swift 6 language mode.
+  Command Line Tools). macOS 27 minimum, Swift 6 language mode.
 - **UI follows the mac-arsed-mac-app conventions**: native controls, every
   command in a menu and a contextual menu, full keyboard coverage, saved state.
 

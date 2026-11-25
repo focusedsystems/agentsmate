@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "AgentsMate",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS("27.0")],
     products: [
         // Agents mode: the lane sidebar, a live terminal per lane, menus.
         .library(name: "AgentsMate", targets: ["AgentsMate"]),

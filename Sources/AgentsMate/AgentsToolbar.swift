@@ -124,13 +124,10 @@ public struct AgentsToolbarButton: View {
         if !drawsGlass {
             button.buttonStyle(.plain)
                 .background(Color.primary.opacity(0.08), in: Capsule())
-        } else if #available(macOS 26.0, *) {
+        } else {
             button.buttonStyle(.plain)
                 .glassEffect(.regular.interactive(), in: .capsule)
                 .contentShape(Capsule())
-        } else {
-            button.buttonStyle(.plain)
-                .background(Color.primary.opacity(0.08), in: Capsule())
         }
     }
 }
@@ -195,17 +192,11 @@ public struct AgentsMainToolbar<ID: Hashable, Trailing: ToolbarContent>: Toolbar
         // Agent is the app's core action, so it sits at the far left, ahead
         // of history, on every tab.
         if let agent, !agentInSidebar {
-            if #available(macOS 26.0, *) {
-                ToolbarItem(placement: .navigation) {
-                    AgentsToolbarButton(agent)
-                }
-                // Its own glass button, not one more chip in a shared group.
-                .sharedBackgroundVisibility(.hidden)
-            } else {
-                ToolbarItem(placement: .navigation) {
-                    AgentsToolbarButton(agent)
-                }
+            ToolbarItem(placement: .navigation) {
+                AgentsToolbarButton(agent)
             }
+            // Its own glass button, not one more chip in a shared group.
+            .sharedBackgroundVisibility(.hidden)
         }
         // Browser-style history, mirrored on ⌘[ / ⌘].
         ToolbarItemGroup(placement: .navigation) {
@@ -216,25 +207,15 @@ public struct AgentsMainToolbar<ID: Hashable, Trailing: ToolbarContent>: Toolbar
         // reserves the room a hovered tab's name needs, so the system's glass
         // behind the item is hidden or it shows empty on both sides.
         if tabs.count > 1 {
-            if #available(macOS 26.0, *) {
-                ToolbarItem(placement: .principal) {
-                    CollapsingTabBar(selection: selection, tabs: tabs,
-                                     availableWidth: windowWidth - AgentsToolbar.sideReserve * 2,
-                                     onSelect: onSelect)
-                }
-                .sharedBackgroundVisibility(.hidden)
-            } else {
-                ToolbarItem(placement: .principal) {
-                    CollapsingTabBar(selection: selection, tabs: tabs,
-                                     availableWidth: windowWidth - AgentsToolbar.sideReserve * 2,
-                                     onSelect: onSelect)
-                }
+            ToolbarItem(placement: .principal) {
+                CollapsingTabBar(selection: selection, tabs: tabs,
+                                 availableWidth: windowWidth - AgentsToolbar.sideReserve * 2,
+                                 onSelect: onSelect)
             }
+            .sharedBackgroundVisibility(.hidden)
         }
         // Push every trailing control to the window's right edge.
-        if #available(macOS 26.0, *) {
-            ToolbarSpacer(.flexible, placement: .primaryAction)
-        }
+        ToolbarSpacer(.flexible, placement: .primaryAction)
         if let trailing { trailing }
     }
 }
@@ -286,13 +267,7 @@ private struct WindowWidthReader: ViewModifier {
     @Binding var width: CGFloat
 
     func body(content: Content) -> some View {
-        if #available(macOS 15.0, *) {
-            content.onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { width = $0 }
-        } else {
-            content.background(GeometryReader { proxy in
-                Color.clear.onChange(of: proxy.size.width, initial: true) { _, new in width = new }
-            })
-        }
+        content.onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { width = $0 }
     }
 }
 
@@ -548,19 +523,10 @@ private struct AgentsSidebarToolbar: ViewModifier {
     let visible: Bool
 
     func body(content: Content) -> some View {
-        if #available(macOS 26.0, *) {
-            content.toolbar { AgentsSidebarItem(agent: agent, visible: visible) }
-        } else {
-            content.toolbar {
-                ToolbarItem(placement: .automatic) {
-                    if visible { AgentsToolbarButton(agent) }
-                }
-            }
-        }
+        content.toolbar { AgentsSidebarItem(agent: agent, visible: visible) }
     }
 }
 
-@available(macOS 26.0, *)
 private struct AgentsSidebarItem: ToolbarContent {
     let agent: AgentsToolbarAgent
     let visible: Bool
