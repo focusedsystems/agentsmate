@@ -20,6 +20,7 @@ public struct AgentsSearchField: NSViewRepresentable {
     private let onClear: () -> Void
     private let onFocusChange: (Bool) -> Void
     private let onMoveDown: (() -> Void)?
+    private let onMoveUp: (() -> Void)?
 
     /// `isFocused` follows the cursor both ways; `focusRequest` puts the cursor
     /// in the field whenever it changes. `scope` becomes the item in the
@@ -28,7 +29,7 @@ public struct AgentsSearchField: NSViewRepresentable {
                 fontScale: Double = 1, controlSize: NSControl.ControlSize = .regular,
                 scope: AgentsToolbarSearchScope? = nil, identifier: String? = nil,
                 onSubmit: @escaping () -> Void = {}, onClear: (() -> Void)? = nil,
-                onFocusChange: @escaping (Bool) -> Void = { _ in }, onMoveDown: (() -> Void)? = nil) {
+                onFocusChange: @escaping (Bool) -> Void = { _ in }, onMoveDown: (() -> Void)? = nil, onMoveUp: (() -> Void)? = nil) {
         self.text = text
         self.prompt = prompt
         self.isFocused = isFocused
@@ -41,6 +42,7 @@ public struct AgentsSearchField: NSViewRepresentable {
         self.onClear = onClear ?? { text.wrappedValue = "" }
         self.onFocusChange = onFocusChange
         self.onMoveDown = onMoveDown
+        self.onMoveUp = onMoveUp
     }
 
     public func makeCoordinator() -> Coordinator { Coordinator() }
@@ -155,6 +157,10 @@ public struct AgentsSearchField: NSViewRepresentable {
         public func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
             if selector == #selector(NSResponder.moveDown(_:)), let down = parent?.onMoveDown {
                 down()
+                return true
+            }
+            if selector == #selector(NSResponder.moveUp(_:)), let up = parent?.onMoveUp {
+                up()
                 return true
             }
             guard selector == #selector(NSResponder.cancelOperation(_:)) else { return false }
