@@ -1331,10 +1331,53 @@ final class TerminalContainer: NSView {
     var session: AgentLaneSession?
     weak var store: AgentLaneStore?
 
+    /// The pane that had the keyboard when the window last stopped being
+    /// key: the terminal, the sidebar search, a list.
+    private weak var lastFocused: NSResponder?
+    private var keyNotes: [NSObjectProtocol] = []
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        keyNotes.forEach(NotificationCenter.default.removeObserver)
+        keyNotes = []
+        if let window {
+            let center = NotificationCenter.default
+            keyNotes.append(center.addObserver(forName: NSWindow.didResignKeyNotification, object: window, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.rememberFocus() }
+            })
+            keyNotes.append(center.addObserver(forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.restoreFocus() }
+            })
+        }
         store?.keyboard.watch(window)
         focusIfWanted()
+    }
+
+    private func rememberFocus() {
+        guard let window, let responder = window.firstResponder, responder !== window else { return }
+        if let text = responder as? NSText, text.isFieldEditor, let owner = text.delegate as? NSResponder {
+            lastFocused = owner
+        } else {
+            lastFocused = responder
+        }
+    }
+
+    /// When the window becomes key, hand the keyboard back to the pane that
+    /// had it, or to this terminal if none did. A sheet, a popover or a
+    /// field being edited keeps it.
+    func restoreFocus() {
+        guard let window, let view = session?.view, view.window === window,
+              !isHiddenOrHasHiddenAncestor, window.attachedSheet == nil,
+              window.childWindows?.contains(where: { $0.isVisible }) != true else { return }
+        if let text = window.firstResponder as? NSText, text.isFieldEditor { return }
+        var target: NSResponder = view
+        if let last = lastFocused, last !== window {
+            if let v = last as? NSView {
+                if v.window === window, !v.isHiddenOrHasHiddenAncestor, v.acceptsFirstResponder { target = v }
+            }
+        }
+        if window.firstResponder !== target { window.makeFirstResponder(target) }
+        store?.updateLanesHaveKeyboard()
     }
 
     func focusIfWanted() {
@@ -1356,6 +1399,8 @@ struct TerminalHost: NSViewRepresentable {
 
     func makeNSView(context: Context) -> TerminalContainer {
         let container = TerminalContainer()
+        container.wantsLayer = true
+        container.layer?.masksToBounds = true
         container.store = store
         attach(to: container)
         return container
@@ -1374,7 +1419,7 @@ struct TerminalHost: NSViewRepresentable {
         container.addSubview(session.view)
         NSLayoutConstraint.activate([
             session.view.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 6),
-            session.view.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            session.view.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: AgentTerminalView.hiddenScrollerWidth),
             session.view.topAnchor.constraint(equalTo: container.topAnchor, constant: 4),
             session.view.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])

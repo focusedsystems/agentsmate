@@ -117,7 +117,27 @@ open class AgentTerminalView: LocalProcessTerminalView {
 
     open override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        hideScroller()
         applyColorScheme()
+    }
+
+    /// The width SwiftTerm reserves on the right for its scroller, which it
+    /// always draws in the legacy style whatever the system setting is.
+    public static var hiddenScrollerWidth: CGFloat {
+        NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy)
+    }
+
+    /// SwiftTerm's own scroller is private and always legacy, so it shows
+    /// as an empty track beside the text. Hide it; a host that wants the
+    /// reserved strip gone pushes the view's trailing edge out by
+    /// ``hiddenScrollerWidth`` and clips.
+    public func hideScroller() {
+        for case let scroller as NSScroller in subviews where !scroller.isHidden { scroller.isHidden = true }
+    }
+
+    open override func layout() {
+        super.layout()
+        hideScroller()
     }
 
     public func applyColorScheme() {
