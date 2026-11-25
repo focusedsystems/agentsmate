@@ -29,6 +29,8 @@ final class SessionOwnerTests: XCTestCase {
                                                                           statusAgent: "claude", tmuxSessions: TmuxLaneSessions(prefixes: ["lane-"]))],
                                    statusFeed: nil, defaults: UserDefaults(suiteName: "agentsmate-owner-\(UUID().uuidString)")!)
         store.sync(lanes: lanes ?? [lane("one")])
+        // Every app these tests name counts as running, unless a test says otherwise.
+        store.ownership?.isRunning = { _ in true }
         return store
     }
 

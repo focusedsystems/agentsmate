@@ -248,15 +248,17 @@ public enum SessionOwners {
 
     nonisolated(unsafe) private static let formatter: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    nonisolated(unsafe) private static let plainFormatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime]
         return f
     }()
 
     private static func parseDate(_ text: String) -> Date? {
-        formatter.date(from: text) ?? {
-            let f = ISO8601DateFormatter()
-            f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            return f.date(from: text)
-        }()
+        formatter.date(from: text) ?? plainFormatter.date(from: text)
     }
 }

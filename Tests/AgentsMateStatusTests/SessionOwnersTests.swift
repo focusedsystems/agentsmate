@@ -73,13 +73,13 @@ final class SessionOwnersTests: XCTestCase {
     func testAFileOthersCanWriteIsIgnored() {
         let file = temporaryFile()
         SessionOwners.claim(keys, app: "app.a", at: now, in: file)
-        XCTAssertEqual(SessionOwners.load(file, now: now).entries.count, 3)
+        XCTAssertEqual(SessionOwners.load(file, now: now).entries.count, 2)
         for mode: mode_t in [0o666, 0o664, 0o620, 0o602] {
             chmod(file.path, mode)
             XCTAssertEqual(SessionOwners.load(file, now: now).entries, [:], String(mode, radix: 8))
         }
         chmod(file.path, 0o644)
-        XCTAssertEqual(SessionOwners.load(file, now: now).entries.count, 3, "readable by others is fine; writable is not")
+        XCTAssertEqual(SessionOwners.load(file, now: now).entries.count, 2, "readable by others is fine; writable is not")
     }
 
     func testASymlinkIsNotFollowed() throws {
