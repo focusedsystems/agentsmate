@@ -187,6 +187,11 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         // A filter that would leave the list empty turns itself off; only a
         // search that matches nothing leaves the Show All overlay.
         .onChange(of: statusFilteredCount) { settleFilters(newest: nil) }
+        // Settling waits while the lanes load, and a list that stays empty
+        // never changes its count, so look again once loading ends, and
+        // whenever the lanes listed change.
+        .onChange(of: lanesLoading) { settleFilters(newest: nil) }
+        .onChange(of: store.listedLanes.count) { settleFilters(newest: nil) }
         .onChange(of: searchText) {
             store.displayedSidebarSearch = searchText
             // Typing a search searches every lane, so the status chips go off.
@@ -476,14 +481,18 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         .init(isActive: session.isActive, status: session.status, unread: session.needsAttention)
     }
 
+    /// Whether the lanes or the hosts are still loading.
+    private var lanesLoading: Bool {
+        store.homeLoading.isLoading || store.laneLoadProgress(store.laneLoadStages).isLoading
+    }
+
     /// Turn off whatever filters would leave nothing to show.
     private func settleFilters(newest: LaneStatusFilter?) {
         let on = activeFilters
         guard !on.isEmpty else { return }
         // While the lanes are still loading, an empty list says nothing yet:
         // Active, on at launch, stays on until the hosts have answered.
-        guard newest != nil || !(store.homeLoading.isLoading || store.laneLoadProgress(store.laneLoadStages).isLoading)
-        else { return }
+        guard newest != nil || !lanesLoading else { return }
         let kept = LaneStatusFilter.settled(on, newest: newest, lanes: sessions.map(Self.filterState))
         for filter in on.subtracting(kept) { setFilter(filter, false) }
     }
