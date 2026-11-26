@@ -19,7 +19,7 @@ final class RepositoriesPaneTests: XCTestCase {
                       backendID: "agent", section: sectioned ? "Section \($0 % 3)" : nil)
         }
         store.sync(lanes: lanes)
-        let items = lanes.map { AgentRepositoryItem(path: $0.directory.path, title: $0.title, subtitle: "/w/\($0.title)") }
+        let items = lanes.map { AgentRepositoryItem(path: "/w/\($0.title)", title: $0.title, subtitle: "/w/\($0.title)") }
         return Form {
             AgentRepositoriesSection(store: store, items: items) {
                 Button("Add Folder…") {}
