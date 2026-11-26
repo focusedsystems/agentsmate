@@ -16,6 +16,11 @@ extension AgentLaneStore.Configuration {
 /// Apps built on AgentsMate that list the same session share
 /// ``SessionOwners``' file; only the app it names notifies, badges the Dock
 /// or plays a sound for the session. The others show it, silently.
+///
+/// With the hosts registry, the Macs share their claims through the hub
+/// (``SessionOwners/SharedFile``): each claim records the Mac it was made on,
+/// so working in a session on one Mac keeps the others quiet, and a Mac that
+/// has not reported in for ten minutes no longer speaks for a session.
 @MainActor
 final class SessionOwnership {
     private weak var store: AgentLaneStore?
@@ -25,6 +30,21 @@ final class SessionOwnership {
     private(set) var snapshot: SessionOwners.Snapshot
     private var watcher: SessionOwners.Watcher?
     private var backstop: CadenceTimer?
+    /// This Mac's name in the hosts registry, and where the Macs' shared
+    /// claims are kept, when the registry is there.
+    struct Sharing: Sendable {
+        var host: String
+        var transport: any SharedLaneTransport
+    }
+    let sharing: Sharing?
+    /// What the hub last said about the Macs and their claims.
+    private(set) var shared = SessionOwners.SharedFile()
+    private var syncing = false
+    private var syncTimer: Timer?
+    /// The hub is written to again when this Mac's last report is older than this.
+    nonisolated static let heartbeat: TimeInterval = 120
+    /// How long after a claim the hub hears of it.
+    static let syncDelay: TimeInterval = 1
     private var peers: (index: [String: Set<String>], at: Date)?
     private let queue = DispatchQueue(label: "agentsmate.session-owner", qos: .utility)
     /// A claim within this long of the last one by the same app is not written again.
@@ -40,7 +60,9 @@ final class SessionOwnership {
         !NSRunningApplication.runningApplications(withBundleIdentifier: id).isEmpty
     }
 
-    init(store: AgentLaneStore, file: URL, appID: String, isShared: (@Sendable (AgentLane) -> Bool)?, watches: Bool = true) {
+    init(store: AgentLaneStore, file: URL, appID: String, isShared: (@Sendable (AgentLane) -> Bool)?, watches: Bool = true,
+         sharing: Sharing? = nil) {
+        self.sharing = sharing
         self.store = store
         self.file = file
         self.appID = appID
@@ -50,7 +72,11 @@ final class SessionOwnership {
         watcher = SessionOwners.Watcher(file: file, queue: queue) { [weak self] in
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.reload() } }
         }
-        backstop = CadenceTimer(interval: Self.backstopInterval) { [weak self] in self?.reload() }
+        backstop = CadenceTimer(interval: Self.backstopInterval) { [weak self] in
+            self?.reload()
+            self?.syncShared()
+        }
+        if sharing != nil { syncSoon() }
     }
 
     func keys(for session: AgentLaneSession) -> SessionOwners.Keys {
@@ -68,9 +94,11 @@ final class SessionOwnership {
         let keys = keys(for: session)
         if store?.isDetached(session.id) == true { return unlistedDecision(keys: keys, now: now) }
         let shared = isShared?(session.lane) ?? false
+        let reports = self.shared
         return SessionOwners.decide(keys: keys, me: appID, isShared: shared, snapshot: snapshot,
                                     peers: { self.peerApps(for: keys, now: now) },
-                                    isRunning: isRunning, now: now)
+                                    isRunning: isRunning, myHost: sharing?.host,
+                                    hostIsFresh: { reports.isFresh($0, now: now) }, now: now)
     }
 
     /// Who owns a session this app only found running and does not list as a
@@ -92,8 +120,9 @@ final class SessionOwnership {
         return .init(owner: appID, reason: .unshared)
     }
 
-    func owns(_ session: AgentLaneSession, fresh: Bool = false) -> Bool {
-        decision(for: session, fresh: fresh).owner == appID
+    func owns(_ session: AgentLaneSession, fresh: Bool = false, now: Date = Date()) -> Bool {
+        let decision = decision(for: session, fresh: fresh, now: now)
+        return decision.owner == appID && (decision.host == nil || decision.host == sharing?.host)
     }
 
     private func peerApps(for keys: SessionOwners.Keys, now: Date) -> Set<String> {
@@ -107,12 +136,87 @@ final class SessionOwnership {
     func claim(_ session: AgentLaneSession, created: Bool = false, now: Date = Date()) {
         let keys = keys(for: session)
         guard !keys.isEmpty, store?.isDetached(session.id) != true else { return }
-        if !created, let entry = snapshot.owner(for: keys, now: now), entry.app == appID,
+        if !created, let entry = snapshot.owner(for: keys, now: now), entry.app == appID, entry.host == sharing?.host,
            now.timeIntervalSince(entry.at) < Self.refresh { return }
         let creator = keys.all.compactMap { snapshot.entries[$0]?.createdBy }.first ?? (created ? appID : nil)
-        for key in keys.all { snapshot.entries[key] = .init(app: appID, at: now, createdBy: snapshot.entries[key]?.createdBy ?? creator) }
+        let host = sharing?.host
+        for key in keys.all {
+            snapshot.entries[key] = .init(app: appID, at: now, createdBy: snapshot.entries[key]?.createdBy ?? creator, host: host)
+        }
         let file = file, appID = appID
-        queue.async { SessionOwners.claim(keys, app: appID, created: created, at: now, in: file) }
+        queue.async { SessionOwners.claim(keys, app: appID, host: host, created: created, at: now, in: file) }
+        syncSoon()
+    }
+
+    // MARK: Sharing between Macs
+
+    /// Tell the hub of a claim a moment from now.
+    private func syncSoon() {
+        guard sharing != nil, syncTimer == nil else { return }
+        let timer = Timer(timeInterval: Self.syncDelay, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.syncTimer = nil
+                self?.syncShared()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        syncTimer = timer
+    }
+
+    /// Merge this Mac's claims with the hub's, in both directions, and report
+    /// this Mac as alive. The file the apps on this Mac read takes the claims
+    /// of the others; the hub takes this Mac's. A hub that cannot be reached
+    /// leaves things as they are, and one whose file cannot be read counts as
+    /// empty, so its next write replaces it. With `wait`, returns once done.
+    func syncShared(wait: Bool = false, now: Date = Date()) {
+        guard let sharing, !syncing else { return }
+        syncing = true
+        let file = file
+        let work: @Sendable () -> SessionOwners.SharedFile? = {
+            do {
+                let remote = try sharing.transport.read()
+                return Self.ownerSync(sharing, file: file, remoteData: remote, reachable: true, now: now)
+            } catch {
+                return Self.ownerSync(sharing, file: file, remoteData: nil, reachable: false, now: now)
+            }
+        }
+        if wait {
+            finishSync(queue.sync(execute: work))
+        } else {
+            queue.async { [weak self] in
+                let result = work()
+                DispatchQueue.main.async { MainActor.assumeIsolated { self?.finishSync(result) } }
+            }
+        }
+    }
+
+    private func finishSync(_ result: SessionOwners.SharedFile?) {
+        syncing = false
+        guard let result else { return }
+        shared = result
+        let loaded = SessionOwners.load(file)
+        if loaded != snapshot {
+            snapshot = loaded
+            changed()
+        }
+    }
+
+    /// One round with the hub, on the queue. Returns what the hub now holds,
+    /// or nil when it could not be reached.
+    private nonisolated static func ownerSync(_ sharing: Sharing, file: URL, remoteData: Data?, reachable: Bool,
+                                              now: Date) -> SessionOwners.SharedFile? {
+        guard reachable else { return nil }
+        let remote = SessionOwners.SharedFile.decode(remoteData, now: now)
+        let local = SessionOwners.load(file, now: now).entries
+        var merged = remote.merged(with: .init(entries: local, hosts: [:]), now: now)
+        let previous = remote.hosts[sharing.host]
+        let beat = previous.map { now.timeIntervalSince($0) >= SessionOwnership.heartbeat } ?? true
+        if beat { merged.hosts[sharing.host] = now }
+        if merged != remote || remoteData == nil, let data = try? merged.encoded() {
+            try? sharing.transport.write(data)
+        }
+        SessionOwners.merge(merged.entries, into: file, now: now)
+        return merged
     }
 
     /// Wait for claims being written; for tests.
@@ -146,7 +250,9 @@ extension AgentLaneStore {
         ownership = nil
         guard let file = configuration.sessionOwnerFile,
               let appID = configuration.ownerAppID ?? Bundle.main.bundleIdentifier, !appID.isEmpty else { return }
-        let ownership = SessionOwnership(store: self, file: file, appID: appID, isShared: configuration.isLaneShared)
+        let sharing = configuration.sharedLanes?.resolveOwners().map { SessionOwnership.Sharing(host: $0.host, transport: $0.transport) }
+        let ownership = SessionOwnership(store: self, file: file, appID: appID, isShared: configuration.isLaneShared,
+                                         sharing: sharing)
         ownership.onChange = { [weak self] in
             self?.updateBadge()
             self?.displayedExporter?.changed()

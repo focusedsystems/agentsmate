@@ -24,11 +24,15 @@ public enum SessionOwners {
         public var app: String
         public var at: Date
         public var createdBy: String?
+        /// The Mac the claim was made on, by its name in the hosts registry.
+        /// Nil for a claim made where Macs do not share ownership.
+        public var host: String?
 
-        public init(app: String, at: Date, createdBy: String? = nil) {
+        public init(app: String, at: Date, createdBy: String? = nil, host: String? = nil) {
             self.app = app
             self.at = at
             self.createdBy = createdBy
+            self.host = host
         }
     }
 
@@ -96,7 +100,7 @@ public enum SessionOwners {
                   let text = fields["at"] as? String, let at = parseDate(text),
                   now.timeIntervalSince(at) <= entryMaxAge else { continue }
             let creator = (fields["created_by"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-            entries[key] = Entry(app: app, at: at, createdBy: creator)
+            entries[key] = Entry(app: app, at: at, createdBy: creator, host: validHost(fields["host"]))
         }
         return Snapshot(entries: entries)
     }
@@ -115,12 +119,28 @@ public enum SessionOwners {
     /// `created`, `app` is also recorded as the session's creator unless an
     /// entry already names one. Returns whether the file was written.
     @discardableResult
-    public static func claim(_ keys: Keys, app: String, created: Bool = false, at: Date = Date(), in url: URL) -> Bool {
+    public static func claim(_ keys: Keys, app: String, host: String? = nil, created: Bool = false, at: Date = Date(),
+                             in url: URL) -> Bool {
         guard !keys.isEmpty, !app.isEmpty else { return false }
         return update(url, now: at) { entries in
             let creator = keys.all.compactMap { entries[$0]?.createdBy }.first ?? (created ? app : nil)
-            for key in keys.all { entries[key] = Entry(app: app, at: at, createdBy: entries[key]?.createdBy ?? creator) }
+            for key in keys.all {
+                entries[key] = Entry(app: app, at: at, createdBy: entries[key]?.createdBy ?? creator, host: host)
+            }
         }
+    }
+
+    /// Take the entries `remote` holds into the file at `url`, the newer
+    /// claim of each key winning. Returns whether the file changed.
+    @discardableResult
+    public static func merge(_ remote: [String: Entry], into url: URL, now: Date = Date()) -> Bool {
+        var changed = false
+        let wrote = update(url, now: now) { entries in
+            let merged = mergeEntries(entries, remote, now: now)
+            changed = merged != entries
+            entries = merged
+        }
+        return wrote && changed
     }
 
     /// Forget the session `keys` name.
@@ -129,7 +149,7 @@ public enum SessionOwners {
         update(url, now: now) { entries in for key in keys.all { entries.removeValue(forKey: key) } }
     }
 
-    private static func update(_ url: URL, now: Date, _ change: (inout [String: Entry]) -> Void) -> Bool {
+    static func update(_ url: URL, now: Date, _ change: (inout [String: Entry]) -> Void) -> Bool {
         let folder = url.deletingLastPathComponent()
         let fm = FileManager.default
         guard (try? fm.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])) != nil
@@ -154,10 +174,107 @@ public enum SessionOwners {
         for (key, entry) in entries {
             var fields: [String: Any] = ["app": entry.app, "at": formatter.string(from: entry.at)]
             if let creator = entry.createdBy { fields["created_by"] = creator }
+            if let host = entry.host { fields["host"] = host }
             object[key] = fields
         }
         guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys]) else { return false }
         return (try? DisplayedExport.write(data, to: url)) != nil
+    }
+
+    /// A host name that is safe to keep: a plain ssh alias.
+    static func validHost(_ value: Any?) -> String? {
+        guard let text = value as? String, !text.isEmpty, text.count <= 64, !text.hasPrefix("-"),
+              text.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || "._-".contains($0)) }) else { return nil }
+        return text
+    }
+
+    // MARK: Sharing between Macs
+
+    /// Two sets of claims as one: per key the newest `at` wins, a tie going to
+    /// the greater host then app name so every Mac settles on the same one.
+    /// Claims older than ``entryMaxAge`` go, and the oldest past ``maximumEntries``.
+    public static func mergeEntries(_ a: [String: Entry], _ b: [String: Entry], now: Date = Date()) -> [String: Entry] {
+        var merged = a
+        for (key, entry) in b {
+            if let held = merged[key] {
+                if (entry.at, entry.host ?? "", entry.app) > (held.at, held.host ?? "", held.app) { merged[key] = entry }
+            } else {
+                merged[key] = entry
+            }
+        }
+        merged = merged.filter { now.timeIntervalSince($0.value.at) <= entryMaxAge }
+        if merged.count > maximumEntries {
+            for key in merged.sorted(by: { $0.value.at < $1.value.at }).prefix(merged.count - maximumEntries).map(\.key) {
+                merged.removeValue(forKey: key)
+            }
+        }
+        return merged
+    }
+
+    /// How long a Mac may go unheard before its claims stop counting here.
+    public static let hostMaxSilence: TimeInterval = 10 * 60
+
+    /// The claims every Mac shares through the hub, and when each Mac last
+    /// reported in:
+    ///
+    /// ```json
+    /// {"version": 1, "entries": {"<key>": {"app": "…", "at": "…", "host": "…"}}, "hosts": {"<host>": "<time>"}}
+    /// ```
+    public struct SharedFile: Equatable, Sendable {
+        public var entries: [String: Entry]
+        public var hosts: [String: Date]
+
+        public init(entries: [String: Entry] = [:], hosts: [String: Date] = [:]) {
+            self.entries = entries
+            self.hosts = hosts
+        }
+
+        /// The file as the hub holds it. One that is too big, not an object of
+        /// the right shape, or has no usable part reads as empty; a claim or
+        /// host that cannot be read is skipped.
+        public static func decode(_ data: Data?, now: Date = Date()) -> SharedFile {
+            guard let data, !data.isEmpty, data.count <= maximumFileSize,
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return SharedFile() }
+            var file = SharedFile()
+            for (key, value) in (object["entries"] as? [String: Any]) ?? [:] {
+                guard !key.isEmpty, let fields = value as? [String: Any], let app = fields["app"] as? String, !app.isEmpty,
+                      let text = fields["at"] as? String, let at = parseDate(text),
+                      now.timeIntervalSince(at) <= entryMaxAge, at.timeIntervalSince(now) <= clockSkew else { continue }
+                let creator = (fields["created_by"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+                file.entries[key] = Entry(app: app, at: at, createdBy: creator, host: validHost(fields["host"]))
+            }
+            for (host, value) in (object["hosts"] as? [String: Any]) ?? [:] {
+                guard validHost(host) != nil, let text = value as? String, let at = parseDate(text),
+                      at.timeIntervalSince(now) <= clockSkew else { continue }
+                file.hosts[host] = at
+            }
+            return file
+        }
+
+        public func encoded() throws -> Data {
+            var entries: [String: Any] = [:]
+            for (key, entry) in self.entries {
+                var fields: [String: Any] = ["app": entry.app, "at": SessionOwners.formatter.string(from: entry.at)]
+                if let creator = entry.createdBy { fields["created_by"] = creator }
+                if let host = entry.host { fields["host"] = host }
+                entries[key] = fields
+            }
+            let hosts = self.hosts.mapValues { SessionOwners.formatter.string(from: $0) }
+            return try JSONSerialization.data(withJSONObject: ["version": 1, "entries": entries, "hosts": hosts] as [String: Any],
+                                              options: [.prettyPrinted, .sortedKeys])
+        }
+
+        /// Both files as one: newest claim per key, latest report per host.
+        public func merged(with other: SharedFile, now: Date = Date()) -> SharedFile {
+            SharedFile(entries: SessionOwners.mergeEntries(entries, other.entries, now: now),
+                       hosts: hosts.merging(other.hosts) { max($0, $1) })
+        }
+
+        /// Whether `host` has reported within ``hostMaxSilence`` of `now`.
+        public func isFresh(_ host: String, now: Date = Date()) -> Bool {
+            guard let seen = hosts[host] else { return false }
+            return now.timeIntervalSince(seen) <= SessionOwners.hostMaxSilence
+        }
     }
 
     // MARK: Deciding
@@ -176,10 +293,13 @@ public enum SessionOwners {
     public struct Decision: Equatable, Sendable {
         public var owner: String
         public var reason: Reason
+        /// The Mac the owner is on, when it is not this one.
+        public var host: String?
 
-        public init(owner: String, reason: Reason) {
+        public init(owner: String, reason: Reason, host: String? = nil) {
             self.owner = owner
             self.reason = reason
+            self.host = host
         }
     }
 
@@ -191,12 +311,29 @@ public enum SessionOwners {
     /// An app that is not running (`isRunning` says no; this app always is)
     /// cannot notify, so it is passed over at each step and the next applies:
     /// an alert that needs the person is never left to a closed app.
+    ///
+    /// With `myHost`, a claim made on another Mac is that Mac's: its app is
+    /// the owner whatever bundle id this app has, and this app stays silent,
+    /// as long as `hostIsFresh` says that Mac has reported in lately. When it
+    /// has not, the claim is ignored and the rules above decide locally. That
+    /// holds for an unshared lane too, but only for a claim by this same app,
+    /// since no other app lists the lane.
     public static func decide(keys: Keys, me: String, isShared: Bool, snapshot: Snapshot,
                               peers: () -> Set<String>, isRunning: (String) -> Bool = { _ in true },
+                              myHost: String? = nil, hostIsFresh: (String) -> Bool = { _ in false },
                               now: Date = Date()) -> Decision {
-        if !isShared { return Decision(owner: me, reason: .unshared) }
+        let latest = snapshot.owner(for: keys, now: now)
+        var remote: Entry?
+        if let latest, let myHost, let host = latest.host, host != myHost, hostIsFresh(host) { remote = latest }
+        if !isShared {
+            if let remote, remote.app == me { return Decision(owner: me, reason: .recorded, host: remote.host) }
+            return Decision(owner: me, reason: .unshared)
+        }
+        if let remote { return Decision(owner: remote.app, reason: .recorded, host: remote.host) }
         func running(_ app: String) -> Bool { app == me || isRunning(app) }
-        if let entry = snapshot.owner(for: keys, now: now), running(entry.app) { return Decision(owner: entry.app, reason: .recorded) }
+        if let entry = latest, entry.host == nil || myHost == nil || entry.host == myHost, running(entry.app) {
+            return Decision(owner: entry.app, reason: .recorded)
+        }
         if let creator = snapshot.creator(for: keys), running(creator) { return Decision(owner: creator, reason: .creator) }
         return Decision(owner: (peers().filter { running($0) }.union([me])).min() ?? me, reason: .tieBreak)
     }
