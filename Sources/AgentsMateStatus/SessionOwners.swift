@@ -176,6 +176,11 @@ public enum SessionOwners {
     public struct Decision: Equatable, Sendable {
         public var owner: String
         public var reason: Reason
+
+        public init(owner: String, reason: Reason) {
+            self.owner = owner
+            self.reason = reason
+        }
     }
 
     /// The app that should notify about the session `keys` name: this app

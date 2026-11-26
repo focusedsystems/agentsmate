@@ -11,6 +11,9 @@ import AppKit
 final class SharedLaneSync {
     static let debounce: TimeInterval = 1
     static let activeInterval: TimeInterval = 30
+    /// How often it syncs while the app is not frontmost (an app the installer
+    /// reopened hidden still has to mirror its rows).
+    static let idleInterval: TimeInterval = 300
 
     private weak var store: AgentLaneStore?
     let transport: any SharedLaneTransport
@@ -59,14 +62,14 @@ final class SharedLaneSync {
                                             queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.sync()
-                self?.startActiveTimer()
+                self?.startActiveTimer(interval: Self.activeInterval)
             }
         })
         observers.append(center.addObserver(forName: NSApplication.didResignActiveNotification, object: nil,
                                             queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.stopActiveTimer() }
+            MainActor.assumeIsolated { self?.startActiveTimer(interval: Self.idleInterval) }
         })
-        if NSApp?.isActive == true { startActiveTimer() }
+        startActiveTimer(interval: NSApp?.isActive == true ? Self.activeInterval : Self.idleInterval)
         sync()
     }
 
@@ -96,19 +99,15 @@ final class SharedLaneSync {
         sync()
     }
 
-    private func startActiveTimer() {
-        guard activeTimer == nil else { return }
-        let timer = Timer(timeInterval: Self.activeInterval, repeats: true) { [weak self] _ in
+    /// Sync every `interval` seconds, in place of any timer already running.
+    private func startActiveTimer(interval: TimeInterval) {
+        activeTimer?.invalidate()
+        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.sync() }
         }
-        timer.tolerance = Self.activeInterval * CadenceTimer.toleranceFraction
+        timer.tolerance = interval * CadenceTimer.toleranceFraction
         RunLoop.main.add(timer, forMode: .common)
         activeTimer = timer
-    }
-
-    private func stopActiveTimer() {
-        activeTimer?.invalidate()
-        activeTimer = nil
     }
 
     /// Sync now, or right after the sync already running. `done` is called

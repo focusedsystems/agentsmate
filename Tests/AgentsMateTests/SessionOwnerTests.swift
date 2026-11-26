@@ -152,4 +152,73 @@ final class SessionOwnerTests: XCTestCase {
         XCTAssertEqual(SessionOwners.load(file).entries.isEmpty, false, "the next claim replaces the bad file")
         XCTAssertTrue(notifies(a))
     }
+
+    private func finder(_ app: String) -> AgentLaneStore {
+        let config = AgentLaneStore.Configuration(termProgram: "T", sessionFileDirectory: nil, findsDetachedSessions: true,
+                                                  sharedLanes: nil, liveSnapshotFile: nil, opensActiveOnly: false,
+                                                  displayedExportFile: nil, sessionOwnerFile: file, ownerAppID: app)
+        let store = AgentLaneStore(configuration: config,
+                                   backends: [CommandLaneBackend.tmuxLane(id: "agent", displayName: "Agent", command: "true",
+                                                                          statusAgent: "claude", tmuxSessions: TmuxLaneSessions(prefixes: ["lane-"]))],
+                                   statusFeed: nil, defaults: UserDefaults(suiteName: "agentsmate-owner-\(UUID().uuidString)")!)
+        store.ownership?.isRunning = { _ in true }
+        store.received(found: [.init(backendID: "agent", session: DiscoveredSession(kind: "tmux", name: "lane-x", directory: "/work/repo",
+                                                                                     agentID: "sess-1"))])
+        return store
+    }
+
+    func testAnAppNeverOwnsASessionItOnlyFoundRunning() throws {
+        SessionOwners.claim(.init(sessionIDs: ["sess-1"], tmuxName: "lane-x"), app: "app.b", in: file)
+        // A claim this app made before it stopped listing the session, newer than b's.
+        let stale = Date().addingTimeInterval(60)
+        SessionOwners.claim(.init(sessionIDs: ["sess-1"]), app: "app.a", at: stale, in: file)
+        let a = finder("app.a")
+        let id = try XCTUnwrap(a.detachedIDs.first)
+        let row = try XCTUnwrap(a.sessions[id])
+        XCTAssertEqual(a.ownerApp(of: row), "app.b", "its own old claim is ignored")
+        XCTAssertFalse(a.shouldNotify(for: row))
+        a.claimOwnership(of: row)
+        a.open(id)
+        a.ownership?.flush()
+        XCTAssertEqual(SessionOwners.load(file).entries["sess-1"]?.app, "app.a", "a found row claims nothing new")
+        XCTAssertEqual(SessionOwners.load(file).entries["sess-1"]?.at.timeIntervalSince1970 ?? 0, stale.timeIntervalSince1970, accuracy: 1)
+    }
+
+    func testAFoundSessionNobodyElseListsStillHasAnAnswerer() throws {
+        let a = finder("app.a")
+        let row = try XCTUnwrap(a.sessions[try XCTUnwrap(a.detachedIDs.first)])
+        XCTAssertEqual(a.ownerApp(of: row), "app.a")
+    }
+
+    func testSharingStartsAtLaunchWithoutAnyRestore() throws {
+        let previous = AgentLaneStore.sharedLanesStartDelay
+        AgentLaneStore.sharedLanesStartDelay = 0.05
+        defer { AgentLaneStore.sharedLanesStartDelay = previous }
+        let hosts = AgentHosts(hosts: [.init(name: "hub-mac", role: .hub)], selfName: "hub-mac")
+        let transport = LaunchTransport()
+        let settings = SharedLaneSettings(appID: "example.app",
+                                          cacheFile: FileManager.default.temporaryDirectory.appendingPathComponent("c-\(UUID().uuidString).json"),
+                                          restores: false, transport: transport, hosts: hosts)
+        let store = AgentLaneStore(configuration: .init(termProgram: "T", sessionFileDirectory: nil, findsDetachedSessions: false,
+                                                        sharedLanes: settings),
+                                   backends: [CommandLaneBackend.shell], statusFeed: nil,
+                                   defaults: UserDefaults(suiteName: "agentsmate-owner-\(UUID().uuidString)")!)
+        store.sync(lanes: [lane("one")])
+        let started = expectation(description: "started")
+        Task { @MainActor in
+            while store.sharedLanes?.appliedOnce != true { try? await Task.sleep(nanoseconds: 50_000_000) }
+            started.fulfill()
+        }
+        wait(for: [started], timeout: 10)
+        XCTAssertGreaterThan(transport.reads, 0, "it read the hub with no restore and no activation")
+    }
+}
+
+private final class LaunchTransport: SharedLaneTransport, @unchecked Sendable {
+    private let lock = NSLock()
+    private var data: Data?
+    private var count = 0
+    var reads: Int { lock.lock(); defer { lock.unlock() }; return count }
+    func read() throws -> Data? { lock.lock(); defer { lock.unlock() }; count += 1; return data }
+    func write(_ data: Data) throws { lock.lock(); self.data = data; lock.unlock() }
 }

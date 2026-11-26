@@ -66,10 +66,30 @@ final class SessionOwnership {
     func decision(for session: AgentLaneSession, fresh: Bool = false, now: Date = Date()) -> SessionOwners.Decision {
         if fresh { snapshot = SessionOwners.load(file, now: now) }
         let keys = keys(for: session)
+        if store?.isDetached(session.id) == true { return unlistedDecision(keys: keys, now: now) }
         let shared = isShared?(session.lane) ?? false
         return SessionOwners.decide(keys: keys, me: appID, isShared: shared, snapshot: snapshot,
                                     peers: { self.peerApps(for: keys, now: now) },
                                     isRunning: isRunning, now: now)
+    }
+
+    /// Who owns a session this app only found running and does not list as a
+    /// row of its own: never this app. Its own claims on it (made before it
+    /// stopped listing it) are ignored, and the session goes to the app that
+    /// last worked in it, made it, or lists it. Only when no other app does is
+    /// it left to this one, so something still answers for it.
+    private func unlistedDecision(keys: SessionOwners.Keys, now: Date) -> SessionOwners.Decision {
+        var others = snapshot
+        others.entries = others.entries.filter { $0.value.app != appID }
+        func running(_ app: String) -> Bool { isRunning(app) }
+        if let entry = others.owner(for: keys, now: now), running(entry.app) {
+            return .init(owner: entry.app, reason: .recorded)
+        }
+        if let creator = others.creator(for: keys), creator != appID, running(creator) {
+            return .init(owner: creator, reason: .creator)
+        }
+        if let peer = peerApps(for: keys, now: now).filter(running).min() { return .init(owner: peer, reason: .tieBreak) }
+        return .init(owner: appID, reason: .unshared)
     }
 
     func owns(_ session: AgentLaneSession, fresh: Bool = false) -> Bool {
@@ -86,7 +106,7 @@ final class SessionOwnership {
     /// The person is working in `session` here: this app becomes its owner.
     func claim(_ session: AgentLaneSession, created: Bool = false, now: Date = Date()) {
         let keys = keys(for: session)
-        guard !keys.isEmpty else { return }
+        guard !keys.isEmpty, store?.isDetached(session.id) != true else { return }
         if !created, let entry = snapshot.owner(for: keys, now: now), entry.app == appID,
            now.timeIntervalSince(entry.at) < Self.refresh { return }
         let creator = keys.all.compactMap { snapshot.entries[$0]?.createdBy }.first ?? (created ? appID : nil)

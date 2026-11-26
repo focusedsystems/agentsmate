@@ -484,6 +484,12 @@ public final class AgentLaneStore: ObservableObject {
             agentHosts = resolved.hosts
             sharedLanes = SharedLaneSync(store: self, transport: resolved.transport, cacheFile: settings.cacheFile,
                                        restores: settings.restores)
+            // An app that never calls restoreAtLaunch() or performLaunchBehavior(),
+            // or is reopened hidden, still mirrors its rows: sync starts a few
+            // seconds after launch whether or not the app is frontmost.
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.sharedLanesStartDelay) { [weak self] in
+                MainActor.assumeIsolated { self?.sharedLanes?.start() }
+            }
         }
         if configuration.hostSessions != nil { startHostListing() }
         startLaneRequests()
@@ -1069,6 +1075,9 @@ public final class AgentLaneStore: ObservableObject {
     }
 
     // MARK: Shared lanes and hosts
+
+    /// How long after launch sharing starts if nothing started it sooner.
+    nonisolated(unsafe) static var sharedLanesStartDelay: TimeInterval = 5
 
     /// The hosts registry (``AgentHosts``), when this Mac has one.
     @Published public private(set) var agentHosts: AgentHosts?
