@@ -121,7 +121,9 @@ public enum AgentBoard {
         public var conversationID: String?
         /// The tmux session name.
         public var sessionName: String?
-        /// When the session last reported, when known.
+        /// When the session's summary was last written, which follows its
+        /// last reply; nil when it has none. (A polled list's time is only
+        /// when it was read.)
         public var updatedAt: Date?
         /// Whether a terminal in the app has it open.
         public var attached: Bool
@@ -259,12 +261,10 @@ public enum AgentBoard {
         }
         // Short id to conversation id, from every Mac's background list.
         var conversations: [String: String] = [:]
-        var claudeUpdated: [String: Date] = [:]
         for snapshot in snapshots {
             for record in snapshot.claudeSessions {
                 guard let id = record.agentID else { continue }
                 if let full = record.sessionID { conversations[snapshot.host + "\u{1}" + id] = full.lowercased() }
-                claudeUpdated[snapshot.host + "\u{1}" + id] = record.updatedAt
             }
         }
 
@@ -289,7 +289,7 @@ public enum AgentBoard {
                                     host: host, seenOn: snapshot.host, folder: row.folder, agent: row.agent,
                                     backend: row.backend, laneID: row.laneID, sessionID: short,
                                     conversationID: conversation, sessionName: row.sessionName,
-                                    updatedAt: short.flatMap { claudeUpdated[host + "\u{1}" + $0] } ?? summary?.generatedAt,
+                                    updatedAt: summary?.generatedAt,
                                     attached: row.attached)
                     // Lower ranks win: listed here, listed by its owner, urgent, open.
                     let rank = [snapshot.host == localHost ? 0 : 1,
@@ -317,7 +317,7 @@ public enum AgentBoard {
                                 app: nil, section: nil, host: snapshot.host, seenOn: snapshot.host,
                                 folder: record.directory, agent: "claude", backend: "claude-bg", laneID: nil,
                                 sessionID: id, conversationID: conversation, sessionName: nil,
-                                updatedAt: record.updatedAt, attached: false)
+                                updatedAt: conversation.flatMap { summaries[$0]?.generatedAt }, attached: false)
                 byKey[key] = (card, [2, 1, column.urgency, 1])
             }
         }
