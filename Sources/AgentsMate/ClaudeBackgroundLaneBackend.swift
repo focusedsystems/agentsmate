@@ -42,8 +42,9 @@ public struct ClaudeBackgroundLaneBackend: LaneBackend {
     public var startedIDDirectory: URL = ClaudeBackgroundLaneBackend.defaultStartedIDDirectory
 
     /// Names that mean this Mac, compared ignoring case. A lane whose host is
-    /// one of them runs here, the same as a lane with no host.
-    public var localHostNames: Set<String> = AgentHosts.thisMacNames
+    /// one of them runs here, the same as a lane with no host. That includes
+    /// the name the hosts registry gives this Mac, which is the name lanes carry.
+    public var localHostNames: Set<String> = AgentHosts.thisMacNames.union(AgentHosts.load().map { [$0.selfName] } ?? [])
 
     /// Whether `host` is another machine: set, and not one of this Mac's names.
     func isRemote(_ host: String?) -> Bool {

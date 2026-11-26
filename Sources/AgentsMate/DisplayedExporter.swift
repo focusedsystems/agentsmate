@@ -153,10 +153,16 @@ extension AgentLaneStore {
             ?? (backend is ClaudeBackgroundLaneBackend ? "claude" : nil)
         let running = session.record.flatMap { $0.state == .ended ? nil : $0 }
         let parallel = parallelOwner(of: lane.id) != nil
+        let ownID = lane.agentSessionID ?? ownedSession(for: lane)?.agentID
+        // A background row is matched to its record by its own short id or
+        // its conversation id, so a record that carries only the conversation
+        // id (a hook's status file) is the same session. Report the short id,
+        // never the conversation id beside it, so the two fields name one session.
+        let attachedID = running?.agentID ?? (running != nil && lane.agentSessionID != nil ? ownID : nil) ?? running?.sessionID
         return DisplayedExport.Row(
             section: section, title: session.title, laneID: lane.id,
             backend: backendKind(backend, id: lane.backendID), agent: agent,
-            sessionID: lane.agentSessionID ?? ownedSession(for: lane)?.agentID, attachedSessionID: running?.agentID ?? running?.sessionID,
+            sessionID: ownID, attachedSessionID: attachedID,
             sessionName: lane.sessionName ?? backend?.sessionName(for: lane),
             host: liveHost(for: lane) ?? backend.flatMap(DetachedSessions.laneHost) ?? lane.host,
             folder: lane.directory?.path, state: session.status.exportState, attached: session.isAttached,
