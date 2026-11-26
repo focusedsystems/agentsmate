@@ -23,6 +23,8 @@ private struct BoardCommands: Commands {
     @ObservedObject var model: BoardModel
     @Binding var selection: AgentBoard.Card.ID?
     @FocusedValue(\.stopRequest) private var stopRequest
+    @AppStorage("hostFilter") private var hostFilter = ""
+    @AppStorage("agentFilter") private var agentFilter = ""
 
     private var selected: AgentBoard.Card? { model.cards.first { $0.id == selection } }
 
@@ -31,6 +33,16 @@ private struct BoardCommands: Commands {
         CommandGroup(after: .toolbar) {
             Button("Refresh") { model.refresh(remote: true) }
                 .keyboardShortcut("r")
+            Divider()
+            Picker("Mac", selection: $hostFilter) {
+                Text("All Macs").tag("")
+                ForEach([model.localHost] + model.remoteHosts, id: \.self) { Text($0).tag($0) }
+            }
+            Picker("Agent", selection: $agentFilter) {
+                Text("All Agents").tag("")
+                Text("Claude").tag("claude")
+                Text("Codex").tag("codex")
+            }
         }
         CommandMenu("Agent") {
             Button("Open in App") { if let selected { model.open(selected) } }
