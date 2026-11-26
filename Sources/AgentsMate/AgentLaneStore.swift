@@ -484,6 +484,7 @@ public final class AgentLaneStore: ObservableObject {
             sharedLanes = SharedLaneSync(store: self, transport: resolved.transport, cacheFile: settings.cacheFile)
         }
         if configuration.hostSessions != nil { startHostListing() }
+        startLaneRequests()
         terminationObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
             // Terminals ending as the app quits are not the person closing
@@ -493,6 +494,8 @@ public final class AgentLaneStore: ObservableObject {
     }
 
     private var terminationObserver: NSObjectProtocol?
+    /// Watches for ``LaneRequest``s from other processes.
+    var laneRequestObserver: NSObjectProtocol?
 
     // MARK: History
 

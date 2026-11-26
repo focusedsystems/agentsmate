@@ -340,9 +340,21 @@ public struct ClaudeBackgroundLaneBackend: LaneBackend {
     /// `claude stop` ends the session and keeps its conversation. Only by
     /// id: a name can match several sessions, or part of another's name.
     public func stop(_ lane: AgentLane) {
-        guard let id = attachID(for: lane) else { return }
-        LaneCommand.run([claude.isEmpty ? "claude" : claude, "stop", id])
-        forgetInList(id)
+        guard let id = attachID(for: lane), AgentSessionStop.isValidClaudeID(id) else { return }
+        // On the Mac the session runs on, and taken out of the shared list
+        // only once Claude no longer lists it.
+        let host = isRemote(lane.host) ? lane.host : nil
+        let binary = host == nil ? (claude.isEmpty ? "claude" : claude) : "claude"
+        let title = lane.title
+        let backend = self
+        Task.detached {
+            let outcome = await AgentSessionStop.run(.claudeBackground(id: id), host: host, claude: binary)
+            if outcome.stopped {
+                if host == nil { backend.forgetInList(id) }
+            } else {
+                await LaneStopReport.failed(title, outcome.message)
+            }
+        }
     }
 
     /// Take a stopped session out of the shared list at once, so a row does

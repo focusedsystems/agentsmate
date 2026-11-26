@@ -15,6 +15,8 @@ let package = Package(
         .library(name: "AgentsMateChat", targets: ["AgentsMateChat"]),
         // The hook and notify writer that feeds lane status.
         .executable(name: "agentsmate-status", targets: ["agentsmate-status"]),
+        // The dashboard app: every agent on every Mac, across apps. build-app.sh bundles it.
+        .executable(name: "AgentsMateApp", targets: ["AgentsMateApp"]),
     ],
     dependencies: [
         // 1.12 added Metal shaders, which the Command Line Tools cannot compile.
@@ -34,6 +36,8 @@ let package = Package(
         ),
         .target(name: "AgentsMateChat", dependencies: ["AgentsMateStatus"]),
         .executableTarget(name: "agentsmate-status", dependencies: ["AgentsMateStatus"]),
+        .executableTarget(name: "AgentsMateApp", dependencies: ["AgentsMate", "AgentsMateStatus"],
+                          exclude: ["Resources"]),
         .testTarget(name: "AgentsMateStatusTests", dependencies: ["AgentsMateStatus"]),
         .testTarget(name: "AgentsMateUpdatesTests", dependencies: ["AgentsMateUpdates"]),
         .testTarget(name: "AgentsMateTests", dependencies: ["AgentsMate"]),

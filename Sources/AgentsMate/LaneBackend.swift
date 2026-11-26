@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 import AgentsMateStatus
 
 /// One row in the lane list: something an agent can be opened in.
@@ -174,6 +174,18 @@ public extension LaneBackend {
     func sessionName(for lane: AgentLane) -> String? { lane.sessionName }
     func discoverSessions() async -> [DiscoveredSession] { [] }
     func attachLaunch(for lane: AgentLane, sessionName: String, shell: String) -> TerminalLaunch? { nil }
+}
+
+/// Tells the person a Stop did not end the session, with what the stop said.
+@MainActor
+enum LaneStopReport {
+    static func failed(_ title: String, _ message: String?) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "“\(title)” did not stop"
+        alert.informativeText = message ?? "The session is still running."
+        alert.runModal()
+    }
 }
 
 /// Runs a command without waiting for it, for stopping a lane.
@@ -388,7 +400,16 @@ public struct CommandLaneBackend: LaneBackend {
     /// `tmux kill-session`; otherwise the app's ``stopCommand`` runs.
     public func stop(_ lane: AgentLane) {
         if let tmux = tmuxSessions, lane.sessionName != nil || tmux.host != nil || stopCommand == nil {
-            if let name = sessionName(for: lane), let command = tmux.stopCommand(session: name) { LaneCommand.run(command) }
+            guard let name = sessionName(for: lane), AgentSessionStop.isValidTmuxName(name) else { return }
+            // The agent is asked to /exit first, so it ends its turn and
+            // saves; the session is then ended and the result checked.
+            let host = tmux.validHost
+            let binary = host == nil ? tmux.tmux : tmux.remoteTmux
+            let title = lane.title
+            Task.detached {
+                let outcome = await AgentSessionStop.run(.tmux(name: name), host: host, tmux: binary)
+                if !outcome.stopped { await LaneStopReport.failed(title, outcome.message) }
+            }
             return
         }
         guard let stopCommand else { return }
