@@ -240,7 +240,7 @@ extension AgentsMainToolbar where Trailing == AgentsNoTrailing {
 
 /// The window chrome that goes with ``AgentsMainToolbar``: the window's width
 /// for the tab bar, AppKit's ranking of the toolbar items, and the search
-/// field pinned to the title bar.
+/// field as the toolbar's last item.
 private struct AgentsMainWindowChrome<Search: View>: ViewModifier {
     @Binding var windowWidth: CGFloat
     let labels: Set<String>
@@ -253,13 +253,28 @@ private struct AgentsMainWindowChrome<Search: View>: ViewModifier {
             // again left the toolbar compact. Observe the geometry directly.
             .modifier(WindowWidthReader(width: $windowWidth))
             .background(AgentsToolbarPriorityBridge(labels: labels))
-            .background {
-                if let search {
-                    AgentsPinnedSearchTitlebar(width: AgentsToolbar.searchWidth(forWindow: windowWidth)) {
-                        search(AgentsToolbar.searchWidth(forWindow: windowWidth))
-                    }
-                }
+            .modifier(AgentsToolbarSearchItem(width: AgentsToolbar.searchWidth(forWindow: windowWidth), search: search))
+    }
+}
+
+/// The search field as a toolbar item, so the system draws it as the glass
+/// capsule every native toolbar search has, the one Mail's toolbar shows. A
+/// fixed space keeps the capsule apart from the items before it. The priority
+/// bridge keeps the item out of the overflow menu.
+private struct AgentsToolbarSearchItem<Search: View>: ViewModifier {
+    let width: CGFloat
+    let search: ((CGFloat) -> Search)?
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if let search {
+            content.toolbar {
+                ToolbarSpacer(.fixed, placement: .primaryAction)
+                ToolbarItem(placement: .primaryAction) { search(width) }
             }
+        } else {
+            content
+        }
     }
 }
 
@@ -304,9 +319,8 @@ extension View {
     }
 }
 
-/// Ranks secondary toolbar actions after the module navigation. Search is
-/// reserved independently by ``AgentsPinnedSearchTitlebar`` and never enters
-/// overflow.
+/// Ranks secondary toolbar actions after the module navigation. The search
+/// field's item ranks highest of all, so it never enters overflow.
 struct AgentsToolbarPriorityBridge: NSViewRepresentable {
     let labels: Set<String>
 
@@ -363,7 +377,7 @@ struct AgentsToolbarPriorityBridge: NSViewRepresentable {
             for item in toolbar.items {
                 if item.itemIdentifier == .flexibleSpace || item.itemIdentifier == .space { continue }
                 let priority: NSToolbarItem.VisibilityPriority
-                if item.itemIdentifier == toolbar.centeredItemIdentifier {
+                if item.itemIdentifier == toolbar.centeredItemIdentifier || Self.holdsSearchField(item) {
                     priority = .high
                 } else if labels.contains(item.label) {
                     priority = .high
@@ -373,6 +387,13 @@ struct AgentsToolbarPriorityBridge: NSViewRepresentable {
                 }
                 if item.visibilityPriority != priority { item.visibilityPriority = priority }
             }
+        }
+
+        private static func holdsSearchField(_ item: NSToolbarItem) -> Bool {
+            func find(_ view: NSView) -> Bool {
+                view is NSSearchField || view.subviews.contains(where: find)
+            }
+            return item.view.map(find) ?? false
         }
 
         /// The overflow menu drew Agents with a generic glyph; it is the
@@ -389,80 +410,6 @@ struct AgentsToolbarPriorityBridge: NSViewRepresentable {
                 menuItem.image = image
                 item.menuFormRepresentation = menuItem
             }
-        }
-    }
-}
-
-/// Search belongs to the window title bar, outside NSToolbar's overflow
-/// system. A trailing accessory reserves its width before AppKit lays out
-/// toolbar items.
-struct AgentsPinnedSearchTitlebar: NSViewRepresentable {
-    let width: CGFloat
-    let content: AnyView
-
-    init<Content: View>(width: CGFloat, @ViewBuilder content: () -> Content) {
-        self.width = width
-        self.content = AnyView(content())
-    }
-
-    func makeNSView(context: Context) -> BridgeView { BridgeView() }
-
-    func updateNSView(_ view: BridgeView, context: Context) {
-        view.configure(content: content, width: width)
-    }
-
-    static func dismantleNSView(_ view: BridgeView, coordinator: ()) { view.detach() }
-
-    final class BridgeView: NSView {
-        private var accessory: NSTitlebarAccessoryViewController?
-        private var hosting: NSHostingView<AnyView>?
-        private weak var attachedWindow: NSWindow?
-        private var content = AnyView(EmptyView())
-        private var width: CGFloat = 320
-
-        func configure(content: AnyView, width: CGFloat) {
-            self.content = content
-            self.width = width
-            install()
-        }
-
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            if attachedWindow !== window { detach() }
-            install()
-        }
-
-        private func install() {
-            guard let window else { return }
-            let root = AnyView(content
-                .padding(.horizontal, 8)
-                .frame(width: width + 16, height: 44))
-            if let hosting {
-                hosting.rootView = root
-                hosting.setFrameSize(NSSize(width: width + 16, height: 44))
-                return
-            }
-            let hosting = NSHostingView(rootView: root)
-            hosting.frame = NSRect(x: 0, y: 0, width: width + 16, height: 44)
-            let accessory = NSTitlebarAccessoryViewController()
-            accessory.layoutAttribute = .right
-            accessory.view = hosting
-            // A hidden title tells AppKit to reserve accessory width for the toolbar.
-            window.titleVisibility = .hidden
-            window.addTitlebarAccessoryViewController(accessory)
-            self.hosting = hosting
-            self.accessory = accessory
-            attachedWindow = window
-        }
-
-        func detach() {
-            if let window = attachedWindow, let accessory,
-               let index = window.titlebarAccessoryViewControllers.firstIndex(where: { $0 === accessory }) {
-                window.removeTitlebarAccessoryViewController(at: index)
-            }
-            accessory = nil
-            hosting = nil
-            attachedWindow = nil
         }
     }
 }
