@@ -17,12 +17,12 @@ final class EmptySearchTests: XCTestCase {
         return store
     }
 
-    func testASearchWithNoMatchShowsEveryLane() {
+    func testASearchWithNoMatchShowsNoLanes() {
         let store = store()
         typealias Sidebar = AgentLaneSidebar<EmptyView>
         XCTAssertEqual(Sidebar.visibleLanes(store: store, query: "api", filters: []).map(\.id), ["api"])
-        XCTAssertEqual(Sidebar.visibleLanes(store: store, query: "zzz", filters: []).map(\.id), ["api", "web"])
-        XCTAssertEqual(Sidebar.visibleLanes(store: store, query: "zzz", filters: [.running]).map(\.id), ["api", "web"])
+        XCTAssertEqual(Sidebar.visibleLanes(store: store, query: "zzz", filters: []), [])
+        XCTAssertEqual(Sidebar.visibleLanes(store: store, query: "zzz", filters: [.running]), [])
     }
 
     func testAFilterAloneIsLeftToTheFiltersOwnRule() {
