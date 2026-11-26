@@ -88,6 +88,59 @@ final class SharedLaneListTests: XCTestCase {
         XCTAssertEqual(merged, remote, "nothing to write back")
     }
 
+    func testFirstMergeKeepsEveryRowFromBothMacs() {
+        var mine = [lane("a", title: "Mine", order: 0, updated: 0), lane("b", order: 1, updated: 0)]
+        mine[0].pinned = true
+        var theirsA = lane("a", title: "Theirs", updated: 50)
+        theirsA.icon = "bolt"
+        let remote = SharedLaneList(lanes: [theirsA, lane("c", order: 1, updated: 50)])
+        let merged = SharedLaneList.reconcile(local: mine, base: SharedLaneList(), remote: remote, closing: [],
+                                              edited: date(20), now: date(100))
+        XCTAssertEqual(Set(merged.lanes.map(\.id)), ["a", "b", "c"], "no row is lost")
+        XCTAssertEqual(merged.lane("a")?.title, "Theirs", "the newer edit wins")
+        XCTAssertEqual(merged.lane("a")?.icon, "bolt")
+        XCTAssertEqual(merged.lane("a")?.pinned, true, "a pin from either Mac survives")
+        XCTAssertEqual(merged.lane("b")?.updated, date(20), "a row only here is stamped with when it was edited")
+        XCTAssertEqual(merged.lanes.map(\.order), [0, 1, 2])
+    }
+
+    func testFirstMergeLetsTheNewerLocalEditWin() {
+        let remote = SharedLaneList(lanes: [lane("a", title: "Theirs", updated: 10)])
+        let merged = SharedLaneList.reconcile(local: [lane("a", title: "Mine", updated: 0)], base: SharedLaneList(),
+                                              remote: remote, closing: [], edited: date(60), now: date(100))
+        XCTAssertEqual(merged.lane("a")?.title, "Mine")
+        XCTAssertEqual(merged.lane("a")?.updated, date(60))
+        let unknown = SharedLaneList.reconcile(local: [lane("a", title: "Mine", updated: 0)], base: SharedLaneList(),
+                                               remote: remote, closing: [], edited: nil, now: date(100))
+        XCTAssertEqual(unknown.lane("a")?.title, "Theirs", "with no edit time the list's copy stands")
+    }
+
+    func testFirstMergeDoesNotRewriteIdenticalRows() {
+        let remote = SharedLaneList(lanes: [lane("a", title: "Same", updated: 10)])
+        let merged = SharedLaneList.reconcile(local: [lane("a", title: "Same", updated: 0)], base: SharedLaneList(),
+                                              remote: remote, closing: [], now: date(100))
+        XCTAssertEqual(merged, remote)
+    }
+
+    func testAMoveHereReachesTheListWithoutTouchingContent() {
+        let base = SharedLaneList(lanes: [lane("a", order: 0, updated: 10), lane("b", order: 1, updated: 10),
+                                          lane("c", order: 2, updated: 10)])
+        let local = [lane("c", order: 0, updated: 0), lane("a", order: 1, updated: 0), lane("b", order: 2, updated: 0)]
+        let merged = SharedLaneList.reconcile(local: local, base: base, remote: base, closing: [], now: date(50))
+        XCTAssertEqual(merged.lanes.map(\.id), ["c", "a", "b"])
+        XCTAssertEqual(merged.lane("b")?.updated, date(10), "a lane that kept its neighbour is not restamped")
+        XCTAssertEqual(merged.lane("c")?.updated, date(50))
+    }
+
+    func testListSaysWhetherToRestoreAndOnceFalseStaysFalse() throws {
+        let off = SharedLaneList(lanes: [lane("a", updated: 1)], restore: false)
+        let on = SharedLaneList(lanes: [lane("a", updated: 2)])
+        XCTAssertFalse(SharedLaneList.merge([on, off], now: date(100)).restore)
+        XCTAssertFalse(SharedLaneList.reconcile(local: [], base: on, remote: on, closing: [], restores: false, now: date(100)).restore)
+        XCTAssertEqual(try SharedLaneList.decode(off.encoded()).restore, false)
+        XCTAssertTrue(try SharedLaneList.decode(Data(#"{"version":1,"lanes":[]}"#.utf8)).restore, "files from before the flag restore")
+    }
+
     func testFileUsesTheContractFieldNamesWithNulls() throws {
         let list = SharedLaneList(lanes: [SharedLaneList.Lane(id: "u1", backendID: "claude", order: 3, updated: date(0))],
                                   closed: [.init(id: "u2", at: date(60))])
@@ -96,7 +149,9 @@ final class SharedLaneListTests: XCTestCase {
         let first = (object?["lanes"] as? [[String: Any]])?.first
         XCTAssertEqual(Set(first?.keys.map { $0 } ?? []),
                        ["id", "title", "directory", "backendID", "command", "variantFlag", "variant", "host",
-                        "section", "pinned", "order", "updated"])
+                        "section", "pinned", "order", "updated", "icon", "tint", "sessionName", "agentSessionID",
+                        "overlay"])
+        XCTAssertEqual(object?["restore"] as? Bool, true)
         XCTAssertTrue(first?["variant"] is NSNull)
         XCTAssertEqual(first?["updated"] as? String, "2027-01-15T08:00:00Z")
         let closed = (object?["closed"] as? [[String: Any]])?.first
@@ -367,6 +422,87 @@ final class SharedLaneStoreTests: XCTestCase {
         XCTAssertEqual(first.lanes.map(\.id), ["main"])
         XCTAssertEqual(first.sessions["main"]?.title, "Renamed")
         XCTAssertEqual(stops.stops, 0, "closing elsewhere never stops a session")
+    }
+
+    func testFirstSyncOnTwoMacsKeepsEveryRowAndEveryPin() throws {
+        let hub = MemoryTransport()
+        let desktop = makeStore(sharing: hub)
+        desktop.add(folderLane("one"), open: false)
+        desktop.add(folderLane("two"), open: false)
+        desktop.layout.setPinned("one", true)
+        desktop.setIcon(LaneIcon.symbol("bolt"), tint: "#112233", for: "two")
+        let laptop = makeStore(sharing: hub, me: "laptop")
+        laptop.add(folderLane("three"), open: false)
+        laptop.add(folderLane("two"), open: false)
+        laptop.layout.setPinned("two", true)
+        laptop.layout.setPinned("three", true)
+        sync(desktop)
+        sync(laptop)
+        sync(desktop)
+        for store in [desktop, laptop] {
+            XCTAssertEqual(Set(store.lanes.map(\.id)), ["one", "two", "three"])
+            XCTAssertEqual(store.layout.pinned, ["one", "two", "three"])
+            XCTAssertEqual(store.layout.icons["two"], LaneIcon.symbol("bolt").stringValue)
+            XCTAssertEqual(store.layout.tints["two"], "#112233")
+        }
+        XCTAssertEqual(stops.stops, 0)
+        XCTAssertTrue(desktop.sessions.values.allSatisfy { !$0.isAttached }, "syncing attaches nothing")
+        XCTAssertTrue(laptop.sessions.values.allSatisfy { !$0.isAttached })
+    }
+
+    func testListSyncedForMirroringOnlyAsksNothingToRestoreIt() {
+        let hub = MemoryTransport()
+        let hosts = AgentHosts(hosts: [.init(name: "hub-mac", role: .hub)], selfName: "hub-mac")
+        let settings = SharedLaneSettings(appID: "example.app",
+                                          cacheFile: FileManager.default.temporaryDirectory.appendingPathComponent("c-\(UUID().uuidString).json"),
+                                          restores: false, transport: hub, hosts: hosts)
+        let store = AgentLaneStore(configuration: .init(termProgram: "T", sessionFileDirectory: nil, findsDetachedSessions: false,
+                                                        sharedLanes: settings),
+                                   backends: [wrapper], statusFeed: nil,
+                                   defaults: UserDefaults(suiteName: "agentsmate-shared-\(UUID().uuidString)")!)
+        store.add(folderLane("one"), open: false)
+        sync(store)
+        XCTAssertEqual(hub.list?.restore, false)
+        XCTAssertEqual(hub.list?.lanes.map(\.id), ["one"])
+    }
+
+    func testARowTheAppListsItselfIsOnlyStyledNeverCreated() {
+        let hub = MemoryTransport()
+        let fixed = AgentLane(id: "registry-1", title: "Registry", directory: URL(fileURLWithPath: "/tmp/shared-work"),
+                              backendID: "w", isClosable: false)
+        let first = makeStore(sharing: hub)
+        first.add(fixed, open: false)
+        first.layout.setPinned("registry-1", true)
+        first.setName("registry-1", to: "Shown as")
+        sync(first)
+        XCTAssertEqual(hub.list?.lane("registry-1")?.overlay, true)
+
+        let second = makeStore(sharing: hub, me: "laptop")
+        sync(second)
+        XCTAssertTrue(second.lanes.isEmpty, "an overlay never makes a row")
+        second.add(fixed, open: false)
+        sync(second)
+        XCTAssertEqual(second.layout.pinned, ["registry-1"])
+        XCTAssertEqual(second.layout.names["registry-1"], "Shown as")
+
+        first.layout.setPinned("registry-1", false)
+        sync(first)
+        sync(second)
+        XCTAssertTrue(second.layout.pinned.isEmpty, "an unpin travels too")
+    }
+
+    func testOrderTravelsBetweenMacs() {
+        let hub = MemoryTransport()
+        let first = makeStore(sharing: hub)
+        for id in ["a", "b", "c"] { first.add(folderLane(id), open: false) }
+        sync(first)
+        let second = makeStore(sharing: hub, me: "laptop")
+        sync(second)
+        XCTAssertEqual(second.lanes.map(\.id), ["a", "b", "c"])
+        first.layout.moveLane("c", before: "a", lanes: first.lanes)
+        sync(first)
+        sync(second)
+        XCTAssertEqual(second.displayOrder.map(\.id), ["c", "a", "b"])
     }
 
     func testUnreachableHubFallsBackToTheCache() {
