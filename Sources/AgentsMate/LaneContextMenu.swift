@@ -273,7 +273,7 @@ extension AgentLaneStore {
         var seen = Set<String>()
         return configuration.reopenChoices
             .filter { $0.kind != .sameAgent && seen.insert($0.backendID).inserted }
-            .compactMap { backends[$0.backendID] }
+            .compactMap { backend(id: $0.backendID) }
     }
 
     /// Run a lane on `backendID` from its Switch Agent submenu. A lane the
