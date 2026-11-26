@@ -141,6 +141,12 @@ public struct AgentLaneCommands: Commands {
                 }
             }
             .disabled(selectedGroup.map { !store.canAddLane(to: $0) } ?? true)
+            if store.opensSessionsByID {
+                Button("Open Session by ID…") {
+                    reveal()
+                    store.askForSessionID(in: selectedGroup.flatMap { $0.isPinned || $0.isDetached ? nil : $0.section })
+                }
+            }
             // The selected lane's own menu, the one its row shows: the same
             // commands, names and shortcuts. Mark Read and Message Agent are
             // listed above, where Mark Read also follows the inbox's selection.
