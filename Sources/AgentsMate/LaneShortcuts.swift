@@ -3,7 +3,7 @@ import AppKit
 
 /// A command in the lanes that has a keyboard shortcut a person can change.
 public enum LaneShortcutAction: String, CaseIterable, Codable, Sendable, Identifiable {
-    case next, previous, clear, newLane, closeLane, split, maximize, togglePanel
+    case next, previous, clear, newLane, closeLane, closeKeepRunning, split, maximize, togglePanel
     case biggerFont, smallerFont, resetFont, jumpToUnread, goToLane, messageAgent, back, forward, reattach, home
     case reopenSameAgent, reopenClaudeRemote, reopenCodexRemote, reopenClaudeDirect, reopenCodexDirect
 
@@ -28,6 +28,7 @@ public enum LaneShortcutAction: String, CaseIterable, Codable, Sendable, Identif
         case .clear: "Clear Screen"
         case .newLane: "New Lane"
         case .closeLane: "Close Lane"
+        case .closeKeepRunning: "Close (Keep Running)"
         case .split: "Split"
         case .maximize: "Fill Window"
         case .togglePanel: "Show or Hide Lanes"
@@ -167,6 +168,8 @@ public struct LaneShortcutBindings: Codable, Equatable, Sendable {
         .clear: .init("k", command: true),
         .newLane: .init("t", command: true),
         .closeLane: .init("w", command: true),
+        // ⌘W stays Close Window in the menu bar; a focused terminal still answers it itself.
+        .closeKeepRunning: .init("w", command: true, option: true),
         .split: .init("d", command: true),
         .maximize: .init("return", command: true, shift: true),
         .togglePanel: .init("`", control: true),

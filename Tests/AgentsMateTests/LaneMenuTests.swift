@@ -107,9 +107,16 @@ final class LaneMenuTests: XCTestCase {
                        LaneKeyBinding("c", command: true, shift: true))
         XCTAssertEqual(LaneMenuCommand.switchToCodex.shortcutAction.flatMap { bindings.binding(for: $0) },
                        LaneKeyBinding("x", command: true, shift: true))
-        // Close and Stop have no key: Close's terminal key, ⌘W, is Close Window's in the menu bar.
-        XCTAssertNil(LaneMenuCommand.close.shortcutAction)
+        // Close is on ⌥⌘W: its terminal key, ⌘W, is Close Window's in the menu bar.
+        XCTAssertEqual(LaneMenuCommand.close.shortcutAction.flatMap { bindings.binding(for: $0) },
+                       LaneKeyBinding("w", command: true, option: true))
+        XCTAssertEqual(bindings.binding(for: .closeLane), LaneKeyBinding("w", command: true))
         XCTAssertNil(LaneMenuCommand.stop.shortcutAction)
+        // No two actions share a key.
+        for action in LaneShortcutAction.allCases {
+            guard let binding = bindings.binding(for: action) else { continue }
+            XCTAssertNil(bindings.conflict(for: binding, excluding: action), "\(action) shares its key")
+        }
     }
 
     func testHiddenCommandsLeaveNoStrayDividers() {
@@ -258,5 +265,18 @@ final class LaneMenuTests: XCTestCase {
         XCTAssertFalse(store.isEnabled(.switchToClaude, for: session))
         XCTAssertFalse(store.switchAgent("a", to: .claude))
         store.detachAll()
+    }
+
+    func testSwitchKeysWorkOnlyWhileALaneHasTheKeyboard() {
+        let (store, _, _) = switching()
+        XCTAssertNil(store.menuBinding(for: .switchToClaude), "no lane focused: the key stays the app's")
+        XCTAssertNil(store.menuBinding(for: .switchToCodex))
+        XCTAssertEqual(store.menuBinding(for: .close)?.display, "⌥⌘W", "Close's key is always on")
+        XCTAssertEqual(store.menuBinding(for: .reattach)?.display, "⇧⌘R")
+        store.lanesHaveKeyboard = true
+        XCTAssertEqual(store.menuBinding(for: .switchToClaude)?.display, "⇧⌘C")
+        XCTAssertEqual(store.menuBinding(for: .switchToCodex)?.display, "⇧⌘X")
+        store.lanesHaveKeyboard = false
+        XCTAssertNil(store.menuBinding(for: .switchToClaude))
     }
 }
