@@ -26,6 +26,12 @@ open class AgentTerminalView: LocalProcessTerminalView {
     /// Where Copy, Paste and a program's clipboard writes go. Tests use a
     /// pasteboard of their own.
     public var pasteboard: NSPasteboard = .general
+    /// The ssh destination of the Mac this lane runs on, when that is not
+    /// this Mac. An image on ``pasteboard`` is then sent there on paste,
+    /// since the agent reads the clipboard of the Mac it runs on.
+    public var remoteHost: String?
+    /// Sends a pasted image to ``remoteHost``. Tests replace it.
+    var imageUploader: @Sendable (Data, String) async -> RemoteImagePaste.Outcome = { await RemoteImagePaste.upload(png: $0, host: $1) }
 
     private var colorRequests = TerminalColorSchemeRequests()
     private var clipboardRequests = ClipboardRequests()
@@ -267,6 +273,11 @@ open class AgentTerminalView: LocalProcessTerminalView {
             default: break
             }
         }
+        // Ctrl+V is the agent's own image paste, which on another Mac would
+        // read that Mac's clipboard. A paste with nothing to send goes on.
+        if flags == .control, event.keyCode == 9, pasteRemoteImageIfNeeded() {
+            return true
+        }
         // Reopen As keys win over the app's own uses of them while the
         // terminal has focus.
         if let shortcut = shortcutResolver?(event), case .reopen = shortcut, onShortcut?(shortcut) == true {
@@ -475,8 +486,33 @@ open class AgentTerminalView: LocalProcessTerminalView {
     /// does it. See ``PasteContent`` for the order.
     open override func paste(_ sender: Any) {
         onUserInteraction?()
+        if pasteRemoteImageIfNeeded() { return }
         guard let bytes = pasteInput() else { return }
         send(bytes)
+    }
+
+    /// When the lane is on another Mac and ``pasteboard`` holds an image
+    /// alone: saves it as a PNG, sends it there off the main thread, and types
+    /// the remote path in. Returns whether it took the paste. If the upload
+    /// fails, the paste goes on as it would have, with a line in the log.
+    func pasteRemoteImageIfNeeded() -> Bool {
+        let content = PasteContent(pasteboard)
+        guard RemoteImagePaste.decide(host: remoteHost, content: content) == .upload, let host = remoteHost,
+              let source = RemoteImagePaste.imageData(from: pasteboard) else { return false }
+        let upload = imageUploader
+        Task { @MainActor [weak self] in
+            let data = await RemoteImagePaste.pngData(source)
+            let outcome: RemoteImagePaste.Outcome = if let data { await upload(data, host) } else { .failed("the image could not be read") }
+            guard let self else { return }
+            switch outcome {
+            case .uploaded(let path):
+                self.send(Array(self.pasteInputText(ShellQuote.quote(path) + " ", bracketed: self.getTerminal().bracketedPasteMode).utf8))
+            case .failed(let reason):
+                RemoteImagePaste.log("image paste to a remote lane fell back to a plain paste: \(reason)")
+                self.send([0x16])
+            }
+        }
+        return true
     }
 
     /// The bytes ⌘V sends for what ``pasteboard`` holds now, or nil when
