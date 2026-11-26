@@ -104,16 +104,48 @@ final class BoardModel: ObservableObject {
 
     func isLocal(_ host: String) -> Bool { host.caseInsensitiveCompare(localHost) == .orderedSame }
 
-    /// Open the card's lane in its app on this Mac.
+    /// Open the card's lane in its app on this Mac; a session no app lists
+    /// opens in Terminal instead.
     func open(_ card: AgentBoard.Card) {
         guard let app = card.app, let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: app) else {
-            NSSound.beep()
+            if attachCommand(card) != nil { openInTerminal(card) } else { NSSound.beep() }
             return
         }
         request(.show, for: card, app: app)
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = true
         NSWorkspace.shared.openApplication(at: url, configuration: configuration)
+    }
+
+    /// The shell line that attaches the card's session, on its own Mac.
+    func attachCommand(_ card: AgentBoard.Card) -> String? {
+        let attach: String
+        if card.backend == "claude-bg", let id = card.sessionID, AgentSessionStop.isValidClaudeID(id) {
+            attach = "claude attach " + ShellWords.quote(id)
+        } else if card.backend == "tmux", let name = card.sessionName, AgentSessionStop.isValidTmuxName(name) {
+            attach = "tmux attach-session -t " + ShellWords.quote("=" + name)
+        } else {
+            return nil
+        }
+        if isLocal(card.host) { return "exec /bin/zsh -lc " + ShellWords.quote("exec " + attach) }
+        guard AgentSessionStop.isValidHost(card.host) else { return nil }
+        let remote = "/bin/zsh -lc " + ShellWords.quote("exec " + attach)
+        return "exec /usr/bin/ssh -t -- " + ShellWords.quote(card.host) + " " + ShellWords.quote(remote)
+    }
+
+    /// Attach the session in a new Terminal window, through a one-off
+    /// `.command` file that removes itself.
+    func openInTerminal(_ card: AgentBoard.Card) {
+        guard let line = attachCommand(card) else { NSSound.beep(); return }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("agentsmate-attach", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let file = dir.appendingPathComponent(UUID().uuidString + ".command")
+        let script = "#!/bin/zsh\nrm -f " + ShellWords.quote(file.path) + "\nprintf '\\e]0;%s\\a' "
+            + ShellWords.quote(card.title) + "\n" + line + "\n"
+        guard FileManager.default.createFile(atPath: file.path, contents: Data(script.utf8),
+                                             attributes: [.posixPermissions: 0o700]) else { NSSound.beep(); return }
+        let terminal = URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app")
+        NSWorkspace.shared.open([file], withApplicationAt: terminal, configuration: NSWorkspace.OpenConfiguration())
     }
 
     func canClose(_ card: AgentBoard.Card) -> Bool {

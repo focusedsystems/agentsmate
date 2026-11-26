@@ -224,8 +224,11 @@ struct CardMenu: View {
     @Binding var confirmingStop: AgentBoard.Card?
 
     var body: some View {
-        Button(card.app == nil ? "Open (no app lists it)" : "Open in \(AppInfo.name(card.app))") { model.open(card) }
-            .disabled(card.app == nil)
+        if card.app != nil {
+            Button("Open in \(AppInfo.name(card.app))") { model.open(card) }
+        }
+        Button("Open in Terminal") { model.openInTerminal(card) }
+            .disabled(model.attachCommand(card) == nil)
         Button("Close (Keep Running)") { model.close(card) }
             .disabled(!model.canClose(card))
         Divider()
@@ -256,7 +259,7 @@ private struct CardView: View {
                 Text(card.title).font(.headline).lineLimit(1)
                 Spacer(minLength: 4)
                 if let at = card.updatedAt {
-                    Text(at, format: .relative(presentation: .numeric, unitsStyle: .narrow))
+                    Text(min(at, Date()), format: .relative(presentation: .named, unitsStyle: .abbreviated))
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -300,7 +303,7 @@ private struct CardView: View {
     private var borderColor: Color { selected ? Color.accentColor : Color.secondary.opacity(0.25) }
     private var borderWidth: CGFloat { selected ? 2 : 1 }
     private var helpText: String {
-        guard card.app != nil else { return "No app lists this session" }
+        guard card.app != nil else { return "No app lists this session: opens it in Terminal" }
         return "Open in " + AppInfo.name(card.app)
     }
 

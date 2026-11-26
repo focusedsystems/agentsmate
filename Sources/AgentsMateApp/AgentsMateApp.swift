@@ -47,7 +47,7 @@ private struct BoardCommands: Commands {
         CommandMenu("Agent") {
             Button("Open in App") { if let selected { model.open(selected) } }
                 .keyboardShortcut("o")
-                .disabled(selected?.app == nil)
+                .disabled(selected.map { $0.app != nil || model.attachCommand($0) != nil } != true)
             Button("Close (Keep Running)") { if let selected { model.close(selected) } }
                 .keyboardShortcut("w", modifiers: [.command, .option])
                 .disabled(selected.map(model.canClose) != true)
