@@ -44,23 +44,44 @@ final class LaneMenuTests: XCTestCase {
 
     func testTheMenuListsTheSameItemsInTheSameOrder() {
         XCTAssertEqual(LaneMenuPlan.items(full()), [
-            .command(.open), .command(.reattach), .command(.resume), .command(.resumeHere),
-            .command(.switchToClaude), .command(.switchToCodex), .submenu(.reopenAs), .command(.detach), .command(.message), .command(.markRead),
-            .command(.changeIcon), .command(.rename), .command(.automaticName),
-            .submenu(.duplicate), .submenu(.switchAgent), .submenu(.runOn),
-            .divider, .command(.pin), .submenu(.moveToSection),
-            .divider, .command(.close), .command(.stop),
+            .command(.open), .command(.reattach), .command(.resume), .command(.resumeHere), .command(.detach),
+            .divider, .command(.message), .command(.markRead), .submenu(.switchAgent), .submenu(.runOn), .submenu(.duplicate),
+            .divider, .command(.rename), .command(.automaticName), .command(.changeIcon), .command(.pin), .submenu(.moveToSection),
             .divider, .submenu(.pullRequests), .ports, .command(.copyBranch), .command(.copyPath),
             .command(.copySummary), .command(.copyLastPrompt), .command(.showInFinder),
             .divider, .appItems,
+            .divider, .command(.close), .command(.stop),
         ])
     }
 
-    func testAnAppsOwnItemsComeLastUnderADivider() {
+    func testOneSubmenuChangesTheAgent() {
+        let items = LaneMenuPlan.items(full())
+        XCTAssertEqual(items.filter { $0 == .submenu(.switchAgent) }.count, 1)
+        XCTAssertFalse(items.contains(.command(.switchToClaude)))
+        XCTAssertFalse(items.contains(.command(.switchToCodex)))
+        XCTAssertEqual(LaneMenuPlan.switchAgentCommands, [.switchToClaude, .switchToCodex])
+        // The menu bar still answers both keys: the commands are in the plan, inside the submenu.
+        XCTAssertTrue(LaneMenuPlan.commands(full()).contains(.switchToClaude))
+        XCTAssertTrue(LaneMenuPlan.commands(full()).contains(.switchToCodex))
+    }
+
+    func testTheDestructiveCommandsComeLast() {
         var state = full()
-        XCTAssertEqual(Array(LaneMenuPlan.items(state).suffix(2)), [.divider, .appItems])
+        XCTAssertEqual(Array(LaneMenuPlan.items(state).suffix(5)), [.divider, .appItems, .divider, .command(.close), .command(.stop)])
         state.hasAppItems = false
         XCTAssertFalse(LaneMenuPlan.items(state).contains(.appItems))
+        state.isClosable = false
+        state.canStop = false
+        XCTAssertEqual(LaneMenuPlan.items(state).last, .command(.showInFinder))
+    }
+
+    func testAContextualMenuLeavesOutWhatCannotRunNow() {
+        let unavailable: Set<LaneMenuItem> = [.command(.copySummary), .command(.copyLastPrompt), .command(.stop)]
+        let items = LaneContextMenu.visible(LaneMenuPlan.items(full()), hiding: []) { !unavailable.contains($0) }
+        XCTAssertTrue(unavailable.isDisjoint(with: items))
+        XCTAssertEqual(items.last, .command(.close))
+        // The menu bar's Agent menu keeps them, dimmed.
+        XCTAssertTrue(unavailable.isSubset(of: LaneContextMenu.visible(LaneMenuPlan.items(full()), hiding: [])))
     }
 
     func testAFoundSessionHasItsShorterMenu() {
@@ -101,8 +122,8 @@ final class LaneMenuTests: XCTestCase {
                        LaneKeyBinding("r", command: true, shift: true))
         XCTAssertEqual(LaneMenuCommand.message.shortcutAction.flatMap { bindings.binding(for: $0) },
                        LaneKeyBinding("k", command: true, option: true))
-        XCTAssertEqual(LaneMenuCommand.switchToClaude.title(for: LaneMenuState()), "Switch to Claude")
-        XCTAssertEqual(LaneMenuCommand.switchToCodex.title(for: LaneMenuState()), "Switch to Codex")
+        XCTAssertEqual(LaneMenuCommand.switchToClaude.title(for: LaneMenuState()), "Claude")
+        XCTAssertEqual(LaneMenuCommand.switchToCodex.title(for: LaneMenuState()), "Codex")
         XCTAssertEqual(LaneMenuCommand.switchToClaude.shortcutAction.flatMap { bindings.binding(for: $0) },
                        LaneKeyBinding("c", command: true, shift: true))
         XCTAssertEqual(LaneMenuCommand.switchToCodex.shortcutAction.flatMap { bindings.binding(for: $0) },
@@ -278,5 +299,18 @@ final class LaneMenuTests: XCTestCase {
         XCTAssertEqual(store.menuBinding(for: .switchToCodex)?.display, "⇧⌘X")
         store.lanesHaveKeyboard = false
         XCTAssertNil(store.menuBinding(for: .switchToClaude))
+    }
+
+    func testSwitchAgentListsEveryBackendForALaneThePersonAdded() throws {
+        let (store, _, _) = switching()
+        store.sync(lanes: [AgentLane(id: "a", title: "A", backendID: "cl", isClosable: true),
+                           AgentLane(id: "b", title: "B", backendID: "cl", isClosable: false)])
+        XCTAssertEqual(Set(store.switchAgentBackends(for: "a").map(\.id)), ["cl", "cx"])
+        // A lane the app lists gets the app's Reopen As choices, which reopen it.
+        XCTAssertEqual(store.switchAgentBackends(for: "b").map(\.id), ["cl", "cx"])
+        let session = try XCTUnwrap(store.sessions["b"])
+        store.switchFromMenu(session, to: "cx")
+        XCTAssertEqual(store.lanes.first { $0.id == "b" }?.backendID, "cx")
+        store.detachAll()
     }
 }

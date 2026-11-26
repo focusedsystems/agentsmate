@@ -145,7 +145,8 @@ public struct AgentLaneCommands: Commands {
             // commands, names and shortcuts. Mark Read and Message Agent are
             // listed above, where Mark Read also follows the inbox's selection.
             if let session = store.selected {
-                LaneContextMenu(store: store, session: session, hiding: [.markRead, .message], reveal: reveal)
+                LaneContextMenu(store: store, session: session, hiding: [.markRead, .message],
+                                unavailable: .dimmed, reveal: reveal)
             } else {
                 Text("No \(noun) Selected")
             }

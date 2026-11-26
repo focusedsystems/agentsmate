@@ -19,8 +19,9 @@ public enum LaneMenuCommand: String, CaseIterable, Sendable {
         case .reattach: state.keepsRunningWhenDetached ? "Reattach" : "Start Again"
         case .resume: "Resume"
         case .resumeHere: "Resume Here (Stop Background)"
-        case .switchToClaude: "Switch to Claude"
-        case .switchToCodex: "Switch to Codex"
+        // Both sit at the top of the Switch Agent submenu.
+        case .switchToClaude: "Claude"
+        case .switchToCodex: "Codex"
         case .detach: "Detach"
         case .message: "Message Agent…"
         case .markRead: "Mark Read"
@@ -84,7 +85,13 @@ public enum LaneMenuCommand: String, CaseIterable, Sendable {
 
 /// A submenu on a lane's menu.
 public enum LaneMenuSubmenu: Hashable, Sendable {
-    case reopenAs, duplicate, switchAgent, runOn, adopt, moveToSection, pullRequests
+    /// Folded into ``switchAgent``, which lists the same backends; no plan
+    /// has it any more.
+    @available(*, deprecated, message: "Reopen As is part of Switch Agent")
+    case reopenAs
+    /// Switch to Claude and Switch to Codex on their keys, then each backend.
+    case switchAgent
+    case duplicate, runOn, adopt, moveToSection, pullRequests
 }
 
 /// One entry of a lane's menu, in the order it is shown.
@@ -131,31 +138,42 @@ public enum LaneMenuPlan {
         state.isDetached ? detachedItems(state) : laneItems(state)
     }
 
+    /// Six groups, each under a divider: the session, the agent, the row's
+    /// name and place, what to copy or open, the app's own items, and last
+    /// the commands that take the row away or end its agent.
     private static func laneItems(_ s: LaneMenuState) -> [LaneMenuItem] {
         var items: [LaneMenuItem] = [.command(.open), .command(.reattach)]
         if s.canResume { items += [.command(.resume), .command(.resumeHere)] }
-        items += [.command(.switchToClaude), .command(.switchToCodex)]
-        if s.hasReopenChoices { items.append(.submenu(.reopenAs)) }
-        items += [.command(.detach), .command(.message)]
+        items += [.command(.detach), .divider]
+
+        items.append(.command(.message))
         if s.needsAttention { items.append(.command(.markRead)) }
-        items += [.command(.changeIcon), .command(.rename)]
-        if s.hasCustomName { items.append(.command(.automaticName)) }
-        items.append(.submenu(.duplicate))
-        if s.isClosable { items.append(.submenu(.switchAgent)) }
+        items.append(.submenu(.switchAgent))
         if s.hasRunOnHosts { items.append(.submenu(.runOn)) }
-        items += [.divider, .command(.pin), .submenu(.moveToSection), .divider]
-        if s.isClosable { items.append(.command(.close)) }
-        if s.canStop { items.append(.command(.stop)) }
-        if s.isClosable || s.canStop { items.append(.divider) }
+        items += [.submenu(.duplicate), .divider]
+
+        items.append(.command(.rename))
+        if s.hasCustomName { items.append(.command(.automaticName)) }
+        items += [.command(.changeIcon), .command(.pin), .submenu(.moveToSection), .divider]
+
         if s.hasPullRequests { items.append(.submenu(.pullRequests)) }
         if s.hasPorts { items.append(.ports) }
         if s.hasBranch { items.append(.command(.copyBranch)) }
         items.append(.command(.copyPath))
         if s.summariesAvailable { items.append(.command(.copySummary)) }
         items += [.command(.copyLastPrompt), .command(.showInFinder)]
+
         if s.hasAppItems { items += [.divider, .appItems] }
+
+        if s.isClosable || s.canStop { items.append(.divider) }
+        if s.isClosable { items.append(.command(.close)) }
+        if s.canStop { items.append(.command(.stop)) }
         return items
     }
+
+    /// The commands at the top of the Switch Agent submenu, above its list
+    /// of backends.
+    public static let switchAgentCommands: [LaneMenuCommand] = [.switchToClaude, .switchToCodex]
 
     private static func detachedItems(_ s: LaneMenuState) -> [LaneMenuItem] {
         var items: [LaneMenuItem] = [.command(.reattach)]
@@ -166,9 +184,16 @@ public enum LaneMenuPlan {
         return items
     }
 
-    /// The commands of ``items(_:)`` in order, without the submenus.
+    /// The commands of ``items(_:)`` in order, with Switch Agent's own
+    /// commands where that submenu is.
     public static func commands(_ state: LaneMenuState) -> [LaneMenuCommand] {
-        items(state).compactMap { if case .command(let command) = $0 { command } else { nil } }
+        items(state).flatMap { item -> [LaneMenuCommand] in
+            switch item {
+            case .command(let command): [command]
+            case .submenu(.switchAgent): switchAgentCommands
+            default: []
+            }
+        }
     }
 }
 
