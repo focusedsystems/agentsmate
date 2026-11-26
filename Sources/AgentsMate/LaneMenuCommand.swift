@@ -41,18 +41,23 @@ public enum LaneMenuCommand: String, CaseIterable, Sendable {
         }
     }
 
-    /// The rebindable shortcut the command is on, in both menus. Close has
-    /// none: its terminal key, ⌘W, would take Close Window's place in the
-    /// menu bar.
+    /// The rebindable shortcut the command is on, in both menus. ⌘W is Close
+    /// Window's in the menu bar, so Close is on ⌥⌘W; a focused terminal still
+    /// answers ⌘W itself.
     public var shortcutAction: LaneShortcutAction? {
         switch self {
         case .reattach: .reattach
         case .switchToClaude: .reopenClaudeRemote
         case .switchToCodex: .reopenCodexRemote
         case .message: .messageAgent
+        case .close: .closeKeepRunning
         default: nil
         }
     }
+
+    /// Whether the key works only while a lane has the keyboard, so it stays
+    /// free for the app's own views otherwise.
+    public var keyNeedsLaneFocus: Bool { self == .switchToClaude || self == .switchToCodex }
 
     /// What the command does, shown as its help tag.
     public func help(for state: LaneMenuState) -> String? {
@@ -194,6 +199,14 @@ extension AgentLaneStore {
         return state
     }
 
+    /// The key a menu item for `command` shows and answers: its binding, and for
+    /// Switch to Claude and Codex only while a lane has the keyboard.
+    func menuBinding(for command: LaneMenuCommand) -> LaneKeyBinding? {
+        guard let action = command.shortcutAction else { return nil }
+        if command.keyNeedsLaneFocus, !(lanesHaveKeyboard && configuration.shortcuts.contains(.reopen)) { return nil }
+        return shortcuts.binding(for: action)
+    }
+
     /// Whether a lane's menu offers the command now.
     func isEnabled(_ command: LaneMenuCommand, for session: AgentLaneSession) -> Bool {
         let id = session.lane.id
@@ -261,7 +274,7 @@ struct LaneMenuButton: View {
             reveal()
             store.perform(command, on: session, openWindow: openWindow)
         }
-        .laneShortcut(command.shortcutAction.flatMap { store.shortcuts.binding(for: $0) })
+        .laneShortcut(store.menuBinding(for: command))
         .disabled(!store.isEnabled(command, for: session))
         .help(command.help(for: state) ?? "")
     }
