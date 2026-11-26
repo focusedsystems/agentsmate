@@ -10,10 +10,10 @@ private final class Counter: @unchecked Sendable {
 }
 
 final class FallbackUsageTests: XCTestCase {
-    private static let now = Date(timeIntervalSince1970: 1_800_000_000)
+    private static let now = Date()
 
     private func cache(age: Int, percent: Int) -> String {
-        "UTILIZATION=\(percent)\nRESETS_AT=2027-06-01T00:00:00Z\nWEEKLY_UTILIZATION=\(percent)\nWEEKLY_RESETS_AT=2027-06-01T00:00:00Z\nTIMESTAMP=\(1_800_000_000 - age)\n"
+        "UTILIZATION=\(percent)\nRESETS_AT=2027-06-01T00:00:00Z\nWEEKLY_UTILIZATION=\(percent)\nWEEKLY_RESETS_AT=2027-06-01T00:00:00Z\nTIMESTAMP=\(Int(Self.now.timeIntervalSince1970) - age)\n"
     }
 
     private func local(_ text: String?) throws -> KeyValueUsageFileSource {
