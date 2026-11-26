@@ -405,6 +405,15 @@ public enum SharedLanePaths {
         ".local/state/agentsmate/\(appID)/lanes.json"
     }
 
+    /// The claims on sessions every Mac shares (``SessionOwners/SharedFile``).
+    public static let ownersRelativePath = ".local/state/agentsmate/session-owner-shared.json"
+
+    /// Whether a path under the home folder can go in an ssh command unquoted.
+    public static func isValidRelativePath(_ path: String) -> Bool {
+        !path.isEmpty && !path.hasPrefix("/") && !path.contains("..")
+            && path.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || "._-/".contains($0)) }
+    }
+
     /// Whether an app id can go in a path and an ssh command unquoted.
     public static func isValidAppID(_ appID: String) -> Bool {
         !appID.isEmpty && !appID.hasPrefix(".") && !appID.contains("..")
@@ -416,11 +425,17 @@ public enum SharedLanePaths {
 /// file beside it and renamed over it.
 public struct LocalSharedLaneTransport: SharedLaneTransport {
     public var file: URL
+    /// Write the file readable by this user alone, in a folder that is too.
+    public var isPrivate: Bool
 
-    public init(file: URL) { self.file = file }
+    public init(file: URL, isPrivate: Bool = false) {
+        self.file = file
+        self.isPrivate = isPrivate
+    }
 
     public init(appID: String, home: URL = FileManager.default.homeDirectoryForCurrentUser) {
         self.file = home.appendingPathComponent(SharedLanePaths.relativePath(appID: appID))
+        self.isPrivate = false
     }
 
     public func read() throws -> Data? {
@@ -429,10 +444,12 @@ public struct LocalSharedLaneTransport: SharedLaneTransport {
     }
 
     public func write(_ data: Data) throws {
-        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true,
+                                                attributes: isPrivate ? [.posixPermissions: 0o700] : nil)
         let temp = file.deletingLastPathComponent()
             .appendingPathComponent(file.lastPathComponent + ".tmp.\(ProcessInfo.processInfo.processIdentifier)")
         try data.write(to: temp)
+        if isPrivate { chmod(temp.path, 0o600) }
         guard rename(temp.path, file.path) == 0 else {
             let code = errno
             try? FileManager.default.removeItem(at: temp)
@@ -455,15 +472,22 @@ public struct SSHSharedLaneTransport: SharedLaneTransport {
     public var ssh: String
     /// How long one ssh call may take in all.
     public var timeout: TimeInterval
+    /// The file under the hub's home folder, when it is not the app's lane list.
+    public var relativePath: String?
+    /// Write the file readable by its user alone.
+    public var isPrivate: Bool
 
-    public init(hub: String, appID: String, ssh: String = "/usr/bin/ssh", timeout: TimeInterval = 20) {
+    public init(hub: String, appID: String, ssh: String = "/usr/bin/ssh", timeout: TimeInterval = 20,
+                relativePath: String? = nil, isPrivate: Bool = false) {
         self.hub = hub
         self.appID = appID
         self.ssh = ssh
         self.timeout = timeout
+        self.relativePath = relativePath
+        self.isPrivate = isPrivate
     }
 
-    var path: String { "~/" + SharedLanePaths.relativePath(appID: appID) }
+    var path: String { "~/" + (relativePath ?? SharedLanePaths.relativePath(appID: appID)) }
 
     /// The command run on the hub to print the file, or nothing when there is none.
     var readCommand: String { "if [ -f \(path) ]; then cat \(path); fi" }
@@ -471,7 +495,8 @@ public struct SSHSharedLaneTransport: SharedLaneTransport {
     /// The command run on the hub to replace the file from standard input.
     var writeCommand: String {
         let directory = (path as NSString).deletingLastPathComponent
-        return "mkdir -p \(directory) && cat > \(path).tmp.$$ && mv \(path).tmp.$$ \(path)"
+        let mask = isPrivate ? "umask 077 && " : ""
+        return "\(mask)mkdir -p \(directory) && cat > \(path).tmp.$$ && mv \(path).tmp.$$ \(path)"
     }
 
     func arguments(_ remote: String) -> [String] {
@@ -488,7 +513,8 @@ public struct SSHSharedLaneTransport: SharedLaneTransport {
     }
 
     private func run(_ arguments: [String], input: Data?) throws -> Data {
-        guard AgentHosts.isValidName(hub), SharedLanePaths.isValidAppID(appID) else {
+        guard AgentHosts.isValidName(hub), SharedLanePaths.isValidAppID(appID),
+              relativePath.map(SharedLanePaths.isValidRelativePath) ?? true else {
             throw Failed(status: -1, message: "not a usable hub or app id")
         }
         let process = Process()
@@ -553,9 +579,13 @@ public struct SharedLaneSettings: Sendable {
     public var transport: (any SharedLaneTransport)?
     /// Replaces the registry read from ``hostsDirectory``, for tests.
     public var hosts: AgentHosts?
+    /// Replaces where the Macs' claims on sessions are shared, for tests.
+    public var ownerTransport: (any SharedLaneTransport)?
 
     public init(appID: String, hostsDirectory: URL = AgentHosts.defaultDirectory, cacheFile: URL? = nil,
-                restores: Bool = true, transport: (any SharedLaneTransport)? = nil, hosts: AgentHosts? = nil) {
+                restores: Bool = true, transport: (any SharedLaneTransport)? = nil, hosts: AgentHosts? = nil,
+                ownerTransport: (any SharedLaneTransport)? = nil) {
+        self.ownerTransport = ownerTransport
         self.appID = appID
         self.hostsDirectory = hostsDirectory
         self.cacheFile = cacheFile ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
@@ -572,6 +602,21 @@ public struct SharedLaneSettings: Sendable {
         guard bundle.bundleURL.pathExtension == "app", let id = bundle.bundleIdentifier,
               SharedLanePaths.isValidAppID(id) else { return nil }
         return SharedLaneSettings(appID: id, restores: restores)
+    }
+
+    /// This Mac's name, and how it reaches the claims on sessions that every
+    /// Mac shares: directly on the hub, over ssh from anywhere else. Nil
+    /// without a registry.
+    func resolveOwners() -> (host: String, transport: any SharedLaneTransport)? {
+        guard SharedLanePaths.isValidAppID(appID), let hosts = hosts ?? AgentHosts.load(from: hostsDirectory),
+              let hub = hosts.hub, AgentHosts.isValidName(hosts.selfName) else { return nil }
+        if let ownerTransport { return (hosts.selfName, ownerTransport) }
+        if hosts.isHub {
+            let file = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(SharedLanePaths.ownersRelativePath)
+            return (hosts.selfName, LocalSharedLaneTransport(file: file, isPrivate: true))
+        }
+        return (hosts.selfName, SSHSharedLaneTransport(hub: hub.name, appID: "session-owner",
+                                                       relativePath: SharedLanePaths.ownersRelativePath, isPrivate: true))
     }
 
     /// The registry, and how this Mac reaches the hub's list: directly on

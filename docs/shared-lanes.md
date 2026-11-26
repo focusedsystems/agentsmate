@@ -179,3 +179,36 @@ default, which should be the hub.
 
 Run On is not offered for a backend whose `tmuxSessions.host` is fixed,
 because that backend runs its wrapper over ssh itself.
+
+## Who notifies when two Macs list a session
+
+Each Mac keeps its claims on sessions (which app the person last worked in)
+in `session-owner.json` in its own state folder. With the hosts registry, the
+Macs also share them through the hub, so working in a session on one Mac keeps
+the same app on the other quiet.
+
+The hub keeps `~/.local/state/agentsmate/session-owner-shared.json`, written
+readable by its user alone, to a temporary file that is renamed into place:
+
+```json
+{
+  "version": 1,
+  "entries": {"<session key>": {"app": "com.example.app", "at": "2026-01-02T03:04:05.000Z", "host": "mini-1"}},
+  "hosts": {"mini-1": "2026-01-02T03:04:10.000Z"}
+}
+```
+
+- Each claim records the `host` it was made on, this Mac's name in the
+  registry, which the app is given and never guesses.
+- A sync reads the hub's file, merges it with this Mac's, writes both back,
+  and reports this Mac in `hosts`. The newest `at` wins per key.
+  It runs at launch, a second after a claim, and every minute.
+- A claim made on another Mac is that Mac's: its app owns the session, even
+  when this Mac runs the same bundle id, and this app stays silent. That holds
+  for a lane no other app lists, too, when the claim is by this same app.
+- A Mac not heard from for ten minutes no longer speaks for a session. Its
+  claims are ignored and the local rules decide, so an alert is never left to
+  a Mac that is off. A closed app never owns an alert either.
+- A hub file that is too big, is not an object, or has claims that cannot be
+  read counts as empty for those parts. A hub that cannot be reached changes
+  nothing here.
