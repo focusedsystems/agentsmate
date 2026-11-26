@@ -90,6 +90,11 @@ public struct AgentRepositoriesSection<Buttons: View, RowAccessory: View>: View 
     public var body: some View {
         let groups = groups
         let sectioned = sectioned
+        let footerText = footer ?? (sectioned
+            ? "Drag a repository to reorder it within its section; use a section's menu to move the section. This is the sidebar's order and the order of every repository list in the app."
+            : "Drag to reorder. This is the sidebar's order and the order of every repository list in the app.")
+        // Every row sits directly in the settings form, so the form's one
+        // scroll reaches all of them; no list of a fixed height inside it.
         Section {
             HStack(spacing: 8) {
                 buttons
@@ -101,31 +106,22 @@ public struct AgentRepositoriesSection<Buttons: View, RowAccessory: View>: View 
                 .disabled(!store.hasCustomRepositoryOrder && onReset == nil)
                 .help("Put the sections and repositories back in the app's order")
             }
-            List {
-                if sectioned {
-                    ForEach(groups) { group in
-                        if group.name == nil {
-                            Section { repositories(group.items) }
-                        } else {
-                            Section {
-                                repositories(group.items)
-                            } header: {
-                                sectionHeader(group, in: groups)
-                            }
-                        }
-                    }
-                } else {
-                    repositories(groups.flatMap(\.items))
-                }
-            }
-            .frame(minHeight: 200, idealHeight: CGFloat(min(items.count + groups.count, 14)) * 30 + 8)
+            if !sectioned { repositories(groups.flatMap(\.items)) }
         } header: {
             Text(title)
         } footer: {
-            Text(footer ?? (sectioned
-                ? "Drag a repository to reorder it within its section; use a section's menu to move the section. This is the sidebar's order and the order of every repository list in the app."
-                : "Drag to reorder. This is the sidebar's order and the order of every repository list in the app."))
-                .foregroundStyle(.secondary)
+            if !sectioned { Text(footerText).foregroundStyle(.secondary) }
+        }
+        if sectioned {
+            ForEach(groups) { group in
+                Section {
+                    repositories(group.items)
+                } header: {
+                    if group.name != nil { sectionHeader(group, in: groups) }
+                } footer: {
+                    if group.id == groups.last?.id { Text(footerText).foregroundStyle(.secondary) }
+                }
+            }
         }
     }
 
