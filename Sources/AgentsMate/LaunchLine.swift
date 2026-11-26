@@ -17,8 +17,12 @@ public enum LaunchLine {
     static let informational: Set<String> = ["--help", "-h", "--version", "-V", "-v"]
 
     /// `command` with `promptFile` and `directories` added where the agent
-    /// takes them.
-    public static func inject(_ command: String, promptFile: URL?, directories: [String] = []) -> String {
+    /// takes them. With `codexBypassesHookTrust`, a Codex session also starts
+    /// with `--dangerously-bypass-hook-trust`, so it does not stop to ask for
+    /// its hooks to be approved. Leave it off unless the hooks Codex finds
+    /// come from sources you already trust.
+    public static func inject(_ command: String, promptFile: URL?, directories: [String] = [],
+                              codexBypassesHookTrust: Bool = false) -> String {
         let trimmed = command.trimmingCharacters(in: .whitespaces)
         let words = trimmed.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
         guard let program = words.first else { return command }
@@ -37,6 +41,7 @@ public enum LaunchLine {
         case "codex":
             if let next = rest.first, codexNonSession.contains(next) { return command }
             var line = program
+            if codexBypassesHookTrust { line += " --dangerously-bypass-hook-trust" }
             if let promptFile {
                 line += " -c \"developer_instructions=$(cat " + ShellQuote.quote(promptFile.path) + ")\""
             }

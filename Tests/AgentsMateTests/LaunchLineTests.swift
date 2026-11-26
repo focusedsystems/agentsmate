@@ -19,6 +19,23 @@ final class LaunchLineTests: XCTestCase {
         XCTAssertEqual(LaunchLine.inject("codex exec hi", promptFile: prompt), "codex exec hi")
     }
 
+    func testCodexHookTrustBypassIsOptIn() {
+        XCTAssertEqual(LaunchLine.inject("codex", promptFile: nil), "codex")
+        XCTAssertEqual(LaunchLine.inject("codex --model x", promptFile: prompt, codexBypassesHookTrust: true),
+                       "codex --dangerously-bypass-hook-trust -c \"developer_instructions=$(cat '/p/brief.md')\" --model x")
+        XCTAssertEqual(LaunchLine.inject("codex exec hi", promptFile: nil, codexBypassesHookTrust: true), "codex exec hi")
+        XCTAssertEqual(LaunchLine.inject("claude", promptFile: nil, codexBypassesHookTrust: true), "claude")
+    }
+
+    func testBackendLaunchesCodexWithTheBypassOnlyWhenAsked() {
+        var backend = CommandLaneBackend(id: "codex", displayName: "Codex", command: "codex")
+        let lane = AgentLane(id: "l", title: "L", backendID: "codex")
+        XCTAssertFalse(backend.launch(for: lane, shell: "/bin/zsh").arguments.joined(separator: " ").contains("bypass"))
+        backend.codexBypassesHookTrust = true
+        XCTAssertTrue(backend.launch(for: lane, shell: "/bin/zsh").arguments.joined(separator: " ")
+            .contains("--dangerously-bypass-hook-trust"))
+    }
+
     func testOtherCommandsUntouched() {
         XCTAssertEqual(LaunchLine.inject("vim", promptFile: prompt), "vim")
         XCTAssertTrue(LaunchLine.isInstalled(""))
