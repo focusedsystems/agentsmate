@@ -57,7 +57,7 @@ final class DisplayedSchemaTests: XCTestCase {
         let first = try XCTUnwrap((object["rows"] as? [[String: Any]])?.first)
         XCTAssertEqual(Set(first.keys), ["section", "title", "lane_id", "backend", "agent", "session_id", "attached_session_id",
                                          "session_name", "host", "folder", "state", "attached", "selected", "is_parallel",
-                                         "is_top_level", "collapsed", "column", "owner_app", "session_title"])
+                                         "is_top_level", "collapsed", "column", "owner_app", "session_title", "host_kind", "run_kind"])
         XCTAssertTrue(first["session_name"] is NSNull)
         XCTAssertEqual(first["state"] as? String, "working")
         XCTAssertEqual(first["written_at"] as? String, nil)

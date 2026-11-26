@@ -278,7 +278,7 @@ private struct CardView: View {
                     Text("· \(section)").font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 4)
-                Label(card.host, systemImage: isLocal ? "desktopcomputer" : "network")
+                Label(card.host, systemImage: isLocal ? "desktopcomputer" : "server.rack")
                     .font(.caption).foregroundStyle(.secondary).labelStyle(.titleAndIcon)
             }
             HStack(spacing: 5) {

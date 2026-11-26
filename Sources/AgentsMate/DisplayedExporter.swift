@@ -137,7 +137,7 @@ extension AgentLaneStore {
         return on
     }
 
-    private func backendKind(_ backend: (any LaneBackend)?, id: String) -> String {
+    func backendKind(_ backend: (any LaneBackend)?, id: String) -> String {
         if backend is ClaudeBackgroundLaneBackend { return ClaudeBackgroundLaneBackend.kind }
         if let command = backend as? CommandLaneBackend {
             if command.tmuxSessions != nil { return TmuxLaneSessions.kind }
@@ -149,8 +149,8 @@ extension AgentLaneStore {
     private func displayedRow(_ lane: AgentLane, session: AgentLaneSession, section: String?, collapsed: Bool,
                               nested: Bool, column: String?) -> DisplayedExport.Row {
         let backend = self.backend(id: lane.backendID)
-        let agent = agentKind(ofBackend: lane.backendID)?.agent
-            ?? (backend is ClaudeBackgroundLaneBackend ? "claude" : nil)
+        let agent = laneAgent(lane)
+        let badges = laneBadges(for: lane)
         let running = session.record.flatMap { $0.state == .ended ? nil : $0 }
         let parallel = parallelOwner(of: lane.id) != nil
         let ownID = lane.agentSessionID ?? ownedSession(for: lane)?.agentID
@@ -168,7 +168,8 @@ extension AgentLaneStore {
             folder: lane.directory?.path, state: session.status.exportState, attached: session.isAttached,
             selected: !isHomeShown && selectedID == lane.id, isParallel: parallel,
             isTopLevel: !(nested && parallel), collapsed: collapsed, column: column,
-            ownerApp: ownerApp(of: session), sessionTitle: session.subtitle)
+            ownerApp: ownerApp(of: session), sessionTitle: session.subtitle,
+            hostKind: badges.hostKind.rawValue, runKind: badges.runKind.rawValue)
     }
 
     /// Everything the sidebar and All Agents show now, in the order they show it.
