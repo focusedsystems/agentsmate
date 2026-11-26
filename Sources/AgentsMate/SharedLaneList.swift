@@ -28,13 +28,32 @@ public struct SharedLaneList: Equatable, Sendable {
         public var host: String?
         public var section: String?
         public var pinned: Bool?
+        /// The icon the person chose, in ``LaneIcon/stringValue`` form.
+        public var icon: String?
+        /// The colour the person chose, as `#RRGGBB`.
+        public var tint: String?
+        /// The session the lane attaches by name; see ``AgentLane/sessionName``.
+        public var sessionName: String?
+        /// The session's short id; see ``AgentLane/agentSessionID``.
+        public var agentSessionID: String?
+        /// True for a row the app itself lists (one its own registry
+        /// defines, or a session found running) that this entry only names,
+        /// pins, colours or files. It never makes a row on another Mac.
+        public var overlay: Bool?
         public var order: Int
         public var updated: Date
 
         public init(id: String, title: String? = nil, directory: String? = nil, backendID: String,
                     command: String? = nil, variantFlag: String? = nil, variant: String? = nil,
                     host: String? = nil, section: String? = nil, pinned: Bool? = nil,
+                    icon: String? = nil, tint: String? = nil, sessionName: String? = nil,
+                    agentSessionID: String? = nil, overlay: Bool? = nil,
                     order: Int = 0, updated: Date = SharedLaneList.now()) {
+            self.icon = icon
+            self.tint = tint
+            self.sessionName = sessionName
+            self.agentSessionID = agentSessionID
+            self.overlay = overlay
             self.id = id
             self.title = title
             self.directory = directory
@@ -77,11 +96,16 @@ public struct SharedLaneList: Equatable, Sendable {
     public var version: Int
     public var lanes: [Lane]
     public var closed: [Closed]
+    /// False when the list only mirrors rows between Macs: a tool that
+    /// restarts sessions after a reboot (`agent-lanes-restore`) must leave
+    /// every lane in it alone. Once any copy says false, the merge stays false.
+    public var restore: Bool
 
-    public init(lanes: [Lane] = [], closed: [Closed] = []) {
+    public init(lanes: [Lane] = [], closed: [Closed] = [], restore: Bool = true) {
         self.version = Self.currentVersion
         self.lanes = lanes
         self.closed = closed
+        self.restore = restore
     }
 
     public func lane(_ id: String) -> Lane? { lanes.first { $0.id == id } }
@@ -101,6 +125,7 @@ public struct SharedLaneList: Equatable, Sendable {
         var closedAt: [String: Date] = [:]
         var lanes: [String: Lane] = [:]
         var firstSeen: [String] = []
+        let restore = copies.allSatisfy(\.restore)
         for copy in copies {
             for close in copy.closed {
                 closedAt[close.id] = max(closedAt[close.id] ?? .distantPast, close.at)
@@ -131,16 +156,25 @@ public struct SharedLaneList: Equatable, Sendable {
             if a.element.order != b.element.order { return a.element.order < b.element.order }
             return a.offset < b.offset
         }.map { $0.element }
-        return SharedLaneList(lanes: ordered, closed: closed)
+        return SharedLaneList(lanes: ordered, closed: closed, restore: restore)
     }
 
     /// One sync's merge. `local` is this Mac's lanes as they stand, their
     /// `updated` ignored: a lane unchanged since `base` (the list as last
-    /// synced) keeps base's time, a lane this Mac has never synced that
-    /// `remote` already has is taken from remote, and anything else changed
-    /// here now. `closing` are the lanes closed here since the last sync.
+    /// synced) keeps base's time and anything else changed here now.
+    ///
+    /// A lane this Mac has never synced is merged, never dropped and never
+    /// just overwritten. One `remote` lacks is added, stamped `edited` (when
+    /// this Mac last changed its layout, else now). One `remote` has too is
+    /// the union of both copies: the fields of the newer copy win, and it is
+    /// pinned when either copy was. `closing` are the lanes closed here since
+    /// the last sync, and `restores` is whether a tool may restart the list's
+    /// lanes after a reboot.
     public static func reconcile(local: [Lane], base: SharedLaneList, remote: SharedLaneList,
-                                 closing: [Closed], now: Date = SharedLaneList.now()) -> SharedLaneList {
+                                 closing: [Closed], restores: Bool = true, edited: Date? = nil,
+                                 now: Date = SharedLaneList.now()) -> SharedLaneList {
+        let moved = movedLanes(local: local, base: base)
+        let reordered = !moved.isEmpty
         let stamped = local.map { lane -> Lane in
             var lane = lane
             if let known = base.lane(lane.id) {
@@ -149,18 +183,58 @@ public struct SharedLaneList: Equatable, Sendable {
                     return lane
                 }
                 // Unchanged here, so the hub's copy stands, even one changed
-                // within the same second as the last sync.
-                if let theirs = remote.lane(lane.id) { return theirs }
-                lane.updated = known.updated
+                // within the same second as the last sync. A lane moved in
+                // the list here keeps the hub's content at its new place.
+                if var theirs = remote.lane(lane.id) {
+                    if reordered {
+                        theirs.order = lane.order
+                        if moved.contains(lane.id) { theirs.updated = now }
+                    }
+                    return theirs
+                }
+                lane.updated = moved.contains(lane.id) ? now : known.updated
             } else if let theirs = remote.lane(lane.id) {
-                // Another Mac's lane this one picked up before its first sync.
-                return theirs
+                return firstMerge(mine: lane, theirs: theirs, edited: edited, now: now)
             } else {
-                lane.updated = now
+                lane.updated = min(edited ?? now, now)
             }
             return lane
         }
-        return merge([remote, SharedLaneList(lanes: stamped, closed: closing)], now: now)
+        var merged = merge([remote, SharedLaneList(lanes: stamped, closed: closing, restore: restores)], now: now)
+        for index in merged.lanes.indices { merged.lanes[index].order = index }
+        return merged
+    }
+
+    /// The lanes whose neighbour above is not the one `base` had, among the
+    /// lanes both lists hold: a lane the person moved here, and the one it
+    /// now sits above.
+    static func movedLanes(local: [Lane], base: SharedLaneList) -> Set<String> {
+        let held = Set(base.lanes.map(\.id)).intersection(local.map(\.id))
+        let before = base.lanes.map(\.id).filter(held.contains)
+        let now = local.map(\.id).filter(held.contains)
+        guard before != now else { return [] }
+        func above(_ id: String, in ids: [String]) -> String? {
+            guard let index = ids.firstIndex(of: id), index > 0 else { return nil }
+            return ids[index - 1]
+        }
+        return Set(now.filter { above($0, in: before) != above($0, in: now) })
+    }
+
+    /// The first time this Mac meets a lane another Mac already shared.
+    static func firstMerge(mine: Lane, theirs: Lane, edited: Date?, now: Date) -> Lane {
+        if mine.sameContent(as: theirs) { return theirs }
+        var mine = mine
+        mine.updated = min(edited ?? .distantPast, now)
+        var winner = mine.updated > theirs.updated ? mine : theirs
+        if mine.pinned == true || theirs.pinned == true { winner.pinned = true }
+        if winner.sameContent(as: theirs) {
+            winner.updated = theirs.updated
+        } else if winner.sameContent(as: mine) {
+            winner.updated = mine.updated
+        } else {
+            winner.updated = now
+        }
+        return winner
     }
 
     // MARK: Reading and writing
@@ -196,7 +270,7 @@ public struct SharedLaneList: Equatable, Sendable {
 // MARK: Coding
 
 extension SharedLaneList: Codable {
-    private enum CodingKeys: String, CodingKey { case version, lanes, closed }
+    private enum CodingKeys: String, CodingKey { case version, lanes, closed, restore }
 
     /// One lane or close that does not decode is skipped, not the file.
     private struct Lenient<T: Decodable>: Decodable {
@@ -209,6 +283,7 @@ extension SharedLaneList: Codable {
         version = try container.decodeIfPresent(Int.self, forKey: .version) ?? Self.currentVersion
         lanes = (try container.decodeIfPresent([Lenient<Lane>].self, forKey: .lanes) ?? []).compactMap(\.value)
         closed = (try container.decodeIfPresent([Lenient<Closed>].self, forKey: .closed) ?? []).compactMap(\.value)
+        restore = try container.decodeIfPresent(Bool.self, forKey: .restore) ?? true
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -216,6 +291,7 @@ extension SharedLaneList: Codable {
         try container.encode(version, forKey: .version)
         try container.encode(lanes, forKey: .lanes)
         try container.encode(closed, forKey: .closed)
+        try container.encode(restore, forKey: .restore)
     }
 }
 
@@ -238,6 +314,7 @@ extension SharedLaneList.Closed {
 extension SharedLaneList.Lane: Codable {
     private enum CodingKeys: String, CodingKey {
         case id, title, directory, backendID, command, variantFlag, variant, host, section, pinned, order, updated
+        case icon, tint, sessionName, agentSessionID, overlay
     }
 
     public init(from decoder: Decoder) throws {
@@ -252,6 +329,11 @@ extension SharedLaneList.Lane: Codable {
         host = try c.decodeIfPresent(String.self, forKey: .host)
         section = try c.decodeIfPresent(String.self, forKey: .section)
         pinned = try c.decodeIfPresent(Bool.self, forKey: .pinned)
+        icon = try c.decodeIfPresent(String.self, forKey: .icon)
+        tint = try c.decodeIfPresent(String.self, forKey: .tint)
+        sessionName = try c.decodeIfPresent(String.self, forKey: .sessionName)
+        agentSessionID = try c.decodeIfPresent(String.self, forKey: .agentSessionID)
+        overlay = try c.decodeIfPresent(Bool.self, forKey: .overlay)
         order = try c.decodeIfPresent(Int.self, forKey: .order) ?? 0
         updated = try c.decodeIfPresent(String.self, forKey: .updated).map(SharedLaneDate.decode) ?? .distantPast
     }
@@ -270,6 +352,11 @@ extension SharedLaneList.Lane: Codable {
         try c.encode(host, forKey: .host)
         try c.encode(section, forKey: .section)
         try c.encode(pinned, forKey: .pinned)
+        try c.encode(icon, forKey: .icon)
+        try c.encode(tint, forKey: .tint)
+        try c.encode(sessionName, forKey: .sessionName)
+        try c.encode(agentSessionID, forKey: .agentSessionID)
+        try c.encode(overlay, forKey: .overlay)
         try c.encode(order, forKey: .order)
         try c.encode(SharedLaneDate.encode(updated), forKey: .updated)
     }
@@ -458,17 +545,22 @@ public struct SharedLaneSettings: Sendable {
     public var hostsDirectory: URL
     /// The list as last fetched, for when the hub cannot be reached.
     public var cacheFile: URL
+    /// Whether a tool may restart the list's lanes after a reboot
+    /// (``SharedLaneList/restore``). An app that only wants its rows
+    /// mirrored between Macs passes false, and the list says so.
+    public var restores: Bool
     /// Replaces the transport the registry picks, for tests.
     public var transport: (any SharedLaneTransport)?
     /// Replaces the registry read from ``hostsDirectory``, for tests.
     public var hosts: AgentHosts?
 
     public init(appID: String, hostsDirectory: URL = AgentHosts.defaultDirectory, cacheFile: URL? = nil,
-                transport: (any SharedLaneTransport)? = nil, hosts: AgentHosts? = nil) {
+                restores: Bool = true, transport: (any SharedLaneTransport)? = nil, hosts: AgentHosts? = nil) {
         self.appID = appID
         self.hostsDirectory = hostsDirectory
         self.cacheFile = cacheFile ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent(appID, isDirectory: true).appendingPathComponent("shared-lanes.json")
+        self.restores = restores
         self.transport = transport
         self.hosts = hosts
     }
@@ -476,10 +568,10 @@ public struct SharedLaneSettings: Sendable {
     /// The default: on for an app bundle with an identifier, so a test
     /// runner or command-line tool never touches a real hub. Sharing still
     /// waits for the hosts registry; without it nothing changes.
-    public static func automatic(bundle: Bundle = .main) -> SharedLaneSettings? {
+    public static func automatic(bundle: Bundle = .main, restores: Bool = true) -> SharedLaneSettings? {
         guard bundle.bundleURL.pathExtension == "app", let id = bundle.bundleIdentifier,
               SharedLanePaths.isValidAppID(id) else { return nil }
-        return SharedLaneSettings(appID: id)
+        return SharedLaneSettings(appID: id, restores: restores)
     }
 
     /// The registry, and how this Mac reaches the hub's list: directly on

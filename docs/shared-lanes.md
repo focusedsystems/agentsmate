@@ -41,6 +41,7 @@ The hub keeps each app's list at
 ```json
 {
   "version": 1,
+  "restore": true,
   "lanes": [
     {
       "id": "6F1C…",
@@ -53,6 +54,11 @@ The hub keeps each app's list at
       "host": "mini-1",
       "section": "Work",
       "pinned": null,
+      "icon": null,
+      "tint": null,
+      "sessionName": null,
+      "agentSessionID": null,
+      "overlay": null,
       "order": 3,
       "updated": "2026-01-02T03:04:05Z"
     }
@@ -72,6 +78,17 @@ Each lane field works as follows:
   the app: `<command> [<variantFlag> <variant>] <directory>`.
 - `variant` is null for the first lane in a folder.
 - `host` is null for a lane on the hub.
+- `icon` and `tint` are the icon (`LaneIcon.stringValue`) and the `#RRGGBB`
+  colour the person chose.
+- `sessionName` and `agentSessionID` name the session an adopted row attaches,
+  so another Mac attaches the same one.
+- `overlay` is true for a row the app lists itself (one its own registry
+  defines, or a session found running): the entry only carries its name, icon,
+  colour, pin or section, and never makes a row on another Mac.
+- `restore` (on the list, not a lane) is false when the list only mirrors rows
+  between Macs. A tool that restarts sessions after a reboot must skip it
+  whole. `SharedLaneSettings.restores` sets it, and once any copy says false
+  the merged list stays false.
 - `updated` and `at` are UTC times to the second.
 
 Every key is written, including the null ones.
@@ -92,8 +109,25 @@ piping the list to `mkdir -p <dir> && cat > <path>.tmp.$$ && mv <path>.tmp.$$ <p
 on the hub, with the same ssh options.
 
 A lane's `updated` changes only when this Mac changed the lane: its name,
-section, pin, host or folder. A lane unchanged here takes the hub's copy, so a
+icon, colour, section, pin, host or folder, or where it sits in the list. A lane unchanged here takes the hub's copy, so a
 rename on one Mac reaches the others.
+
+### The first sync
+
+A Mac that meets a row for the first time merges it, so no row is lost and no
+Mac's rows win outright:
+
+- A row only this Mac has is added, stamped with when this Mac last changed
+  its layout.
+- A row both Macs have, with the same content, is left alone.
+- A row both Macs have, with different content, takes the fields of the copy
+  edited later. A Mac with no edit time on record loses ties to the list's
+  copy. The row is pinned when either copy was.
+
+Syncing only mirrors the list. It never starts, attaches, stops or renames a
+session: a row another Mac added waits, unstarted, until it is shown, and a
+host change from another Mac is taken without restarting a terminal that is
+attached.
 
 ## When it syncs
 

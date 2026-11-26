@@ -418,6 +418,7 @@ public final class AgentLaneStore: ObservableObject {
         didSet {
             guard layout != oldValue, let data = try? JSONEncoder().encode(layout) else { return }
             defaults.set(data, forKey: keys.layout)
+            defaults.set(SharedLaneList.now(), forKey: keys.layoutChanged)
             scheduleRestoreWrite()
             sharedLanes?.localChanged()
         }
@@ -481,7 +482,8 @@ public final class AgentLaneStore: ObservableObject {
         if configuration.findsDetachedSessions { startDiscovery() }
         if let settings = configuration.sharedLanes, let resolved = settings.resolve() {
             agentHosts = resolved.hosts
-            sharedLanes = SharedLaneSync(store: self, transport: resolved.transport, cacheFile: settings.cacheFile)
+            sharedLanes = SharedLaneSync(store: self, transport: resolved.transport, cacheFile: settings.cacheFile,
+                                       restores: settings.restores)
         }
         if configuration.hostSessions != nil { startHostListing() }
         startLaneRequests()
@@ -1090,58 +1092,147 @@ public final class AgentLaneStore: ObservableObject {
 
     /// Run a lane on `host` from now on, restarting its terminal when it is
     /// attached so the wrapper starts there. The hub is recorded as no host.
-    public func setHost(_ id: AgentLane.ID, to host: String?) {
+    public func setHost(_ id: AgentLane.ID, to host: String?, reattach shouldReattach: Bool = true) {
         guard let index = lanes.firstIndex(where: { $0.id == id }), lanes[index].isClosable else { return }
         let value = host.flatMap { $0.isEmpty || $0 == agentHosts?.hub?.name ? nil : $0 }
         guard lanes[index].host != value else { return }
         lanes[index].host = value
         guard let session = sessions[id] else { return }
         session.update(lane: lanes[index])
-        if session.isAttached { reattach(id) }
+        if shouldReattach, session.isAttached { reattach(id) }
+    }
+
+    /// When this Mac last changed how its lanes are laid out, to the second.
+    var layoutEditedAt: Date? { defaults.object(forKey: keys.layoutChanged) as? Date }
+
+    /// The listed rows this Mac has styled or taken a style for, so it can
+    /// tell the others when the style is cleared.
+    private var styledOverlays: Set<AgentLane.ID> = []
+
+    /// Whether the person gave a row a name, icon, colour, pin or section.
+    private func isStyled(_ id: AgentLane.ID) -> Bool {
+        layout.names[id] != nil || layout.icons[id] != nil || layout.tints[id] != nil
+            || layout.pinned.contains(id) || layout.assignments[id] != nil
     }
 
     /// The lanes the person opened, as the shared list records them, in
-    /// list order. `updated` is left for the sync to fill in.
+    /// list order, and after them the rows the app lists itself that the
+    /// person named, pinned, coloured or filed (`overlay` entries, which
+    /// never make a row on another Mac). `updated` is left for the sync.
     func sharedLaneEntries() -> [SharedLaneList.Lane] {
-        displayOrder.filter { $0.isClosable && !detachedIDs.contains($0.id) }.enumerated().map { order, lane in
-            let wrapper = wrapperCommand(for: lane)
-            return SharedLaneList.Lane(id: lane.id, title: layout.names[lane.id],
-                                       directory: lane.directory.map { SharedLaneList.tildePath($0.path) },
-                                       backendID: lane.backendID, command: wrapper?.command,
-                                       variantFlag: wrapper?.variantFlag, variant: lane.variant, host: lane.host,
-                                       section: layout.section(of: lane),
-                                       pinned: layout.pinned.contains(lane.id) ? true : nil,
-                                       order: order, updated: .distantPast)
+        var entries: [SharedLaneList.Lane] = []
+        for (order, lane) in displayOrder.enumerated() {
+            if lane.isClosable && !detachedIDs.contains(lane.id) {
+                let wrapper = wrapperCommand(for: lane)
+                entries.append(SharedLaneList.Lane(
+                    id: lane.id, title: layout.names[lane.id],
+                    directory: lane.directory.map { SharedLaneList.tildePath($0.path) },
+                    backendID: lane.backendID, command: wrapper?.command,
+                    variantFlag: wrapper?.variantFlag, variant: lane.variant, host: lane.host,
+                    section: layout.section(of: lane),
+                    pinned: layout.pinned.contains(lane.id) ? true : nil,
+                    icon: layout.icons[lane.id], tint: layout.tints[lane.id],
+                    sessionName: lane.sessionName, agentSessionID: lane.agentSessionID,
+                    order: order, updated: .distantPast))
+            } else if isStyled(lane.id) || styledOverlays.contains(lane.id) {
+                // A row this Mac styled and has since cleared still gets an
+                // entry, a bare one, so the clearing reaches the other Macs.
+                styledOverlays.insert(lane.id)
+                entries.append(SharedLaneList.Lane(
+                    id: lane.id, title: layout.names[lane.id], backendID: lane.backendID,
+                    section: layout.assignments[lane.id].flatMap { $0.isEmpty ? nil : $0 },
+                    pinned: layout.pinned.contains(lane.id) ? true : nil,
+                    icon: layout.icons[lane.id], tint: layout.tints[lane.id], overlay: true,
+                    order: order, updated: .distantPast))
+            }
         }
+        return entries
     }
 
     /// Bring the sidebar in line with a merged list: add the lanes another
     /// Mac opened, take away the ones closed elsewhere (their sessions keep
-    /// running), and take renames, moves, pins and hosts made elsewhere.
-    /// `captured` is what this Mac had when the sync began; a lane changed
-    /// here since is left alone, and so are the `skipping` ids.
+    /// running), and take names, icons, moves, pins, hosts and order made
+    /// elsewhere. It only changes rows and how they are listed: it never
+    /// starts, attaches, stops or renames a session. `captured` is what
+    /// this Mac had when the sync began; a lane changed here since is left
+    /// alone, and so are the `skipping` ids.
     func applyShared(_ list: SharedLaneList, captured: [SharedLaneList.Lane], skipping: Set<String>) {
         let before = Dictionary(captured.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         var current = Dictionary(sharedLaneEntries().map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         let live = Set(list.lanes.map(\.id))
-        for close in list.closed where !live.contains(close.id) && current[close.id] != nil {
+        for close in list.closed where !live.contains(close.id) && current[close.id]?.overlay != true && current[close.id] != nil {
             removeSharedLane(close.id)
             current.removeValue(forKey: close.id)
         }
         for entry in list.lanes where !skipping.contains(entry.id) {
-            if let now = current[entry.id] {
+            if entry.overlay == true {
+                applyOverlay(entry, before: before[entry.id], now: current[entry.id])
+            } else if let now = current[entry.id], now.overlay != true {
                 guard let then = before[entry.id], then.sameContent(as: now), !entry.sameContent(as: now) else { continue }
-                if entry.title != now.title { setName(entry.id, to: entry.title) }
-                if entry.section != now.section { layout.move(entry.id, to: entry.section) }
-                if entry.pinned != now.pinned { layout.setPinned(entry.id, entry.pinned == true) }
-                if entry.host != now.host { setHost(entry.id, to: entry.host) }
+                applyStyle(entry, now: now)
+                if entry.host != now.host { setHost(entry.id, to: entry.host, reattach: false) }
+            } else if detachedIDs.contains(entry.id) {
+                // Adopted on another Mac: adopt it here, without attaching.
+                adopt(entry.id, into: entry.section, attach: false)
+                applyStyle(entry, now: nil)
             } else if !lanes.contains(where: { $0.id == entry.id }), backends[entry.backendID] != nil {
                 addSaved(LaneWorkspace.Lane(title: entry.title, directory: entry.directory, backendID: entry.backendID,
                                             section: entry.section, pinned: entry.pinned, variant: entry.variant,
+                                            sessionName: entry.sessionName, agentSessionID: entry.agentSessionID,
                                             id: entry.id, host: entry.host),
                          resume: true)
+                applyStyle(entry, now: nil)
             }
         }
+        applySharedOrder(list, captured: captured)
+    }
+
+    /// Take the name, icon, colour, section and pin an entry carries,
+    /// where they differ from `now` (the row as it stands, nil for none).
+    private func applyStyle(_ entry: SharedLaneList.Lane, now: SharedLaneList.Lane?) {
+        if entry.title != now?.title, entry.title != nil || now != nil { setName(entry.id, to: entry.title) }
+        if entry.section != now?.section, now != nil { layout.move(entry.id, to: entry.section) }
+        if (entry.pinned == true) != (now?.pinned == true) { layout.setPinned(entry.id, entry.pinned == true) }
+        if entry.icon != now?.icon || entry.tint != now?.tint {
+            setIcon(entry.icon.flatMap(LaneIcon.init), tint: entry.tint, for: entry.id)
+        }
+    }
+
+    /// An entry that only styles a row this Mac lists itself. A row not
+    /// listed here is left for later, and one styled here since the sync
+    /// began keeps what it has.
+    private func applyOverlay(_ entry: SharedLaneList.Lane, before: SharedLaneList.Lane?, now: SharedLaneList.Lane?) {
+        guard lanes.contains(where: { $0.id == entry.id }) else { return }
+        let unchanged: Bool
+        switch (before, now) {
+        case (nil, nil): unchanged = true
+        case (let then?, let current?): unchanged = then.sameContent(as: current)
+        default: unchanged = false
+        }
+        guard unchanged, now.map({ !entry.sameContent(as: $0) }) ?? true else { return }
+        let had = now ?? SharedLaneList.Lane(id: entry.id, backendID: entry.backendID, overlay: true)
+        if entry.title != had.title { setName(entry.id, to: entry.title) }
+        if let section = entry.section, section != had.section { layout.move(entry.id, to: section) }
+        if (entry.pinned == true) != (had.pinned == true) { layout.setPinned(entry.id, entry.pinned == true) }
+        if entry.icon != had.icon || entry.tint != had.tint {
+            setIcon(entry.icon.flatMap(LaneIcon.init), tint: entry.tint, for: entry.id)
+        }
+    }
+
+    /// Put the lanes this Mac and the list both hold in the list's order,
+    /// each into a place one of them already held, unless the order was
+    /// changed here since the sync began.
+    private func applySharedOrder(_ list: SharedLaneList, captured: [SharedLaneList.Lane]) {
+        func ids(_ entries: [SharedLaneList.Lane]) -> [String] { entries.filter { $0.overlay != true }.map(\.id) }
+        let local = ids(sharedLaneEntries())
+        guard local == ids(captured).filter(Set(local).contains) else { return }
+        let held = Set(local)
+        let wanted = ids(list.lanes).filter(held.contains)
+        guard wanted.count == local.count, wanted != local else { return }
+        var all = layout.orderedIDs(orderedLanes)
+        var next = wanted.makeIterator()
+        for index in all.indices where held.contains(all[index]) { all[index] = next.next() ?? all[index] }
+        layout.order = all
     }
 
     /// Take a lane closed on another Mac out of the sidebar. Only the
@@ -1529,17 +1620,23 @@ public final class AgentLaneStore: ObservableObject {
     /// (nil for none), attaches here in the background if it is not already,
     /// and from then on is kept like any lane they opened, so the restore
     /// snapshot and workspaces record it with its session's name.
-    public func adopt(_ id: AgentLane.ID, into section: String?) {
+    public func adopt(_ id: AgentLane.ID, into section: String?, attach: Bool = true) {
         guard detachedIDs.contains(id), let index = lanes.firstIndex(where: { $0.id == id }),
               let session = sessions[id] else { return }
         detachedIDs.remove(id)
         var lane = lanes[index]
         lane.isClosable = true
         lane.section = section
+        // A session found on another machine keeps running there; the row
+        // records where, so a Mac that shares the row reaches it the same way.
+        if lane.host == nil, let found = discovered.first(where: { DetachedSessions.laneID($0) == id }),
+           let host = found.session.host, host != agentHosts?.selfName {
+            lane.host = host
+        }
         lanes[index] = lane
         session.update(lane: lane)
         layout.move(id, to: section)
-        attachInBackground(id)
+        if attach { attachInBackground(id) }
         objectWillChange.send()
     }
 
@@ -3208,6 +3305,7 @@ public struct AgentsModeKeys: Sendable {
     public var filterUnread: String { prefix + "filterUnread" }
     public var fontOffset: String { prefix + "fontOffset" }
     public var layout: String { prefix + "layout" }
+    var layoutChanged: String { prefix + "layoutChanged" }
     public var shortcuts: String { prefix + "shortcuts" }
     public var newLaneBackend: String { prefix + "newLaneBackend" }
     public var newLaneCommand: String { prefix + "newLaneCommand" }

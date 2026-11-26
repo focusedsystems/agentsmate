@@ -15,6 +15,7 @@ final class SharedLaneSync {
     private weak var store: AgentLaneStore?
     let transport: any SharedLaneTransport
     let cacheFile: URL?
+    let restores: Bool
     /// The list as last synced, or as cached from an earlier launch.
     private(set) var base: SharedLaneList
     private var hasCache: Bool
@@ -35,7 +36,8 @@ final class SharedLaneSync {
     private(set) var lastError: String?
     private let io = DispatchQueue(label: "agentsmate.shared-lanes", qos: .utility)
 
-    init(store: AgentLaneStore, transport: any SharedLaneTransport, cacheFile: URL?) {
+    init(store: AgentLaneStore, transport: any SharedLaneTransport, cacheFile: URL?, restores: Bool = true) {
+        self.restores = restores
         self.store = store
         self.transport = transport
         self.cacheFile = cacheFile
@@ -125,10 +127,13 @@ final class SharedLaneSync {
         let closing = pendingClosed.map { SharedLaneList.Closed(id: $0.key, at: $0.value) }
         let base = self.base
         let transport = self.transport
+        let restores = self.restores
+        let edited = store.layoutEditedAt
         io.async {
             let outcome = Result { () throws -> SharedLaneList in
                 let remote = try transport.read().map(SharedLaneList.decode) ?? SharedLaneList()
-                let merged = SharedLaneList.reconcile(local: local, base: base, remote: remote, closing: closing)
+                let merged = SharedLaneList.reconcile(local: local, base: base, remote: remote, closing: closing,
+                                                        restores: restores, edited: edited)
                 if merged != remote { try transport.write(merged.encoded()) }
                 return merged
             }
