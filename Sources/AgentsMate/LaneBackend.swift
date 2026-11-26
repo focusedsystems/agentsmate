@@ -241,6 +241,11 @@ public struct CommandLaneBackend: LaneBackend {
     /// ``LaunchLine``), and extra folders it may read.
     public var promptFile: URL?
     public var extraDirectories: [String] = []
+    /// Starts a Codex session with `--dangerously-bypass-hook-trust`, so it
+    /// runs its enabled hooks without asking to review them first. Off by
+    /// default: it trusts every hook Codex finds, so turn it on only for an
+    /// app whose hooks all come from sources its owner already trusts.
+    public var codexBypassesHookTrust = false
 
     /// The wrapper's flag for a second lane in the same folder (`-n`), given
     /// the lane's ``AgentLane/variant`` before the folder. Nil means the
@@ -313,7 +318,8 @@ public struct CommandLaneBackend: LaneBackend {
             return TerminalLaunch(executable: shell, arguments: ["-l"], directory: directory)
         }
         var line = passesDirectory ? trimmed
-            : LaunchLine.inject(trimmed, promptFile: lane.promptFile ?? promptFile, directories: extraDirectories)
+            : LaunchLine.inject(trimmed, promptFile: lane.promptFile ?? promptFile, directories: extraDirectories,
+                              codexBypassesHookTrust: codexBypassesHookTrust)
         if passesDirectory {
             if let variant = lane.variant, let variantFlag { line += " " + variantFlag + " " + ShellQuote.quote(variant) }
             line += " " + ShellQuote.quote(directory)
@@ -396,11 +402,14 @@ public struct CommandLaneBackend: LaneBackend {
     public func resumeLaunch(for lane: AgentLane, shell: String) -> TerminalLaunch? {
         guard !passesDirectory, let resumed = LaneResume.command(for: command.trimmingCharacters(in: .whitespaces)) else { return nil }
         let prompt = lane.promptFile ?? promptFile
-        let fresh = LaunchLine.inject(command, promptFile: prompt, directories: extraDirectories)
-        let again = LaunchLine.inject(resumed, promptFile: prompt, directories: extraDirectories)
+        let fresh = LaunchLine.inject(command, promptFile: prompt, directories: extraDirectories,
+                                      codexBypassesHookTrust: codexBypassesHookTrust)
+        let again = LaunchLine.inject(resumed, promptFile: prompt, directories: extraDirectories,
+                                      codexBypassesHookTrust: codexBypassesHookTrust)
         var copy = self
         copy.promptFile = nil
         copy.extraDirectories = []
+        copy.codexBypassesHookTrust = false
         copy.command = again + " || " + fresh
         return copy.launch(for: lane, shell: shell)
     }
