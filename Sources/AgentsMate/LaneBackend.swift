@@ -163,9 +163,14 @@ public protocol LaneBackend: Sendable {
     /// without possibly starting one. What launch uses to open a lane by
     /// itself. Nil by default.
     func attachLaunch(for lane: AgentLane, sessionName: String, shell: String) -> TerminalLaunch?
+    /// The ssh destination of the Mac this lane's agent runs on, when that
+    /// is not this Mac, so an image pasted here can be sent there. Nil for
+    /// a lane on this Mac. Nil by default.
+    func remoteHost(for lane: AgentLane) -> String?
 }
 
 public extension LaneBackend {
+    func remoteHost(for lane: AgentLane) -> String? { nil }
     func resumeLaunch(for lane: AgentLane, shell: String) -> TerminalLaunch? { nil }
     var canStop: Bool { false }
     func stop(_ lane: AgentLane) {}
@@ -296,6 +301,10 @@ public struct CommandLaneBackend: LaneBackend {
 
     /// The person's login shell.
     public static let shell = CommandLaneBackend(id: "shell", displayName: "Shell", command: "")
+
+    public func remoteHost(for lane: AgentLane) -> String? {
+        tmuxSessions?.validHost
+    }
 
     public func launch(for lane: AgentLane, shell: String) -> TerminalLaunch {
         let trimmed = command.trimmingCharacters(in: .whitespaces)

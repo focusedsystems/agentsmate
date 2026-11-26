@@ -53,6 +53,12 @@ public struct ClaudeBackgroundLaneBackend: LaneBackend {
         return !names.contains(host.lowercased())
     }
 
+    public func remoteHost(for lane: AgentLane) -> String? {
+        guard isRemote(lane.host), let host = lane.host?.trimmingCharacters(in: .whitespaces),
+              AgentSessionStop.isValidHost(host) else { return nil }
+        return host
+    }
+
     /// Which row holds which short id, kept by the store, so a name never
     /// resolves to a session another row already has.
     public var holders = SessionHolders()

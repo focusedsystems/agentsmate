@@ -400,6 +400,7 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
         view.getTerminal().changeHistorySize(configuration.scrollback)
         view.scrollSensitivity = configuration.scrollSensitivity
         view.registerForDraggedTypes(AgentTerminalView.droppedTypes)
+        view.remoteHost = backend.remoteHost(for: lane)
         view.onShortcut = { [weak self] shortcut in self?.onShortcut?(shortcut) ?? false }
         view.onUserInteraction = { [weak self] in if let self { self.onUserInteraction?(self) } }
         view.shortcutResolver = { [weak self] event in self?.shortcutResolver?(event) }
