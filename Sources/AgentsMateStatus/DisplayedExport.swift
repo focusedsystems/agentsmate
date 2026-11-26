@@ -319,8 +319,13 @@ public struct DisplayedExport: Codable, Equatable, Sendable {
 
     /// The file at `url`, or nil when it is missing, unreadable or of another schema.
     public static func load(_ url: URL) -> DisplayedExport? {
-        guard let data = try? Data(contentsOf: url),
-              let export = try? decoder.decode(DisplayedExport.self, from: data),
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return decode(data)
+    }
+
+    /// An export's bytes, or nil when they are not one of this schema.
+    public static func decode(_ data: Data) -> DisplayedExport? {
+        guard let export = try? decoder.decode(DisplayedExport.self, from: data),
               export.schemaVersion == Self.schemaVersion else { return nil }
         return export
     }
