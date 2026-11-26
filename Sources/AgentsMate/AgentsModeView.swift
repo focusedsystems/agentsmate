@@ -218,7 +218,8 @@ public struct AgentLaneSidebar<Accessory: View>: View {
                         style: store.configuration.rowStyle,
                         icon: look.icon, tintHex: look.tintHex, showsIcon: showsIcons, showsPullRequests: showsPullRequests,
                         isNested: parallelPlacement == ParallelSessionPlacement.nested.rawValue
-                            && !group.isDetached && store.parallelOwner(of: lane.id) != nil)
+                            && !group.isDetached && store.parallelOwner(of: lane.id) != nil,
+                        badges: store.laneBadges(for: lane))
                     .tag(lane.id)
                     // A found session follows its folder's row, as a row of
                     // its own with that row's icon (or indented under it,
@@ -833,6 +834,8 @@ struct LaneRow: View {
     /// Indented under the row above: a parallel session, when the person
     /// chose ``ParallelSessionPlacement/nested``.
     var isNested = false
+    /// Where, how and by which agent the lane runs; nil draws no marks.
+    var badges: LaneBadges? = nil
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -869,17 +872,21 @@ struct LaneRow: View {
                         .lineLimit(2)
                         .truncationMode(.tail)
                         .fixedSize(horizontal: false, vertical: true)
-                } else if !status.isEmpty {
+                } else if !status.isEmpty, badges == nil {
                     statusText(status)
                 }
-                let carriesStatus = detail != nil && !status.isEmpty
-                if carriesStatus || hasPullRequestPills {
+                let carriesStatus = (detail != nil || badges != nil) && !status.isEmpty
+                if carriesStatus || hasPullRequestPills || badges != nil {
                     HStack(spacing: 4) {
                         if hasPullRequestPills {
                             pullRequestPills.layoutPriority(1)
                         }
                         if carriesStatus {
                             statusText(status).frame(minWidth: 24, alignment: .leading)
+                        }
+                        if let badges {
+                            Spacer(minLength: 2)
+                            LaneBadgeStrip(badges: badges).layoutPriority(2)
                         }
                     }
                     .padding(.top, 1)
@@ -986,6 +993,7 @@ struct LaneRow: View {
         let status = session.isOrphan ? "Running, nothing attached"
             : session.needsAttention ? "\(session.status.title), new" : session.status.title
         var parts = [loadStage?.title ?? status]
+        if let badges { parts.append(badges.summary) }
         if let subtitle = session.subtitle { parts.append(subtitle) }
         if let notice = session.renameNotice { parts.append(notice) }
         if let summary = session.summary, !summary.isEmpty { parts.append(summary) }

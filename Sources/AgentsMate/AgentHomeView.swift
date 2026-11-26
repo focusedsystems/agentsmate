@@ -129,7 +129,8 @@ public struct AgentHomeView: View {
                         if let session = sessionsByID[item.id] {
                             AgentHomeCard(session: session, area: store.homeArea(of: session.lane),
                                           isSelected: selection == item.id, isFocused: boardFocused,
-                                          showsPullRequests: showsPullRequests)
+                                          showsPullRequests: showsPullRequests,
+                                          badges: store.laneBadges(for: session.lane))
                                 .id(item.id)
                                 .onTapGesture { open(item.id) }
                                 .contextMenu {
@@ -424,6 +425,7 @@ struct AgentHomeCard: View {
     /// colour, else in grey, as a list's selection does.
     let isFocused: Bool
     var showsPullRequests = false
+    var badges: LaneBadges? = nil
 
     static let pillLimit = 4
 
@@ -444,8 +446,12 @@ struct AgentHomeCard: View {
                 Spacer(minLength: 4)
                 age
             }
-            if let area {
-                Text(area).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            if area != nil || badges != nil {
+                HStack(spacing: 6) {
+                    if let area { Text(area).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
+                    Spacer(minLength: 2)
+                    if let badges { LaneBadgeStrip(badges: badges) }
+                }
             }
             if let hint = session.standingHint, hint.isStale, let host = hint.host {
                 Label {
@@ -533,6 +539,7 @@ struct AgentHomeCard: View {
     private var accessibilityValue: String {
         var parts = [session.status.title]
         if let area { parts.append(area) }
+        if let badges { parts.append(badges.summary) }
         if let detail = AgentHome.detail(for: session) { parts.append(detail) }
         parts += session.displayedPullRequests.map(\.accessibilityDescription)
         if let last = session.lastActivity {
