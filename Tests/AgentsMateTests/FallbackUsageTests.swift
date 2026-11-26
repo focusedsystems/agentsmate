@@ -10,7 +10,7 @@ private final class Counter: @unchecked Sendable {
 }
 
 final class FallbackUsageTests: XCTestCase {
-    private let now = Date(timeIntervalSince1970: 1_800_000_000)
+    private static let now = Date(timeIntervalSince1970: 1_800_000_000)
 
     private func cache(age: Int, percent: Int) -> String {
         "UTILIZATION=\(percent)\nRESETS_AT=2027-06-01T00:00:00Z\nWEEKLY_UTILIZATION=\(percent)\nWEEKLY_RESETS_AT=2027-06-01T00:00:00Z\nTIMESTAMP=\(1_800_000_000 - age)\n"
@@ -24,7 +24,7 @@ final class FallbackUsageTests: XCTestCase {
     }
 
     private func remote(_ text: String, counter: Counter = Counter()) -> KeyValueUsageCommandSource {
-        let now = now
+        let now = Self.now
         return KeyValueUsageCommandSource(agent: "Claude", command: ["/usr/bin/ssh", "host"], interval: 60, maxInterval: 3600,
                                           timeout: 5, maxAge: KeyValueUsageFileSource.defaultMaxAge,
                                           runner: { _, _ in counter.bump(); return text }, clock: { now })
@@ -33,7 +33,7 @@ final class FallbackUsageTests: XCTestCase {
     func testFreshLocalReadingNeverTouchesTheRemote() throws {
         let reads = Counter()
         let source = FallbackUsageSource(primary: try local(cache(age: 60, percent: 40)),
-                                         fallbacks: [remote(cache(age: 10, percent: 90), counter: reads)], clock: { self.now })
+                                         fallbacks: [remote(cache(age: 10, percent: 90), counter: reads)], clock: { Self.now })
         XCTAssertEqual(source.read()?.fullest?.percent, 40)
         XCTAssertEqual(reads.count, 0)
     }
@@ -43,7 +43,7 @@ final class FallbackUsageTests: XCTestCase {
             primary: try local(cache(age: 7 * 86400, percent: 84)),
             fallbacks: [remote(cache(age: 1800, percent: 55)), remote(cache(age: 30, percent: 87)),
                         remote(cache(age: 7200, percent: 10))],
-            clock: { self.now })
+            clock: { Self.now })
         let usage = try XCTUnwrap(source.read())
         XCTAssertEqual(usage.fullest?.percent, 87, "the newest of the remote readings, not the first")
         XCTAssertFalse(usage.isUnknown)
@@ -51,14 +51,14 @@ final class FallbackUsageTests: XCTestCase {
 
     func testMissingLocalFileFallsBackToo() throws {
         let source = FallbackUsageSource(primary: try local(nil), fallbacks: [remote(cache(age: 30, percent: 22))],
-                                         clock: { self.now })
+                                         clock: { Self.now })
         XCTAssertEqual(source.read()?.fullest?.percent, 22)
     }
 
     func testBothStaleStaysUnknown() throws {
         let source = FallbackUsageSource(primary: try local(cache(age: 7 * 86400, percent: 84)),
                                          fallbacks: [remote(cache(age: 2 * 86400, percent: 50)), remote("")],
-                                         clock: { self.now })
+                                         clock: { Self.now })
         let usage = try XCTUnwrap(source.read())
         XCTAssertTrue(usage.isUnknown)
         XCTAssertTrue(usage.windows.isEmpty)
