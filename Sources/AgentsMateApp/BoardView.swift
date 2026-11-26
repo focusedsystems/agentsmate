@@ -8,6 +8,10 @@ struct BoardView: View {
     @ObservedObject var model: BoardModel
     @Binding var selection: AgentBoard.Card.ID?
     @AppStorage("showsAll") private var showsAll = false
+    /// Only cards on this Mac; empty for every Mac.
+    @AppStorage("hostFilter") private var hostFilter = ""
+    /// Only cards running this agent (`claude`, `codex`); empty for any.
+    @AppStorage("agentFilter") private var agentFilter = ""
     @State private var query = ""
     @State private var confirmingStop: AgentBoard.Card?
 
@@ -15,12 +19,17 @@ struct BoardView: View {
         let text = query.trimmingCharacters(in: .whitespaces)
         return model.cards.filter { card in
             guard showsAll || card.isRunning else { return false }
+            if !hostFilter.isEmpty, card.host.caseInsensitiveCompare(hostFilter) != .orderedSame { return false }
+            if !agentFilter.isEmpty, (card.agent ?? "").caseInsensitiveCompare(agentFilter) != .orderedSame { return false }
             guard !text.isEmpty else { return true }
             let fields = [card.title, card.sessionTitle, card.summary, card.section, card.folder, card.host,
                           AppInfo.name(card.app)]
             return fields.contains { $0?.localizedCaseInsensitiveContains(text) == true }
         }
     }
+
+    /// Whether the Active / All Lanes choice shows a card, before the chips.
+    private func visible(_ card: AgentBoard.Card) -> Bool { showsAll || card.isRunning }
 
     private var columns: [AgentBoard.Column] {
         showsAll ? AgentBoard.Column.allCases : [.needsYou, .working, .idleOrDone]
@@ -77,8 +86,20 @@ struct BoardView: View {
             total(cards.filter { $0.column == .working }.count, "working", "bolt.fill", .blue)
             total(cards.filter { $0.column == .idleOrDone }.count, "idle or done", "moon.fill", .secondary)
             Spacer()
+            ForEach(["claude", "codex"], id: \.self) { agent in
+                FilterChip(title: agent.capitalized, count: model.cards.filter { visible($0) && $0.agent == agent }.count,
+                           isOn: agentFilter == agent) {
+                    agentFilter = agentFilter == agent ? "" : agent
+                }
+            }
+            Divider().frame(height: 18)
             ForEach([model.localHost] + model.remoteHosts, id: \.self) { host in
-                HostBadge(host: host, state: model.hostStates[host] ?? .asking)
+                FilterChip(title: host, count: model.cards.filter { visible($0) && $0.host.caseInsensitiveCompare(host) == .orderedSame }.count,
+                           isOn: hostFilter.caseInsensitiveCompare(host) == .orderedSame) {
+                    hostFilter = hostFilter.caseInsensitiveCompare(host) == .orderedSame ? "" : host
+                } leading: {
+                    HostBadge(state: model.hostStates[host] ?? .asking)
+                }
             }
         }
         .padding(.horizontal, 16)
@@ -95,18 +116,14 @@ struct BoardView: View {
     }
 }
 
+/// Whether a Mac answered: green, asking: yellow, silent: red.
 private struct HostBadge: View {
-    let host: String
     let state: BoardModel.HostState
 
     var body: some View {
-        HStack(spacing: 4) {
-            Circle().fill(color).frame(width: 7, height: 7)
-            Text(host).font(.caption).foregroundStyle(.secondary)
-        }
-        .help(help)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(host): \(help)")
+        Circle().fill(color).frame(width: 7, height: 7)
+            .help(help)
+            .accessibilityLabel(help)
     }
 
     private var color: Color {
@@ -123,6 +140,43 @@ private struct HostBadge: View {
         case .answered(let at): "Answered \(at.formatted(date: .omitted, time: .standard))"
         case .unreachable: "Did not answer; showing what it last said"
         }
+    }
+}
+
+/// A toggle in the header that narrows the board to one Mac or one agent.
+private struct FilterChip<Leading: View>: View {
+    let title: String
+    let count: Int
+    let isOn: Bool
+    let action: () -> Void
+    @ViewBuilder var leading: () -> Leading
+
+    init(title: String, count: Int, isOn: Bool, action: @escaping () -> Void,
+         @ViewBuilder leading: @escaping () -> Leading = { EmptyView() }) {
+        self.title = title
+        self.count = count
+        self.isOn = isOn
+        self.action = action
+        self.leading = leading
+    }
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                leading()
+                Text(title)
+                Text("\(count)").monospacedDigit().foregroundStyle(.secondary)
+            }
+            .font(.callout)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 4)
+            .background(Capsule().fill(isOn ? Color.accentColor.opacity(0.25) : Color.secondary.opacity(0.12)))
+            .overlay(Capsule().strokeBorder(isOn ? Color.accentColor : Color.clear))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .help(isOn ? "Showing only \(title); click to show all" : "Show only \(title)")
+        .accessibilityAddTraits(isOn ? .isSelected : [])
     }
 }
 
