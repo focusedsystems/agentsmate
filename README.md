@@ -142,9 +142,13 @@ The sidebar's foot always carries the Claude and Codex meters
 `Configuration.usageSources` an app gets `AgentUsageSources.standard()`:
 Claude from the status-line cache under `~/.claude`, Codex from its own
 session files. An agent with no current reading stays in the footer as "Usage
-unknown". An app whose agents run on another Mac passes
-`AgentUsageSources.standard(claudeHost:)` to read Claude's cache from that
-host over `ssh`.
+unknown". The cache on this Mac is read first. A Mac whose agents run
+elsewhere has none, or an old one, so the cache on the agent hosts registry's
+hub (`~/.config/agent-hosts`) is read over `ssh` with BatchMode, at most once
+a minute and off the main thread, and the freshest reading is shown; a Mac
+that is itself the hub never uses `ssh`. An app passes
+`AgentUsageSources.standard(claudeHost:fallbackHosts:)` to name the hosts
+itself, or `fallbackHosts: []` to read this Mac only.
 
 `Configuration.usageSources` replaces the defaults.
 `KeyValueUsageFileSource` reads the `KEY=VALUE` file a status-line helper
