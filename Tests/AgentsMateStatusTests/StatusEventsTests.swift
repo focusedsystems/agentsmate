@@ -132,6 +132,21 @@ final class ClaudeAgentsListTests: XCTestCase {
         XCTAssertEqual(ClaudeAgentsList.parse(Data(json.utf8), includeInteractive: true).last?.state, .running)
         XCTAssertTrue(ClaudeAgentsList.parse(Data("nope".utf8)).isEmpty)
     }
+
+    func testWorkingSessionAtRestReadsAsDone() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let job = home.appendingPathComponent("jobs/1")
+        try FileManager.default.createDirectory(at: job, withIntermediateDirectories: true)
+        try Data(#"{"state":"working","tempo":"idle","inFlight":{"tasks":0,"queued":1}}"#.utf8)
+            .write(to: job.appendingPathComponent("state.json"))
+        let env = ["CLAUDE_CONFIG_DIR": home.path]
+        XCTAssertTrue(ClaudeAgentsList.isResting(id: "1", environment: env))
+        XCTAssertFalse(ClaudeAgentsList.isResting(id: "../1", environment: env))
+        let records = ClaudeAgentsList.parse(Data(json.utf8)) { ClaudeAgentsList.isResting(id: $0, environment: env) }
+        XCTAssertEqual(records.map(\.state), [.waitingForInput, .done])
+        try Data(#"{"tempo":"active","inFlight":{"tasks":1}}"#.utf8).write(to: job.appendingPathComponent("state.json"))
+        XCTAssertFalse(ClaudeAgentsList.isResting(id: "1", environment: env))
+    }
 }
 
 final class SessionMatchTests: XCTestCase {

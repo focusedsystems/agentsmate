@@ -25,12 +25,14 @@ public enum ClaudeAgentsList {
     /// Interactive sessions are left out unless asked for: those running in
     /// tmux lanes already report through hooks, and a poll would outdate a
     /// permission prompt a hook just recorded.
-    public static func parse(_ data: Data, includeInteractive: Bool = false, now: Date = Date()) -> [LaneStatus] {
+    public static func parse(_ data: Data, includeInteractive: Bool = false, now: Date = Date(),
+                             isResting: (String) -> Bool = { isResting(id: $0) }) -> [LaneStatus] {
         guard let entries = try? JSONDecoder().decode([Entry].self, from: data) else { return [] }
         return entries.compactMap { entry in
             if !includeInteractive, entry.kind != "background" { return nil }
             let state: LaneState
             switch entry.state ?? entry.status {
+            case "working" where entry.kind == "background" && entry.id.map(isResting) == true: state = .done
             case "working", "busy": state = .running
             case "blocked": state = .waitingForInput
             case "done", "idle": state = .done
@@ -41,6 +43,26 @@ public enum ClaudeAgentsList {
                               message: entry.kind.map { "\($0) session" },
                               event: event, updatedAt: now, agentID: entry.id)
         }
+    }
+
+    struct JobState: Decodable {
+        struct InFlight: Decodable { var tasks: Int? }
+        var tempo: String?
+        var inFlight: InFlight?
+    }
+
+    /// Whether a background session the list calls working has in fact come
+    /// to rest: its job file (`~/.claude/jobs/<id>/state.json`) says its tempo
+    /// is idle with no task running. A session left with a queued input that
+    /// never arrives stays "working" in the list while it waits at its prompt.
+    public static func isResting(id: String, environment: [String: String] = ProcessInfo.processInfo.environment) -> Bool {
+        guard id.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" }), !id.isEmpty else { return false }
+        let config = environment["CLAUDE_CONFIG_DIR"].map { URL(fileURLWithPath: $0) }
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude")
+        let file = config.appendingPathComponent("jobs").appendingPathComponent(id).appendingPathComponent("state.json")
+        guard let data = try? Data(contentsOf: file), data.count < 1_000_000,
+              let job = try? JSONDecoder().decode(JobState.self, from: data) else { return false }
+        return job.tempo == "idle" && (job.inFlight?.tasks ?? 0) == 0
     }
 
     /// Run `claude agents --json` and parse it. Empty when Claude is missing

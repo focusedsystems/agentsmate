@@ -235,8 +235,9 @@ public struct AgentUsageFooter: View {
     @ObservedObject var model: AgentUsageModel
     var barBackground: Bool
 
-    /// `barBackground` backs the footer with the bar material, for a dock
-    /// whose list sits on its own panel.
+    /// The footer is always backed by the bar material: the list scrolls under
+    /// it, and a clear footer lets its rows show through the meters.
+    /// `barBackground` is kept for callers that still pass it.
     public init(model: AgentUsageModel, barBackground: Bool = false) {
         self.model = model
         self.barBackground = barBackground
@@ -248,6 +249,6 @@ public struct AgentUsageFooter: View {
             AgentUsageMeter(model: model)
                 .padding(.horizontal, 12).padding(.vertical, 8)
         }
-        .background(barBackground ? AnyShapeStyle(.bar) : AnyShapeStyle(.clear))
+        .background(.bar)
     }
 }
