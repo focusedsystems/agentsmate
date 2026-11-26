@@ -184,8 +184,8 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         }
         // Escape leaves the lane for All Agents, as a list's empty selection.
         .onExitCommand { store.showHome() }
-        // A filter that would leave the list empty turns itself off; only a
-        // search that matches nothing leaves the Show All overlay.
+        // A filter that would leave the list empty turns itself off; a search
+        // that matches nothing says so over the empty list.
         .onChange(of: statusFilteredCount) { settleFilters(newest: nil) }
         .onChange(of: searchText) {
             store.displayedSidebarSearch = searchText
@@ -195,10 +195,14 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         .onAppear { settleFilters(newest: nil) }
         .overlay {
             if visibleLanes.isEmpty, !store.listedLanes.isEmpty {
+                let query = searchText.trimmingCharacters(in: .whitespaces)
                 VStack(spacing: 6) {
-                    Text("No Matching \(labels.listTitle)").font(.callout).foregroundStyle(.secondary)
-                    Button("Show All", action: clearFilters).controlSize(.small)
+                    Text(query.isEmpty ? "No Matching \(labels.listTitle)" : "Nothing matches “\(query)”")
+                        .font(.callout).foregroundStyle(.secondary)
+                    Button(query.isEmpty ? "Show All" : "Clear Search", action: clearFilters).controlSize(.small)
                 }
+                .padding(.horizontal, 12)
+                .multilineTextAlignment(.center)
             }
         }
     }
@@ -413,19 +417,14 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         Self.visibleLanes(store: store, query: searchText, filters: activeFilters)
     }
 
-    /// A search is made across all lanes, so it sets the status filters aside;
-    /// one that finds nothing shows every lane, as Show All does, without
-    /// the person having to ask: the search text stays, and the list comes back
-    /// narrowed again as soon as the text matches something.
+    /// A search is made across all lanes, so it sets the status filters aside.
+    /// One that finds nothing shows nothing, and the list says so: showing
+    /// every lane instead read as a search that did not work.
     static func visibleLanes(store: AgentLaneStore, query: String, filters: Set<LaneStatusFilter>) -> [AgentLane] {
         let found = matchingLanes(store: store, query: query, filters: filters)
-        guard found.isEmpty, !query.trimmingCharacters(in: .whitespaces).isEmpty else { return found }
+        guard found.isEmpty, !query.trimmingCharacters(in: .whitespaces).isEmpty, !filters.isEmpty else { return found }
         // A search the status filters hide drops the filters and keeps the search.
-        if !filters.isEmpty {
-            let anywhere = matchingLanes(store: store, query: query, filters: [])
-            if !anywhere.isEmpty { return anywhere }
-        }
-        return store.listedLanes.filter { store.session(for: $0) != nil }
+        return matchingLanes(store: store, query: query, filters: [])
     }
 
     private static func matchingLanes(store: AgentLaneStore, query rawQuery: String,
