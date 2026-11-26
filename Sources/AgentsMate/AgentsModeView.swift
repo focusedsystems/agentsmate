@@ -391,6 +391,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
                 Task { await store.newLane(in: group, backendID: backend.id) }
             }
         }
+        OpenSessionByIDItem(store: store, section: group.isPinned ? nil : group.section)
     }
 
     private var selectionBinding: Binding<AgentLane.ID?> {

@@ -16,6 +16,15 @@ final class LaneMenuPresentation: ObservableObject {
     @Published var newSectionLane: AgentLane.ID?
     /// The lane Stop Agent… is asking about.
     @Published var pendingStop: PendingStop?
+    /// Open Session by ID… is asking for an id, to open in this section.
+    @Published var openingSessionIn: SessionTarget?
+    @Published var sessionIDText = ""
+    /// Why the last id given could not be opened.
+    @Published var sessionIDFailure: String?
+
+    struct SessionTarget: Equatable {
+        var section: String?
+    }
 
     struct PendingStop: Equatable {
         var id: AgentLane.ID
@@ -91,6 +100,34 @@ struct LaneMenuSheets: ViewModifier {
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("This ends the agent's process. Its conversation is kept, and opening the lane again resumes it. Close leaves the agent running instead.")
+            }
+            .alert("Open Session by ID", isPresented: Binding(get: { presentation.openingSessionIn != nil },
+                                                              set: { if !$0 { presentation.openingSessionIn = nil } })) {
+                TextField("Session ID", text: $presentation.sessionIDText)
+                Button("Open") {
+                    guard let target = presentation.openingSessionIn else { return }
+                    let text = presentation.sessionIDText
+                    let failure: String?
+                    switch store.openSession(id: text, in: target.section) {
+                    case .opened: failure = nil
+                    case .invalid: failure = "“\(text)” is not a session id."
+                    case .noBackend: failure = "This app has no Claude background agent to attach it with."
+                    case .notFound(let id):
+                        failure = "No running Claude background session has the id \(id). "
+                            + "Check claude agents, or try again in a moment if it has just started."
+                    }
+                    // After this alert has gone, so the next one is shown.
+                    if let failure { DispatchQueue.main.async { presentation.sessionIDFailure = failure } }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Paste the short id `claude --bg` printed, or the conversation's session id.")
+            }
+            .alert("Can't Open the Session", isPresented: Binding(get: { presentation.sessionIDFailure != nil },
+                                                                 set: { if !$0 { presentation.sessionIDFailure = nil } })) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(presentation.sessionIDFailure ?? "")
             }
             .alert("Switch the agent?", isPresented: Binding(get: { presentation.pendingSwitch != nil },
                                                              set: { if !$0 { presentation.pendingSwitch = nil } })) {

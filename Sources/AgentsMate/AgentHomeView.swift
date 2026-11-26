@@ -336,6 +336,7 @@ public struct AgentHomeView: View {
                         Task { await store.newLane(in: LaneGroup(section: nil, lanes: []), backendID: backend.id) }
                     }
                 }
+                OpenSessionByIDItem(store: store, section: nil)
             }
             .fixedSize()
             .controlSize(.large)
