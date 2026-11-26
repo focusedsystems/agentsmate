@@ -18,12 +18,19 @@ final class UsageFooterTests: XCTestCase {
                        ["Claude", "Codex"], "an app that says nothing gets both meters")
     }
 
-    func testRemoteHostReadsOverSSHAndAnUnsafeHostIsIgnored() {
-        let remote = AgentUsageSources.claude(host: "build-host") as? KeyValueUsageCommandSource
-        XCTAssertEqual(remote?.command.last, "cat " + AgentUsageSources.claudeCachePath)
-        XCTAssertEqual(remote?.command.first, "/usr/bin/ssh")
-        XCTAssertTrue(AgentUsageSources.claude(host: "-oProxyCommand=x") is KeyValueUsageFileSource)
-        XCTAssertTrue(AgentUsageSources.claude(host: "  ") is KeyValueUsageFileSource)
+    func testFallbackHostsReadOverSSHSkippingThisMacAndUnsafeNames() throws {
+        let source = AgentUsageSources.claude(host: "-oProxyCommand=x", fallbackHosts: ["build-host", "this-mac", "build-host", "  "],
+                                              selfNames: ["this-mac"])
+        let fallback = try XCTUnwrap(source as? FallbackUsageSource)
+        XCTAssertTrue(fallback.primary is KeyValueUsageFileSource, "this Mac's own cache is read first")
+        let remote = try XCTUnwrap(fallback.fallbacks as? [KeyValueUsageCommandSource])
+        XCTAssertEqual(remote.count, 1)
+        XCTAssertEqual(remote.first?.command, ["/usr/bin/ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "--",
+                                               "build-host", "cat " + AgentUsageSources.claudeCachePath])
+        XCTAssertEqual(remote.first?.interval, 60)
+        XCTAssertTrue(AgentUsageSources.claude(fallbackHosts: ["this-mac"], selfNames: ["this-mac"]) is KeyValueUsageFileSource,
+                      "where the fallback host is this Mac there is no ssh")
+        XCTAssertTrue(AgentUsageSources.claude(fallbackHosts: [], selfNames: []) is KeyValueUsageFileSource)
     }
 
     func testAnAgentWithNoReadingStaysAsUnknown() async throws {
