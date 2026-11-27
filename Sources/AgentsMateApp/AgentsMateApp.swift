@@ -1,4 +1,5 @@
 import SwiftUI
+import AgentsMateDevelopment
 import AgentsMateStatus
 
 /// A dashboard of every agent on every Mac, across every agent app. It runs
@@ -6,22 +7,63 @@ import AgentsMateStatus
 @main
 struct AgentsMateApp: App {
     @StateObject private var model = BoardModel()
+    @StateObject private var hub = DevelopmentHub()
     @State private var selection: AgentBoard.Card.ID?
+    @AppStorage("selectedTab") private var tabRaw = AgentsTab.agents.rawValue
 
     var body: some Scene {
         Window("AgentsMate", id: "board") {
-            BoardView(model: model, selection: $selection)
+            RootView(model: model, hub: hub, selection: $selection, tabRaw: $tabRaw)
                 .frame(minWidth: 820, minHeight: 480)
-                .onAppear { model.start() }
         }
         .defaultSize(width: 1280, height: 820)
-        .commands { BoardCommands(model: model, selection: $selection) }
+        .commands { BoardCommands(model: model, hub: hub, selection: $selection, tabRaw: $tabRaw) }
+    }
+}
+
+/// The window: the toolbar's tab control over the board or one of DevMate's
+/// views. The window keeps its title for Mission Control and the Window menu,
+/// but shows none, since the menu bar already names the app.
+private struct RootView: View {
+    @ObservedObject var model: BoardModel
+    @ObservedObject var hub: DevelopmentHub
+    @Binding var selection: AgentBoard.Card.ID?
+    @Binding var tabRaw: String
+
+    private var tab: AgentsTab { AgentsTab(saved: tabRaw) }
+
+    var body: some View {
+        Group {
+            if tab == .agents {
+                BoardView(model: model, selection: $selection)
+            } else {
+                DevelopmentTabView(hub: hub, tab: tab)
+            }
+        }
+        .toolbar(removing: .title)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Picker("View", selection: $tabRaw) {
+                    ForEach(AgentsTab.allCases) { Text($0.title).tag($0.rawValue) }
+                }
+                .pickerStyle(.segmented)
+                .help("Agents, or the pull requests, pipelines, commits, repos and projects of every app (⌘1 to ⌘6)")
+            }
+        }
+        .onAppear { model.start() }
+        .onOpenURL { url in
+            guard let (kind, web) = AgentsMateLink.parse(url) else { return }
+            _ = hub.focus(kind, on: web)
+            tabRaw = AgentsTab(link: kind).rawValue
+        }
     }
 }
 
 private struct BoardCommands: Commands {
     @ObservedObject var model: BoardModel
+    let hub: DevelopmentHub
     @Binding var selection: AgentBoard.Card.ID?
+    @Binding var tabRaw: String
     @FocusedValue(\.stopRequest) private var stopRequest
     @AppStorage("hostFilter") private var hostFilter = ""
     @AppStorage("agentFilter") private var agentFilter = ""
@@ -30,9 +72,18 @@ private struct BoardCommands: Commands {
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {}
+        CommandGroup(before: .toolbar) {
+            ForEach(AgentsTab.allCases) { tab in
+                Toggle(tab.title, isOn: Binding(get: { tabRaw == tab.rawValue }, set: { _ in tabRaw = tab.rawValue }))
+                    .keyboardShortcut(KeyEquivalent(tab.shortcutKey), modifiers: .command)
+            }
+            Divider()
+        }
         CommandGroup(after: .toolbar) {
-            Button("Refresh") { model.refresh(remote: true) }
-                .keyboardShortcut("r")
+            Button("Reload Now") {
+                if AgentsTab(saved: tabRaw) == .agents { model.refresh(remote: true) } else { hub.refresh() }
+            }
+            .keyboardShortcut("r")
             Divider()
             Picker("Mac", selection: $hostFilter) {
                 Text("All Macs").tag("")

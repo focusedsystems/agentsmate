@@ -22,6 +22,17 @@
 	<string>0000.00.00</string>
 	<key>CFBundleVersion</key>
 	<string>0000</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>systems.focused.agentsmate.link</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>agentsmate</string>
+			</array>
+		</dict>
+	</array>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.developer-tools</string>
 	<key>LSMinimumSystemVersion</key>
