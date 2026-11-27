@@ -72,7 +72,7 @@ public struct LaneBadges: Equatable, Sendable {
         }
     }
 
-    var hostSymbol: String { hostKind == .local ? "desktopcomputer" : "server.rack" }
+    var hostSymbol: String { "desktopcomputer" }
 
     var runSymbol: String {
         switch runKind {
@@ -91,7 +91,11 @@ struct LaneBadgeStrip: View {
 
     var body: some View {
         HStack(spacing: 5) {
-            mark(badges.hostSymbol, help: "Runs on \(badges.hostLabel)")
+            if badges.hostKind == .local {
+                mark(badges.hostSymbol, help: "Runs on \(badges.hostLabel)")
+            } else {
+                remoteMark(help: "Runs on \(badges.hostLabel)")
+            }
             mark(badges.runSymbol, help: "Runs as \(badges.runName)")
             if let symbol = LaneBadges.symbol(forAgent: badges.agent) {
                 mark(symbol, help: "Agent: \(badges.agentName)", weight: .bold)
@@ -100,6 +104,20 @@ struct LaneBadgeStrip: View {
         .fixedSize()
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(badges.summary)
+    }
+
+    /// A Mac mini in a cloud: it runs on another Mac, out of this one's reach.
+    private func remoteMark(help: String) -> some View {
+        ZStack {
+            Image(systemName: "cloud")
+                .font(.system(size: 14, weight: .regular))
+            Image(systemName: "macmini")
+                .font(.system(size: 6, weight: .semibold))
+                .offset(y: 1)
+        }
+        .foregroundStyle(.secondary)
+        .frame(width: 16, height: 12)
+        .help(help)
     }
 
     private func mark(_ name: String, help: String, weight: Font.Weight = .regular) -> some View {

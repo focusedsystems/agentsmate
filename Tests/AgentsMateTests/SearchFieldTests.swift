@@ -79,3 +79,21 @@ final class IconPickerFitTests: XCTestCase {
         }
     }
 }
+
+@MainActor
+final class LaneBadgeRenderTests: XCTestCase {
+    func testBadgeStripsRenderWhenAskedTo() throws {
+        guard let dir = ProcessInfo.processInfo.environment["SWIFT_AGENTSMATE_RENDER_DIR"] else { return }
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let strips = VStack(alignment: .leading, spacing: 8) {
+            LaneBadgeStrip(badges: LaneBadges(hostKind: .local, runKind: .tmux, agent: "claude"))
+            LaneBadgeStrip(badges: LaneBadges(hostKind: .remote, hostName: "mac-desktop", runKind: .bg, agent: "codex"))
+        }.padding(12).background(Color(nsColor: .windowBackgroundColor))
+        let host = NSHostingView(rootView: strips.scaleEffect(4, anchor: .topLeading).frame(width: 400, height: 200, alignment: .topLeading))
+        host.frame = NSRect(x: 0, y: 0, width: 400, height: 200)
+        host.layoutSubtreeIfNeeded()
+        let rep = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: rep)
+        try XCTUnwrap(rep.representation(using: .png, properties: [:])).write(to: URL(fileURLWithPath: dir).appendingPathComponent("badges.png"))
+    }
+}
