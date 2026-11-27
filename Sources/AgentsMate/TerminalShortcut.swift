@@ -5,6 +5,8 @@ import AppKit
 /// switched on; the rest reach the menu bar as usual.
 public enum TerminalShortcut: Hashable, Sendable {
     case newLane, closeLane, split, clear, next, previous, select(Int), maximize
+    /// ⌘[ and ⌘] — back and forward through the lanes visited.
+    case back, forward
     /// ⌃` — show or hide the lanes, even while a terminal has the keyboard.
     case togglePanel
     /// ⌘+ / ⌘- / ⌘0 — the terminals' text size.
@@ -31,11 +33,13 @@ public enum TerminalShortcut: Hashable, Sendable {
         public static let togglePanel = Set(rawValue: 1 << 7)
         public static let fontSize = Set(rawValue: 1 << 8)
         public static let reopen = Set(rawValue: 1 << 9)
+        /// ⌘[ / ⌘].
+        public static let history = Set(rawValue: 1 << 10)
 
         /// A fixed list of lanes, as in a window that is all lanes.
-        public static let fixedLanes: Set = [.clear, .cycle, .numbers, .fontSize, .reopen]
+        public static let fixedLanes: Set = [.clear, .cycle, .numbers, .fontSize, .reopen, .history]
         /// Lanes the person opens and closes, in a panel.
-        public static let all: Set = [.newLane, .closeLane, .split, .clear, .cycle, .numbers, .maximize, .togglePanel, .fontSize, .reopen]
+        public static let all: Set = [.newLane, .closeLane, .split, .clear, .cycle, .numbers, .maximize, .togglePanel, .fontSize, .reopen, .history]
     }
 
     public var member: Set {
@@ -50,6 +54,7 @@ public enum TerminalShortcut: Hashable, Sendable {
         case .togglePanel: .togglePanel
         case .biggerFont, .smallerFont, .resetFont: .fontSize
         case .reopen: .reopen
+        case .back, .forward: .history
         }
     }
 
@@ -66,6 +71,8 @@ public enum TerminalShortcut: Hashable, Sendable {
         case (.command, "="), (.command, "+"), ([.command, .shift], "="), ([.command, .shift], "+"): self = .biggerFont
         case (.command, "-"): self = .smallerFont
         case (.command, "0"): self = .resetFont
+        case (.command, "["): self = .back
+        case (.command, "]"): self = .forward
         case ([.command, .shift], "\r"): self = .maximize
         case ([.command, .shift], "]"), ([.command, .shift], "}"): self = .next
         case ([.command, .shift], "["), ([.command, .shift], "{"): self = .previous

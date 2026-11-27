@@ -64,6 +64,8 @@ public enum LaneShortcutAction: String, CaseIterable, Codable, Sendable, Identif
         case .biggerFont: .biggerFont
         case .smallerFont: .smallerFont
         case .resetFont: .resetFont
+        case .back: .back
+        case .forward: .forward
         default: reopenKind.map { .reopen($0) }
         }
     }
