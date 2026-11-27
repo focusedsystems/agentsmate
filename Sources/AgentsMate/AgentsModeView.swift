@@ -57,6 +57,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
     @AppStorage private var filterNeedsYou: Bool
     @AppStorage private var filterIdle: Bool
     @AppStorage private var filterUnread: Bool
+    @AppStorage private var filterPinned: Bool
     @AppStorage private var showsHeadings: Bool
     @AppStorage private var showsIcons: Bool
     @AppStorage private var showsPullRequests: Bool
@@ -81,6 +82,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         _filterNeedsYou = AppStorage(wrappedValue: false, keys.filterWaiting)
         _filterIdle = AppStorage(wrappedValue: false, keys.filterIdle)
         _filterUnread = AppStorage(wrappedValue: false, keys.filterUnread)
+        _filterPinned = AppStorage(wrappedValue: false, keys.filterPinned)
         let shape = store.sidebarDefaults
         _showsHeadings = AppStorage(wrappedValue: shape.headings, keys.showsSectionHeadings)
         _showsIcons = AppStorage(wrappedValue: shape.icons, keys.showsLaneIcons)
@@ -442,7 +444,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         return store.listedLanes.filter { lane in
             guard let session = store.session(for: lane) else { return false }
             if !query.isEmpty, !sectionHits.contains(lane.id), !matches(session, query: query) { return false }
-            var state = filterState(session)
+            var state = filterState(session, pinned: store.layout.pinned)
             // Opening an unread row reads it; it stays in the Unread list
             // while it is the one open, rather than vanishing under the click.
             if lane.id == selected { state.unread = true }
@@ -457,6 +459,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         if filterNeedsYou { on.insert(.needsYou) }
         if filterIdle { on.insert(.idle) }
         if filterUnread { on.insert(.unread) }
+        if filterPinned { on.insert(.pinned) }
         return on
     }
 
@@ -467,18 +470,20 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         case .needsYou: filterNeedsYou = on
         case .idle: filterIdle = on
         case .unread: filterUnread = on
+        case .pinned: filterPinned = on
         }
     }
 
     /// How many lanes the status filters alone let through.
     private var statusFilteredCount: Int {
         let filters = activeFilters
-        return sessions.filter { s in filters.allSatisfy { $0.admits(Self.filterState(s)) } }.count
+        return sessions.filter { s in filters.allSatisfy { $0.admits(Self.filterState(s, pinned: store.layout.pinned)) } }.count
     }
 
     /// What the status filters look at in a row.
-    static func filterState(_ session: AgentLaneSession) -> LaneStatusFilter.Lane {
-        .init(isActive: session.isActive, status: session.status, unread: session.needsAttention)
+    static func filterState(_ session: AgentLaneSession, pinned: Set<String> = []) -> LaneStatusFilter.Lane {
+        .init(isActive: session.isActive, status: session.status, unread: session.needsAttention,
+              pinned: pinned.contains(session.lane.id))
     }
 
     /// Whether the lanes or the hosts are still loading.
@@ -493,7 +498,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
         // While the lanes are still loading, an empty list says nothing yet:
         // Active, on at launch, stays on until the hosts have answered.
         guard newest != nil || !lanesLoading else { return }
-        let kept = LaneStatusFilter.settled(on, newest: newest, lanes: sessions.map(Self.filterState))
+        let kept = LaneStatusFilter.settled(on, newest: newest, lanes: sessions.map { Self.filterState($0, pinned: store.layout.pinned) })
         for filter in on.subtracting(kept) { setFilter(filter, false) }
     }
 
@@ -557,7 +562,7 @@ public struct AgentLaneSidebar<Accessory: View>: View {
                 ForEach(LaneStatusFilter.allCases, id: \.self) { filter in
                     LaneFilterToggle(symbol: filter.symbol, symbolScale: filter.symbolScale, title: filter.title,
                                      help: filter.help(noun: labels.laneNoun),
-                                     count: all.filter { filter.admits(Self.filterState($0)) }.count,
+                                     count: all.filter { filter.admits(Self.filterState($0, pinned: store.layout.pinned)) }.count,
                                      progress: progress,
                                      isOn: filterBinding(filter))
                 }
@@ -1146,7 +1151,7 @@ struct LaneRow: View {
 
 /// The status chips above the lane list. Several on at once must all hold.
 enum LaneStatusFilter: String, CaseIterable, Sendable {
-    case active, running, needsYou, idle, unread
+    case active, running, needsYou, idle, unread, pinned
 
     /// What a filter looks at in one row.
     struct Lane: Sendable {
@@ -1154,6 +1159,8 @@ enum LaneStatusFilter: String, CaseIterable, Sendable {
         var status: LaneDisplayStatus
         /// The row has news the person has not seen: its blue dot.
         var unread = false
+        /// The lane is pinned to the top of the list.
+        var pinned = false
     }
 
     static func wantsYou(_ status: LaneDisplayStatus) -> Bool {
@@ -1163,17 +1170,18 @@ enum LaneStatusFilter: String, CaseIterable, Sendable {
     /// Whether a lane with this state passes the filter. Idle is a lane
     /// that is alive (attached here or running elsewhere) with an agent that
     /// is neither working nor waiting for the person.
-    func admits(isActive: Bool, status: LaneDisplayStatus, unread: Bool = false) -> Bool {
+    func admits(isActive: Bool, status: LaneDisplayStatus, unread: Bool = false, pinned: Bool = false) -> Bool {
         switch self {
         case .active: isActive
         case .running: status == .running
         case .needsYou: Self.wantsYou(status)
         case .idle: isActive && status != .running && !Self.wantsYou(status)
         case .unread: unread
+        case .pinned: pinned
         }
     }
 
-    func admits(_ lane: Lane) -> Bool { admits(isActive: lane.isActive, status: lane.status, unread: lane.unread) }
+    func admits(_ lane: Lane) -> Bool { admits(isActive: lane.isActive, status: lane.status, unread: lane.unread, pinned: lane.pinned) }
 
     /// The filters to keep on so the list is not left empty: all of `on`
     /// when some lane passes them, else only `newest` (the chip just turned
@@ -1195,6 +1203,7 @@ enum LaneStatusFilter: String, CaseIterable, Sendable {
         case .needsYou: "Needs You"
         case .idle: "Idle"
         case .unread: "Unread"
+        case .pinned: "Pinned"
         }
     }
 
@@ -1205,6 +1214,7 @@ enum LaneStatusFilter: String, CaseIterable, Sendable {
         case .needsYou: "hand.raised.fill"
         case .idle: "moon.fill"
         case .unread: "bell.badge.fill"
+        case .pinned: "pin.fill"
         }
     }
 
@@ -1217,6 +1227,7 @@ enum LaneStatusFilter: String, CaseIterable, Sendable {
         case .needsYou: "Show only \(noun)s waiting for input or permission"
         case .idle: "Show only \(noun)s that are open but not working or waiting for you"
         case .unread: "Show only \(noun)s with news you have not seen yet"
+        case .pinned: "Show only pinned \(noun)s"
         }
     }
 }
