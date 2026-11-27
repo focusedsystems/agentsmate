@@ -22,7 +22,7 @@ let package = Package(
         // 1.12 added Metal shaders, which the Command Line Tools cannot compile.
         .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", "1.11.2"..<"1.12.0"),
         // The Development and Projects views AgentsMate.app shows over every app's repos.
-        .package(url: "https://github.com/focusedsystems/devmate.git", revision: "12ef829e6d7c24b14173e20c3dbe5b93d366c494"),
+        .package(url: "https://github.com/focusedsystems/devmate.git", revision: "0af89ac68c2ae66b904659d1ad51c7418fca6965"),
     ],
     targets: [
         .target(name: "AgentsMateStatus"),
