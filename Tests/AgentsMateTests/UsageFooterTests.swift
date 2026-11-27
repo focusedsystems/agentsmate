@@ -83,3 +83,32 @@ final class UsageFooterTests: XCTestCase {
         }
     }
 }
+
+final class FreshestUsageTests: XCTestCase {
+    private struct Fixed: AgentUsageSource {
+        let usage: AgentUsage?
+        var unknownAgent: String? { "Codex" }
+        func read() -> AgentUsage? { usage }
+    }
+
+    func testTheFreshestReadingWinsOverThisMacsOlderOne() {
+        let old = AgentUsage(agent: "Codex", windows: [.init(label: "Week", percent: 80, resetsAt: nil, length: nil)],
+                             readAt: Date().addingTimeInterval(-86_400))
+        let new = AgentUsage(agent: "Codex", windows: [.init(label: "Week", percent: 20, resetsAt: nil, length: nil)],
+                             readAt: Date())
+        let source = FallbackUsageSource(primary: Fixed(usage: old), fallbacks: [Fixed(usage: new)])
+        XCTAssertEqual(source.read()?.windows.first?.percent, 20)
+    }
+
+    func testTheRemoteCodexScriptReadsSessionTails() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let day = home.appendingPathComponent(".codex/sessions/2026/11/26")
+        try FileManager.default.createDirectory(at: day, withIntermediateDirectories: true)
+        let line = #"{"timestamp":"2026-11-26T17:00:00.000Z","payload":{"rate_limits":{"secondary":{"used_percent":42,"window_minutes":10080}}}}"#
+        try Data((line + "\n").utf8).write(to: day.appendingPathComponent("rollout-a.jsonl"))
+        let source = CodexRemoteUsageSource(command: ["/usr/bin/env", "HOME=" + home.path, "/bin/sh", "-c", CodexRemoteUsageSource.script])
+        let usage = try XCTUnwrap(source.read())
+        XCTAssertEqual(usage.windows.first?.percent, 42)
+        XCTAssertEqual(usage.readAt, CodexSessionUsageSource.recordDate("2026-11-26T17:00:00.000Z"))
+    }
+}
