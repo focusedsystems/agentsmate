@@ -109,13 +109,13 @@ final class ResumeSessionTests: XCTestCase {
         let here = AgentLaneStore.resumeLaunch(for: choice, lane: lane, host: nil, backend: backend,
                                                config: HostSessionsConfiguration())
         let line = try XCTUnwrap(here.arguments.last)
-        XCTAssertTrue(line.contains("claude --bg --resume 11112222-3f2a-4c1e-9b4d-1a2b3c4d5e6f"), line)
+        XCTAssertTrue(line.contains("claude --bg '--resume' '11112222-3f2a-4c1e-9b4d-1a2b3c4d5e6f'"), line)
         XCTAssertTrue(line.contains("exec claude attach"), line)
         XCTAssertFalse(line.contains("claude stop"), "nothing is stopped for the person")
         let there = AgentLaneStore.resumeLaunch(for: choice, lane: lane, host: "lane-host", backend: backend,
                                                 config: HostSessionsConfiguration())
         let ssh = try XCTUnwrap(there.arguments.last)
-        XCTAssertTrue(ssh.contains("/usr/bin/ssh") && ssh.contains("lane-host") && ssh.contains("--resume"), ssh)
+        XCTAssertTrue(ssh.contains("/usr/bin/ssh") && ssh.contains("lane-host") && ssh.contains("resume"), ssh)
         XCTAssertFalse(ssh.contains("claude stop"))
     }
 
