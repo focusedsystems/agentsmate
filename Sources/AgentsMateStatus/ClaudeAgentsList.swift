@@ -11,6 +11,7 @@ public enum ClaudeAgentsList {
     public static let backgroundMessage = "background session"
     struct Entry: Decodable {
         var id: String?
+        var pid: Int?
         var sessionId: String?
         var name: String?
         var cwd: String?
@@ -46,7 +47,8 @@ public enum ClaudeAgentsList {
             return LaneStatus(agent: "claude", state: state, lane: entry.name, directory: entry.cwd,
                               sessionID: entry.sessionId ?? entry.id,
                               message: entry.kind.map { "\($0) session" },
-                              event: event, updatedAt: now, agentID: entry.id)
+                              event: event, updatedAt: now, agentID: entry.id,
+                              workerRunning: entry.status != nil || entry.pid != nil)
         }
     }
 
