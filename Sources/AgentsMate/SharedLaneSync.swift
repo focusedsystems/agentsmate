@@ -128,11 +128,12 @@ final class SharedLaneSync {
         let transport = self.transport
         let restores = self.restores
         let edited = store.layoutEditedAt
+        let generated = store.generatedRowIDs
         io.async {
             let outcome = Result { () throws -> SharedLaneList in
                 let remote = try transport.read().map(SharedLaneList.decode) ?? SharedLaneList()
                 let merged = SharedLaneList.reconcile(local: local, base: base, remote: remote, closing: closing,
-                                                        restores: restores, edited: edited)
+                                                        restores: restores, edited: edited, generated: generated)
                 if merged != remote { try transport.write(merged.encoded()) }
                 return merged
             }

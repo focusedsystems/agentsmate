@@ -832,6 +832,7 @@ public final class AgentLaneStore: ObservableObject {
     /// them; a fixed lane that disappears is detached; terminals are kept.
     /// A fixed lane the person reopened as another agent keeps that agent.
     public func sync(lanes appLanes: [AgentLane]) {
+        syncedRowIDs = Set(appLanes.map(\.id))
         let overrides = backendOverrides
         let fixed = appLanes.map { lane -> AgentLane in
             guard let backendID = overrides[lane.id], backends[backendID] != nil else { return lane }
@@ -1157,11 +1158,24 @@ public final class AgentLaneStore: ObservableObject {
         return sharedLaneEntries().contains { $0.id != saved.id && SharedLaneList.sessionKey(of: $0) == key }
     }
 
+    /// Tell the store which rows the app regenerates on every launch (rows it
+    /// lists itself), so a duplicate check never closes one: such a row would
+    /// only come back. Rows the app hands to ``sync(lanes:)`` count already.
+    public var isGeneratedRow: ((AgentLane) -> Bool)?
+
+    private var syncedRowIDs: Set<AgentLane.ID> = []
+
+    /// The rows the app regenerates, which are never collapsed or closed as
+    /// duplicates, and win over a lane the person opened with the same session.
+    var generatedRowIDs: Set<String> {
+        Set(lanes.filter { syncedRowIDs.contains($0.id) || isGeneratedRow?($0) == true }.map(\.id))
+    }
+
     /// Close every row that attaches a session another row attaches, keeping
     /// the oldest, so the sidebar never lists one session twice. The sessions
     /// keep running, and the close reaches the other Macs.
     func collapseDuplicateLanes() {
-        let duplicates = SharedLaneList.duplicates(in: sharedLaneEntries())
+        let duplicates = SharedLaneList.duplicates(in: sharedLaneEntries(), generated: generatedRowIDs)
         for id in duplicates.keys.sorted() {
             guard let lane = lanes.first(where: { $0.id == id }), lane.isClosable else { continue }
             sharedLanes?.closed(id)
@@ -1234,7 +1248,9 @@ public final class AgentLaneStore: ObservableObject {
         let before = Dictionary(captured.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         var current = Dictionary(sharedLaneEntries().map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         let live = Set(list.lanes.map(\.id))
-        for close in list.closed where !live.contains(close.id) && current[close.id]?.overlay != true && current[close.id] != nil {
+        let generated = generatedRowIDs
+        for close in list.closed where !live.contains(close.id) && current[close.id]?.overlay != true && current[close.id] != nil
+            && !generated.contains(close.id) {
             removeSharedLane(close.id)
             current.removeValue(forKey: close.id)
         }

@@ -60,6 +60,8 @@ final class DuplicateLaneTests: XCTestCase {
         store.sync(lanes: ["old", "new1", "new2"].map {
             AgentLane(id: $0, title: "x", directory: dir, backendID: "cmd:codex-remote", isClosable: true)
         })
+        store.sync(lanes: [])
+        XCTAssertEqual(store.lanes.count, 3, "opened by the person, so they stay")
         store.applyShared(SharedLaneList(lanes: [], closed: []), captured: [], skipping: [])
         XCTAssertEqual(store.lanes.map(\.id), ["old"])
         store.detachAll()
@@ -84,6 +86,28 @@ final class DuplicateLaneTests: XCTestCase {
         for _ in 0..<3 { store.adopt(sessionTitle: "Fix Install Errors", for: "a") }
         XCTAssertNil(store.sessions["a"]?.customTitle)
         XCTAssertNil(store.sessions["b"]?.customTitle)
+        store.detachAll()
+    }
+
+    func testAGeneratedRowIsNeverCollapsedAndWinsOverAUserLane() {
+        let rows = [entry("a", order: 1), entry("repo:munki", order: 2), entry("b", order: 3)]
+        XCTAssertEqual(SharedLaneList.duplicates(in: rows, generated: ["repo:munki"]), ["a": "repo:munki", "b": "repo:munki"])
+        XCTAssertTrue(SharedLaneList.duplicates(in: [entry("repo:1", order: 1), entry("repo:2", order: 2)],
+                                                generated: ["repo:1", "repo:2"]).isEmpty)
+        let merged = SharedLaneList.merge([SharedLaneList(lanes: rows, closed: [])], now: Date(timeIntervalSince1970: 2_000),
+                                          generated: ["repo:munki"])
+        XCTAssertEqual(merged.lanes.map(\.id), ["repo:munki"])
+        XCTAssertFalse(merged.closed.map(\.id).contains("repo:munki"))
+    }
+
+    func testTheStoreKeepsARowTheAppListsAndClosesTheUserLaneBesideIt() {
+        let store = store()
+        let dir = URL(fileURLWithPath: "/w/Munki")
+        store.sync(lanes: [AgentLane(id: "repo:munki", title: "Munki", directory: dir, backendID: "cmd:codex-remote", isClosable: true)])
+        let list = SharedLaneList(lanes: [entry("user", order: 0, dir: "/w/Munki"), entry("repo:munki", order: 1, dir: "/w/Munki")],
+                                  closed: [.init(id: "repo:munki", at: Date(timeIntervalSince1970: 5_000))])
+        store.applyShared(list, captured: [], skipping: [])
+        XCTAssertEqual(store.lanes.map(\.id), ["repo:munki"], "never closed, and the user lane is not added beside it")
         store.detachAll()
     }
 }

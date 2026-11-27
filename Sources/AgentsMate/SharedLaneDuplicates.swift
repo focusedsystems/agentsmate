@@ -24,15 +24,23 @@ extension SharedLaneList {
     /// that stays: the one listed first (lowest `order`, then the smaller id),
     /// which is the oldest, since a new lane goes last. Every Mac and every
     /// merge picks the same one.
-    public static func duplicates(in lanes: [Lane]) -> [String: String] {
+    ///
+    /// A `generated` lane is a row the app regenerates itself, so it is never
+    /// a duplicate: it always wins over a lane the person opened, and two
+    /// generated rows are both kept.
+    public static func duplicates(in lanes: [Lane], generated: Set<String> = []) -> [String: String] {
         var groups: [String: [Lane]] = [:]
         for lane in lanes {
             if let key = sessionKey(of: lane) { groups[key, default: []].append(lane) }
         }
         var dropped: [String: String] = [:]
         for group in groups.values where group.count > 1 {
-            let sorted = group.sorted { $0.order != $1.order ? $0.order < $1.order : $0.id < $1.id }
-            for lane in sorted.dropFirst() where lane.id != sorted[0].id { dropped[lane.id] = sorted[0].id }
+            let sorted = group.sorted { a, b in
+                let (ga, gb) = (generated.contains(a.id), generated.contains(b.id))
+                if ga != gb { return ga }
+                return a.order != b.order ? a.order < b.order : a.id < b.id
+            }
+            for lane in sorted.dropFirst() where !generated.contains(lane.id) { dropped[lane.id] = sorted[0].id }
         }
         return dropped
     }
