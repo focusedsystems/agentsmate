@@ -243,4 +243,20 @@ final class TurnEndTests: XCTestCase {
         let done = StatusEvents.codex(notifyPayload: Data(#"{"type":"agent-turn-complete","last-assistant-message":"Pushed."}"#.utf8), lane: "cx")
         XCTAssertEqual(done?.state, .done)
     }
+
+    func testADoneSessionWithSubagentsRunningReadsAsWorking() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let job = home.appendingPathComponent("jobs/9")
+        try FileManager.default.createDirectory(at: job, withIntermediateDirectories: true)
+        let env = ["CLAUDE_CONFIG_DIR": home.path]
+        let list = #"[{"id":"9","cwd":"/w/x","kind":"background","name":"x","state":"done"}]"#
+        func state() -> LaneState? {
+            ClaudeAgentsList.parse(Data(list.utf8), isResting: { _ in false },
+                                   hasSubagents: { ClaudeAgentsList.hasSubagents(id: $0, environment: env) }).first?.state
+        }
+        try Data(#"{"tempo":"idle","inFlight":{"tasks":2,"kinds":["local_agent"]}}"#.utf8).write(to: job.appendingPathComponent("state.json"))
+        XCTAssertEqual(state(), .running)
+        try Data(#"{"tempo":"idle","inFlight":{"tasks":1,"kinds":["local_bash"]}}"#.utf8).write(to: job.appendingPathComponent("state.json"))
+        XCTAssertEqual(state(), .done)
+    }
 }

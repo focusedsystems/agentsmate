@@ -26,13 +26,18 @@ public enum ClaudeAgentsList {
     /// tmux lanes already report through hooks, and a poll would outdate a
     /// permission prompt a hook just recorded.
     public static func parse(_ data: Data, includeInteractive: Bool = false, now: Date = Date(),
-                             isResting: (String) -> Bool = { isResting(id: $0) }) -> [LaneStatus] {
+                             isResting: (String) -> Bool = { isResting(id: $0) },
+                             hasSubagents: (String) -> Bool = { hasSubagents(id: $0) }) -> [LaneStatus] {
         guard let entries = try? JSONDecoder().decode([Entry].self, from: data) else { return [] }
         return entries.compactMap { entry in
             if !includeInteractive, entry.kind != "background" { return nil }
             let state: LaneState
             switch entry.state ?? entry.status {
             case "working" where entry.kind == "background" && entry.id.map(isResting) == true: state = .done
+            // A session whose own turn ended while its subagents still run is
+            // working, not idle or done.
+            case let value where (value == "done" || value == "idle") && entry.kind == "background"
+                && entry.id.map(hasSubagents) == true: state = .running
             case "working", "busy": state = .running
             case "blocked": state = .waitingForInput
             case "done", "idle": state = .done
@@ -46,7 +51,7 @@ public enum ClaudeAgentsList {
     }
 
     struct JobState: Decodable {
-        struct InFlight: Decodable { var tasks: Int? }
+        struct InFlight: Decodable { var tasks: Int?; var kinds: [String]? }
         var tempo: String?
         var inFlight: InFlight?
     }
@@ -56,13 +61,26 @@ public enum ClaudeAgentsList {
     /// is idle with no task running. A session left with a queued input that
     /// never arrives stays "working" in the list while it waits at its prompt.
     public static func isResting(id: String, environment: [String: String] = ProcessInfo.processInfo.environment) -> Bool {
-        guard id.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" }), !id.isEmpty else { return false }
+        guard let job = jobState(id: id, environment: environment) else { return false }
+        return job.tempo == "idle" && (job.inFlight?.tasks ?? 0) == 0
+    }
+
+    /// Whether a background session still has subagents of its own running,
+    /// as its job file lists them (`local_agent` among the kinds in flight).
+    /// Background shells alone do not count: a long watch would otherwise
+    /// keep a finished session looking busy.
+    public static func hasSubagents(id: String, environment: [String: String] = ProcessInfo.processInfo.environment) -> Bool {
+        guard let job = jobState(id: id, environment: environment), (job.inFlight?.tasks ?? 0) > 0 else { return false }
+        return job.inFlight?.kinds?.contains { $0.hasSuffix("agent") } == true
+    }
+
+    static func jobState(id: String, environment: [String: String]) -> JobState? {
+        guard id.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" }), !id.isEmpty else { return nil }
         let config = environment["CLAUDE_CONFIG_DIR"].map { URL(fileURLWithPath: $0) }
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude")
         let file = config.appendingPathComponent("jobs").appendingPathComponent(id).appendingPathComponent("state.json")
-        guard let data = try? Data(contentsOf: file), data.count < 1_000_000,
-              let job = try? JSONDecoder().decode(JobState.self, from: data) else { return false }
-        return job.tempo == "idle" && (job.inFlight?.tasks ?? 0) == 0
+        guard let data = try? Data(contentsOf: file), data.count < 1_000_000 else { return nil }
+        return try? JSONDecoder().decode(JobState.self, from: data)
     }
 
     /// Run `claude agents --json` and parse it. Empty when Claude is missing
