@@ -5,7 +5,7 @@ import AppKit
 /// shortcut and action serves the row's contextual menu and the menu bar's
 /// Agent menu, so both list the same thing in every app.
 public enum LaneMenuCommand: String, CaseIterable, Sendable {
-    case open, reattach, resume, resumeHere, switchToClaude, switchToCodex, detach, message, markRead
+    case open, reattach, resume, resumeHere, resumeSession, switchToClaude, switchToCodex, detach, message, markRead
     case changeIcon, rename, automaticName, pin
     case close, stop
     case copyBranch, copyPath, copySummary, copyLastPrompt, showInFinder, copySessionName
@@ -19,6 +19,7 @@ public enum LaneMenuCommand: String, CaseIterable, Sendable {
         case .reattach: state.keepsRunningWhenDetached ? "Reattach" : "Start Again"
         case .resume: "Resume"
         case .resumeHere: "Resume Here (Stop Background)"
+        case .resumeSession: "Resume Session…"
         // Both sit at the top of the Switch Agent submenu.
         case .switchToClaude: "Claude"
         case .switchToCodex: "Codex"
@@ -65,6 +66,7 @@ public enum LaneMenuCommand: String, CaseIterable, Sendable {
         switch self {
         case .resume: "Continue this stopped session's conversation in this pane"
         case .resumeHere: "Stop the background session, then continue its conversation in this pane"
+        case .resumeSession: "Choose a conversation from this lane's folder: a running one is attached, a stopped one resumes in a new row"
         case .switchToClaude, .switchToCodex:
             "Run this lane on the other agent. The session it was on keeps running."
         case .reattach:
@@ -118,6 +120,8 @@ public struct LaneMenuState: Equatable, Sendable {
     public var isClosable = true
     public var canStop = false
     public var canResume = false
+    /// Resume Session… has a Claude to list this lane's folder with.
+    public var canResumeSession = false
     /// The lane's session outlives its terminal, so closing or detaching leaves it running.
     public var keepsRunningWhenDetached = true
     public var hasReopenChoices = false
@@ -144,6 +148,7 @@ public enum LaneMenuPlan {
     private static func laneItems(_ s: LaneMenuState) -> [LaneMenuItem] {
         var items: [LaneMenuItem] = [.command(.open), .command(.reattach)]
         if s.canResume { items += [.command(.resume), .command(.resumeHere)] }
+        if s.canResumeSession { items.append(.command(.resumeSession)) }
         items += [.command(.detach), .divider]
 
         items.append(.command(.message))
@@ -212,6 +217,7 @@ extension AgentLaneStore {
         state.isClosable = lane.isClosable
         state.canStop = canStop(lane.id)
         state.canResume = canResumeBackground(lane.id)
+        state.canResumeSession = canResumeSession(lane.id)
         state.keepsRunningWhenDetached = session.backend.keepsRunningWhenDetached
         state.hasReopenChoices = !configuration.reopenChoices.isEmpty
         state.hasRunOnHosts = !runOnHosts(for: lane.id).isEmpty
@@ -239,6 +245,7 @@ extension AgentLaneStore {
         case .reattach: return isDetached(id) || session.isStarted
         case .resume: return !isBackgroundLive(id)
         case .resumeHere: return isBackgroundLive(id)
+        case .resumeSession: return canResumeSession(id)
         // Detaching a lane whose session ends with its terminal would end it.
         case .switchToClaude: return canSwitch(id, to: .claude)
         case .switchToCodex: return canSwitch(id, to: .codex)
@@ -258,6 +265,7 @@ extension AgentLaneStore {
         case .reattach: reattach(lane.id)
         case .resume: resumeBackground(lane.id, stoppingBackground: false)
         case .resumeHere: resumeBackground(lane.id, stoppingBackground: true)
+        case .resumeSession: chooseSessionToResume(in: lane.id)
         case .switchToClaude: switchAgent(lane.id, to: .claude)
         case .switchToCodex: switchAgent(lane.id, to: .codex)
         case .detach: detach(lane.id)

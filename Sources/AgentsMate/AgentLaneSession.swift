@@ -167,6 +167,9 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
     var onShortcut: ((TerminalShortcut) -> Bool)?
     var shortcutResolver: ((NSEvent) -> TerminalShortcut?)?
     var onOpenLink: ((URL) -> Bool)?
+    /// The terminal shows Claude Code refusing to resume a conversation that
+    /// runs in the background, with that session's id.
+    var onBackgroundSessionRefusal: ((String) -> Void)?
     private var poll: CadenceTimer?
 
     /// Whether the row is on screen.
@@ -438,6 +441,7 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
         view.onUserInteraction = { [weak self] in if let self { self.onUserInteraction?(self) } }
         view.shortcutResolver = { [weak self] event in self?.shortcutResolver?(event) }
         view.onOpenLink = { [weak self] url in self?.onOpenLink?(url) ?? false }
+        view.onBackgroundSessionRefusal = { [weak self] id in self?.onBackgroundSessionRefusal?(id) }
         view.onOutput = { [weak self] in
             MainActor.assumeIsolated {
                 guard let self else { return }

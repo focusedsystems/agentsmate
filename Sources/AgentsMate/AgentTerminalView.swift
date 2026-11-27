@@ -15,6 +15,13 @@ open class AgentTerminalView: LocalProcessTerminalView {
     public var shortcutResolver: ((NSEvent) -> TerminalShortcut?)?
     /// Called after each chunk of output is drawn.
     public var onOutput: (() -> Void)?
+    /// Called with the session id when the screen shows Claude Code refusing
+    /// to resume a conversation that is running in the background. Once per
+    /// refusal: it is called again only after the message has left the screen.
+    var onBackgroundSessionRefusal: ((String) -> Void)?
+    private var refusalCheck: DispatchWorkItem?
+    private var refusalShown: String?
+    static let refusalSettleDelay: TimeInterval = 0.4
     /// Cleans text before it is typed in as a paste. The default keeps
     /// newlines and tabs and drops every other control character.
     public var pasteSanitizer: (String) -> String = ShellQuote.pasteSafe
@@ -57,6 +64,24 @@ open class AgentTerminalView: LocalProcessTerminalView {
         for request in requests { handleColorRequest(request) }
         scheduleCaretReveal()
         onOutput?()
+        if onBackgroundSessionRefusal != nil { scheduleRefusalCheck() }
+    }
+
+    /// Read the screen once it has stopped drawing, since an agent redraws
+    /// many times a second and a wrapped message is only whole at rest.
+    private func scheduleRefusalCheck() {
+        refusalCheck?.cancel()
+        let check = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, let handler = self.onBackgroundSessionRefusal else { return }
+                let id = BackgroundSessionRefusal.sessionID(onScreen: self.getTerminal())
+                guard id != self.refusalShown else { return }
+                self.refusalShown = id
+                if let id { handler(id) }
+            }
+        }
+        refusalCheck = check
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.refusalSettleDelay, execute: check)
     }
 
     /// Whether the program wants the cursor shown (DECTCEM).

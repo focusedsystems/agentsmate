@@ -553,6 +553,8 @@ public final class AgentLaneStore: ObservableObject {
 
     /// Whether Go to Lane… is showing.
     @Published public var paletteVisible = false
+    /// The lane whose folder's conversations Resume Session… is listing.
+    @Published var resumePickerLane: AgentLane.ID?
 
     /// The dialogs a lane's menu asks for. One for the store, so the menu bar
     /// and every row's menu ask through the same ones.
@@ -2667,6 +2669,9 @@ public final class AgentLaneStore: ObservableObject {
         session.onShortcut = { [weak self] shortcut in self?.handle(shortcut, from: id) ?? false }
         session.shortcutResolver = { [weak self] event in self?.shortcuts.terminalShortcut(for: event) }
         session.onOpenLink = { [weak self] url in self?.onOpenLink?(url, id) ?? false }
+        session.onBackgroundSessionRefusal = { [weak self] sessionID in
+            self?.openRunningSession(sessionID, near: id)
+        }
         session.onSectionFromAgent = { [weak self] section in
             guard let self, self.layout.assignments[id] == nil, self.layout.section(of: lane) != section else { return }
             self.layout.move(id, to: section)
