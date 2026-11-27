@@ -169,13 +169,25 @@ public struct DisplayedExport: Codable, Equatable, Sendable {
         public var statusHost: String?
         /// When that reading was taken. Added without a new schema version.
         public var statusAt: Date?
+        /// The Mac the agent runs on, as the row's marker names it: nil on the
+        /// hub itself and where no hosts registry says otherwise. Added
+        /// without a new schema version.
+        public var runsOn: String?
+        /// `this_mac` or `remote`, the kind of marker the row shows; nil for none.
+        public var runsOnKind: String?
+        /// The registry host the lane belongs on, when it runs somewhere else.
+        public var meantFor: String?
 
         public init(section: String? = nil, title: String, laneID: String, backend: String, agent: String? = nil,
                     sessionID: String? = nil, attachedSessionID: String? = nil, sessionName: String? = nil, host: String? = nil, folder: String? = nil,
                     state: State, attached: Bool = false, selected: Bool = false, isParallel: Bool = false,
                     isTopLevel: Bool = true, collapsed: Bool = false, column: String? = nil, ownerApp: String? = nil,
                     sessionTitle: String? = nil, hostKind: String? = nil, runKind: String? = nil,
-                    statusHost: String? = nil, statusAt: Date? = nil) {
+                    statusHost: String? = nil, statusAt: Date? = nil,
+                    runsOn: String? = nil, runsOnKind: String? = nil, meantFor: String? = nil) {
+            self.runsOn = runsOn
+            self.runsOnKind = runsOnKind
+            self.meantFor = meantFor
             self.attachedHere = attached
             self.statusHost = statusHost
             self.statusAt = statusAt
@@ -208,7 +220,8 @@ public struct DisplayedExport: Codable, Equatable, Sendable {
                  sessionName = "session_name", host, folder, state, attached, selected,
                  isParallel = "is_parallel", isTopLevel = "is_top_level", collapsed, column, ownerApp = "owner_app",
                  sessionTitle = "session_title", hostKind = "host_kind", runKind = "run_kind",
-                 attachedHere = "attached_here", statusHost = "status_host", statusAt = "status_at"
+                 attachedHere = "attached_here", statusHost = "status_host", statusAt = "status_at",
+                 runsOn = "runs_on", runsOnKind = "runs_on_kind", meantFor = "meant_for"
         }
 
         public func encode(to encoder: Encoder) throws {
@@ -237,6 +250,9 @@ public struct DisplayedExport: Codable, Equatable, Sendable {
             try c.encode(attached, forKey: .attachedHere)
             try c.encode(statusHost, forKey: .statusHost)
             try c.encode(statusAt, forKey: .statusAt)
+            try c.encode(runsOn, forKey: .runsOn)
+            try c.encode(runsOnKind, forKey: .runsOnKind)
+            try c.encode(meantFor, forKey: .meantFor)
         }
     }
 

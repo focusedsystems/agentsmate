@@ -61,6 +61,7 @@ A row:
 - `session_title`: the subtitle the row shows under its name: the title the person gave the agent's session (a Claude `/rename`, a Codex thread name) with a leading "<row name> · " removed, since the row already says that. Null when the row shows none. Added without a new schema version; a file without it reads as null.
 - `host_kind`: `local` when the session runs on this Mac, `remote` on another host. The row's marks draw it. Added without a new schema version; a file without it reads as null.
 - `run_kind`: how the session runs: `tmux`, `bg` (a Claude background session) or `terminal` (a plain terminal or command). With `agent` and `host_kind` it makes the three marks at the end of a row's metadata line. Added without a new schema version; a file without it reads as null.
+- `runs_on`, `runs_on_kind`, `meant_for`: the row's host marker. `runs_on_kind` is `this_mac` for a lane on this Mac when this Mac is not the registry hub, `remote` for a lane on another Mac, and null for none (a lane on the hub itself, or no hosts registry); `runs_on` is that Mac's name. `meant_for` is the lane's registry host when it runs somewhere else, which the tooltip says as "Meant to run on". Added without a new schema version; a file without them reads as null.
 - `column`: null in `rows`; in `all_agents`, `needs_you`, `working`, `idle_or_done` or `not_running`. A card's `section` is its area and its `selected` is false.
 
 ## Reading and comparing
