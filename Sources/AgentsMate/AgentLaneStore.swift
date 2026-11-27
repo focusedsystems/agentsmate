@@ -1719,9 +1719,22 @@ public final class AgentLaneStore: ObservableObject {
     /// the row shows Reattach. Nothing is created, and nothing new is started.
     ///
     /// With Home on and ``Configuration/launchShows`` at its default, the
-    /// first show is Home instead, and nothing is attached until the person
+    /// first show is Home instead (unless there is only one lane, see
+    /// ``soleLane``), and nothing is attached until the person
     /// picks a row. While Home is showing, showing the lanes again leaves it.
     public func openSelectedOnShow(focus: Bool = true) {
+        // One lane leaves nothing to choose from: Home would be a board of one
+        // card. Select it and attach its session if one already runs, local
+        // or on another Mac, and start nothing.
+        if let only = soleLane, firstShowPending || isHomeShown {
+            firstShowPending = false
+            if isHomeShown { showingHome = false }
+            if selectedID != only.id { selectedID = only.id }
+            updateShown()
+            if sessions[only.id]?.isAttached != true { attachRunningSelected(focus: focus) }
+            else if focus { sessions[only.id]?.wantsFocus = true }
+            return
+        }
         guard firstShowPending else {
             if isHomeShown { return }
             // Showing the lanes again is not the person working in the selected one.
@@ -1737,6 +1750,19 @@ public final class AgentLaneStore: ObservableObject {
         }
         // Home left showing at quit comes back as it was.
         if isHomeShown { return }
+        attachRunningSelected(focus: focus)
+    }
+
+    /// The app's only lane, not counting accessories, or nil with none or
+    /// several.
+    public var soleLane: AgentLane? {
+        let own = lanes.filter { $0.accessory == nil }
+        return own.count == 1 ? own.first : nil
+    }
+
+    /// Attach the selected lane when its session already runs, and never
+    /// start one.
+    private func attachRunningSelected(focus: Bool) {
         guard let id = selectedID, let session = sessions[id] else { return }
         if session.isAttached {
             if focus { session.wantsFocus = true }
