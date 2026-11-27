@@ -3527,6 +3527,7 @@ public struct AgentsModeKeys: Sendable {
     public var filterWaiting: String { prefix + "filterWaiting" }
     public var filterIdle: String { prefix + "filterIdle" }
     public var filterUnread: String { prefix + "filterUnread" }
+    public var filterPinned: String { prefix + "filterPinned" }
     public var fontOffset: String { prefix + "fontOffset" }
     public var layout: String { prefix + "layout" }
     var layoutChanged: String { prefix + "layoutChanged" }

@@ -25,6 +25,7 @@ public struct AgentHomeView: View {
     @AppStorage private var filterNeedsYou: Bool
     @AppStorage private var filterIdle: Bool
     @AppStorage private var filterUnread: Bool
+    @AppStorage private var filterPinned: Bool
     @AppStorage private var showsPullRequests: Bool
 
     public init(store: AgentLaneStore, labels: AgentsModeLabels = .init(), rowActions: [LaneAction] = []) {
@@ -37,6 +38,7 @@ public struct AgentHomeView: View {
         _filterNeedsYou = AppStorage(wrappedValue: false, keys.filterWaiting)
         _filterIdle = AppStorage(wrappedValue: false, keys.filterIdle)
         _filterUnread = AppStorage(wrappedValue: false, keys.filterUnread)
+        _filterPinned = AppStorage(wrappedValue: false, keys.filterPinned)
         _showsPullRequests = AppStorage(wrappedValue: store.sidebarDefaults.pullRequests, keys.showsPullRequestPills)
     }
 
@@ -100,7 +102,7 @@ public struct AgentHomeView: View {
                 guard AgentLaneSidebar<EmptyView>.matches(session, query: text)
                         || AgentLaneSidebar<EmptyView>.matches(query: text, in: [area]) else { return false }
             }
-            let state = AgentLaneSidebar<EmptyView>.filterState(session)
+            let state = AgentLaneSidebar<EmptyView>.filterState(session, pinned: store.layout.pinned)
             return filters.allSatisfy { $0.admits(state) }
         }
         return AgentHome.columns(sessions.map(AgentLaneStore.homeItem), includesNotRunning: !activeOnly)
@@ -113,6 +115,7 @@ public struct AgentHomeView: View {
         if filterNeedsYou { on.insert(.needsYou) }
         if filterIdle { on.insert(.idle) }
         if filterUnread { on.insert(.unread) }
+        if filterPinned { on.insert(.pinned) }
         return on
     }
 
@@ -363,6 +366,7 @@ public struct AgentHomeView: View {
         filterNeedsYou = false
         filterIdle = false
         filterUnread = false
+        filterPinned = false
     }
 }
 

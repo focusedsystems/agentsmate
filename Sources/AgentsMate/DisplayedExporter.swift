@@ -135,6 +135,7 @@ extension AgentLaneStore {
         if defaults.bool(forKey: keys.filterWaiting) { on.insert(.needsYou) }
         if defaults.bool(forKey: keys.filterIdle) { on.insert(.idle) }
         if defaults.bool(forKey: keys.filterUnread) { on.insert(.unread) }
+        if defaults.bool(forKey: keys.filterPinned) { on.insert(.pinned) }
         return on
     }
 

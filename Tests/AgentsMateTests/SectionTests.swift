@@ -80,6 +80,14 @@ final class StatusFilterTests: XCTestCase {
         XCTAssertFalse(LaneStatusFilter.idle.admits(isActive: false, status: .notOpened))
     }
 
+    func testThePinnedFilterShowsOnlyPinnedLanes() {
+        XCTAssertTrue(LaneStatusFilter.pinned.admits(isActive: false, status: .notOpened, pinned: true))
+        XCTAssertFalse(LaneStatusFilter.pinned.admits(isActive: true, status: .running, pinned: false))
+        let lanes: [LaneStatusFilter.Lane] = [.init(isActive: true, status: .running), .init(isActive: false, status: .notOpened, pinned: true)]
+        XCTAssertEqual(LaneStatusFilter.settled([.pinned, .running], newest: .pinned, lanes: lanes), [.pinned])
+        XCTAssertEqual(LaneStatusFilter.settled([.pinned], newest: nil, lanes: [lanes[0]]), [])
+    }
+
     func testFiltersThatWouldHideEverythingTurnOff() {
         let lanes: [LaneStatusFilter.Lane] = [.init(isActive: true, status: .running), .init(isActive: true, status: .done)]
         XCTAssertEqual(LaneStatusFilter.settled([.running], newest: nil, lanes: lanes), [.running])
