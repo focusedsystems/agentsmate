@@ -139,10 +139,19 @@ public struct SharedLaneList: Equatable, Sendable {
                 }
             }
         }
-        let live = firstSeen.compactMap { id -> Lane? in
+        var live = firstSeen.compactMap { id -> Lane? in
             guard let lane = lanes[id] else { return nil }
             if let at = closedAt[id], at >= lane.updated { return nil }
             return lane
+        }
+        // Rows on one backend session are one lane: the oldest stays, and the
+        // rest are closed so every other copy drops them too.
+        let duplicates = duplicates(in: live)
+        if !duplicates.isEmpty {
+            for lane in live where duplicates[lane.id] != nil {
+                closedAt[lane.id] = max(now, lane.updated)
+            }
+            live.removeAll { duplicates[$0.id] != nil }
         }
         let liveIDs = Set(live.map(\.id))
         let cutoff = now.addingTimeInterval(-tombstoneLifetime)
