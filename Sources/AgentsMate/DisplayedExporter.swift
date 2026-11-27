@@ -14,6 +14,7 @@ extension LaneDisplayStatus {
         case .waitingForInput, .permissionRequested: .needsYou
         case .done, .idle: .idle
         case .detached: .stopped
+        case .unknown: .unknown
         }
     }
 }
@@ -169,7 +170,8 @@ extension AgentLaneStore {
             selected: !isHomeShown && selectedID == lane.id, isParallel: parallel,
             isTopLevel: !(nested && parallel), collapsed: collapsed, column: column,
             ownerApp: ownerApp(of: session), sessionTitle: session.subtitle,
-            hostKind: badges.hostKind.rawValue, runKind: badges.runKind.rawValue)
+            hostKind: badges.hostKind.rawValue, runKind: badges.runKind.rawValue,
+            statusHost: session.remoteStatus?.host, statusAt: session.remoteStatus?.at)
     }
 
     /// Everything the sidebar and All Agents show now, in the order they show it.

@@ -608,7 +608,7 @@ struct AgentHomeStatusDot: View {
             case .permissionRequested: Circle().fill(Color.orange)
             case .waitingForInput: Circle().fill(Color.blue)
             case .done, .idle, .attached: Circle().fill(Color.secondary)
-            case .notOpened, .detached: Circle().strokeBorder(Color.secondary, lineWidth: 1)
+            case .notOpened, .detached, .unknown: Circle().strokeBorder(Color.secondary, lineWidth: 1)
             }
         }
         .frame(width: 8, height: 8)

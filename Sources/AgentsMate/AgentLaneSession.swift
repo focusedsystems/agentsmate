@@ -7,6 +7,8 @@ import AgentsMateStatus
 /// otherwise whether the terminal here is attached.
 public enum LaneDisplayStatus: Equatable, Sendable {
     case notOpened, attached, running, waitingForInput, permissionRequested, done, idle, detached
+    /// The session runs on another Mac that has not answered lately.
+    case unknown
 
     public var title: String {
         switch self {
@@ -18,6 +20,7 @@ public enum LaneDisplayStatus: Equatable, Sendable {
         case .done: "Done"
         case .idle: "Idle"
         case .detached: "Detached"
+        case .unknown: "Status unknown"
         }
     }
 }
@@ -285,6 +288,12 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
             case .ended: break
             }
         }
+        // A session on another Mac is what that Mac says, never what this
+        // Mac's terminal does: attached here is a separate mark.
+        if let remote = remoteStatus {
+            if !remote.known { return .unknown }
+            return remote.alive ? .idle : .notOpened
+        }
         if let hint = standingHint { return hint.displayStatus }
         if !isStarted { return .notOpened }
         return hasExited ? .detached : .attached
@@ -359,8 +368,23 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
     /// listed, so it is still running.
     private(set) var polledRecord: LaneStatus?
 
-    func update(record new: LaneStatus?, polled: LaneStatus?) {
+    /// What this Mac knows about a session that runs on another Mac, when
+    /// the lane's status comes from that Mac.
+    struct RemoteStatus: Equatable, Sendable {
+        /// The Mac the session runs on.
+        var host: String
+        /// When that Mac was last read, nil if it never was.
+        var at: Date?
+        /// False when the Mac has not answered lately and nothing newer is known.
+        var known: Bool
+        /// Its session list shows the lane's session running.
+        var alive: Bool
+    }
+    @Published private(set) var remoteStatus: RemoteStatus?
+
+    func update(record new: LaneStatus?, polled: LaneStatus?, remote: RemoteStatus? = nil) {
         polledRecord = polled
+        if remote != remoteStatus { remoteStatus = remote }
         update(record: new)
     }
 

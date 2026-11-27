@@ -324,6 +324,7 @@ private struct CardView: View {
         case .idle: "Idle"
         case .notAttached: "Not attached"
         case .stopped: "Stopped"
+        case .unknown: "Status unknown"
         }
     }
 }

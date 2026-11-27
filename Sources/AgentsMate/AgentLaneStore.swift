@@ -491,7 +491,10 @@ public final class AgentLaneStore: ObservableObject {
                 MainActor.assumeIsolated { self?.sharedLanes?.start() }
             }
         }
-        if configuration.hostSessions != nil { startHostListing() }
+        if configuration.hostSessions != nil {
+            startHostListing()
+            startRemoteStatus()
+        }
         startLaneRequests()
         terminationObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
@@ -1838,11 +1841,123 @@ public final class AgentLaneStore: ObservableObject {
         startHostListing()
     }
 
+    // MARK: Status of lanes on other Macs
+
+    /// What another Mac said its sessions were doing, and when.
+    public struct HostStatusReading: Equatable, Sendable {
+        /// Claude's session list there, and its lane status files.
+        public var records: [LaneStatus]
+        /// The names of the tmux sessions there.
+        public var tmux: [String]
+        public var at: Date
+
+        public init(records: [LaneStatus], tmux: [String] = [], at: Date) {
+            self.records = records
+            self.tmux = tmux
+            self.at = at
+        }
+    }
+
+    /// The last reading of each other Mac, by host name.
+    @Published public private(set) var hostStatus: [String: HostStatusReading] = [:]
+    /// How old a reading may be and still say what a session is doing.
+    static let remoteStatusMaxAge: TimeInterval = 120
+    /// How often the other Macs are read again.
+    static let remoteStatusInterval: TimeInterval = 30
+    private var statusAsksGoing: Set<String> = []
+    private var remoteStatusTimer: CadenceTimer?
+
+    /// Start reading the other Macs' status on a timer: Claude's session
+    /// list and lane status files over `ssh` in batch mode, off the main thread.
+    private func startRemoteStatus() {
+        guard configuration.hostSessions != nil, remoteStatusTimer == nil else { return }
+        remoteStatusTimer = CadenceTimer(interval: Self.remoteStatusInterval) { [weak self] in self?.refreshRemoteStatus() }
+    }
+
+    func refreshRemoteStatus() {
+        guard let config = configuration.hostSessions, let hosts = listingHosts else { return }
+        for host in HostSessions.askedHosts(hosts) where host.name != hosts.selfName && statusAsksGoing.insert(host.name).inserted {
+            let name = host.name
+            Task { @MainActor [weak self] in
+                let listing = await HostSessions.list(host: name, config: config, statusOnly: true)
+                self?.receivedStatus(listing, from: name)
+            }
+        }
+        // Readings age: a host that has gone quiet stops being believed.
+        apply(statusFeed?.records ?? [])
+    }
+
+    /// Take one Mac's reading, nil when it did not answer. The last good
+    /// reading is kept, and believed only until it is too old.
+    func receivedStatus(_ listing: HostSessionListing?, from host: String, now: Date = Date()) {
+        statusAsksGoing.remove(host)
+        if let listing {
+            hostStatus[host] = HostStatusReading(records: listing.claude + listing.records, tmux: listing.tmux, at: now)
+            unknownHosts.remove(host)
+        } else if hostStatus[host] == nil {
+            unknownHosts.insert(host)
+        }
+        apply(statusFeed?.records ?? [])
+    }
+
+    /// The Mac a lane's status comes from, when it is not this one and is
+    /// one the app reads: nil for a lane that runs here.
+    func remoteStatusHost(for lane: AgentLane) -> String? {
+        guard configuration.hostSessions != nil, let hosts = listingHosts, let host = sessionHost(for: lane),
+              host != hosts.selfName, HostSessions.askedHosts(hosts).contains(where: { $0.name == host }) else { return nil }
+        return host
+    }
+
+    /// The status of a lane whose session runs on `host`: that Mac's own
+    /// record while its reading is recent, this Mac's hook record only when
+    /// it is newer than the reading, and nothing known when the Mac has not
+    /// answered lately.
+    func remoteView(of session: AgentLaneSession, on host: String, match: LaneStatusMatch, local: LaneStatus?,
+                    localPolled: LaneStatus?, now: Date) -> (LaneStatus?, LaneStatus?, AgentLaneSession.RemoteStatus?) {
+        guard let reading = hostStatus[host] else {
+            // Never read: until the first answer the local record stands; a
+            // host that did not answer is unknown.
+            guard unknownHosts.contains(host) else { return (local, localPolled, nil) }
+            return (nil, nil, .init(host: host, at: nil, known: false, alive: false))
+        }
+        let fresh = now.timeIntervalSince(reading.at) <= Self.remoteStatusMaxAge
+        func newer(_ record: LaneStatus?) -> LaneStatus? {
+            guard let record, record.updatedAt > reading.at else { return nil }
+            return record
+        }
+        guard fresh else {
+            let held = newer(local)
+            return (held, held?.isPolled == true ? held : newer(localPolled),
+                    .init(host: host, at: reading.at, known: held != nil, alive: false))
+        }
+        let polledRecords = reading.records.filter(\.isPolled)
+        let theirs: LaneStatus?
+        if let own = ownedSession(for: session.lane), own.host != nil {
+            theirs = reading.records.filter { $0.agentID == own.agentID }.max { $0.updatedAt < $1.updatedAt }
+        } else {
+            theirs = match.find(in: reading.records)
+        }
+        var chosen = theirs
+        if let held = newer(local), held.updatedAt > (theirs?.updatedAt ?? .distantPast) { chosen = held }
+        let polled = chosen?.isPolled == true ? chosen : match.find(in: polledRecords)
+        var alive = chosen.map { $0.state != .ended } ?? false
+        if chosen == nil, let config = configuration.hostSessions {
+            let listing = HostSessionListing(claude: polledRecords, tmux: reading.tmux,
+                                             bindings: knownBindings[host] ?? [:], bindingsKnown: knownBindings[host] != nil)
+            alive = HostSessions.target(for: session.lane, backend: session.backend, listing: listing,
+                                        config: config, remoteHost: host) != nil
+        }
+        return (chosen, polled, .init(host: host, at: reading.at, known: true, alive: alive))
+    }
+
     /// Record one host's answer, nil when it did not give one.
     func received(_ listing: HostSessionListing?, from host: String, hosts: AgentHosts? = nil) {
         if let hosts { listingHosts = hosts }
         hostAsksGoing.remove(host)
         if let listing {
+            if host != listingHosts?.selfName {
+                hostStatus[host] = HostStatusReading(records: listing.claude + listing.records, tmux: listing.tmux, at: Date())
+            }
             hostListings[host] = listing
             unknownHosts.remove(host)
             if listing.bindingsKnown { knownBindings[host] = listing.bindings }
@@ -2994,10 +3109,17 @@ public final class AgentLaneStore: ObservableObject {
         var held: [AgentLane.ID: [String]] = [:]
         var owned: [AgentLane.ID: DetachedSessions.OwnedSession] = [:]
         let listed = records.filter(\.isPolled)
+        let now = Date()
         for session in sessions.values {
             let match = statusMatch(for: session, records: records)
-            let record = match.find(in: records)
-            session.update(record: record, polled: record?.isPolled == true ? record : match.find(in: listed))
+            var record = match.find(in: records)
+            var polled = record?.isPolled == true ? record : match.find(in: listed)
+            var remote: AgentLaneSession.RemoteStatus?
+            if !detachedIDs.contains(session.id), let host = remoteStatusHost(for: session.lane) {
+                (record, polled, remote) = remoteView(of: session, on: host, match: match, local: record,
+                                                      localPolled: polled, now: now)
+            }
+            session.update(record: record, polled: polled, remote: remote)
             guard !detachedIDs.contains(session.id) else { continue }
             if let own = ownedSession(for: session.lane) {
                 owned[session.id] = own
