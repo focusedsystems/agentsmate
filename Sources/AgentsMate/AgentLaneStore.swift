@@ -3394,7 +3394,7 @@ public final class AgentLaneStore: ObservableObject {
     public func open(_ pullRequest: LanePullRequest) -> Bool {
         if openPullRequest(pullRequest.url) { return true }
         guard pullRequest.source == .branch, pullRequest.url.scheme == "https" else { return false }
-        NSWorkspace.shared.open(pullRequest.url)
+        AgentsMateRouting.open(pullRequest.url)
         return true
     }
 
