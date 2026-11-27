@@ -163,6 +163,7 @@ public struct AgentsMainToolbar<ID: Hashable, Trailing: ToolbarContent>: Toolbar
     private let windowWidth: CGFloat
     private let onSelect: () -> Void
     private let agentInSidebar: Bool
+    private let sidebar: Binding<NavigationSplitViewVisibility>?
     private let trailing: Trailing?
 
     /// `agentInSidebar` is true while the sidebar is expanded and carries the
@@ -170,15 +171,18 @@ public struct AgentsMainToolbar<ID: Hashable, Trailing: ToolbarContent>: Toolbar
     /// so the toolbar leaves it out; collapsed, it leads the toolbar.
     public init(agent: AgentsToolbarAgent?, history: AgentsToolbarHistory, tabs: [CollapsingTab<ID>],
                 selection: Binding<ID>, windowWidth: CGFloat, agentInSidebar: Bool = false,
+                sidebar: Binding<NavigationSplitViewVisibility>? = nil,
                 onSelect: @escaping () -> Void = {}, @ToolbarContentBuilder trailing: () -> Trailing) {
         self.init(agent: agent, history: history, tabs: tabs, selection: selection, windowWidth: windowWidth,
-                  agentInSidebar: agentInSidebar, onSelect: onSelect, content: trailing())
+                  agentInSidebar: agentInSidebar, sidebar: sidebar, onSelect: onSelect, content: trailing())
     }
 
     private init(agent: AgentsToolbarAgent?, history: AgentsToolbarHistory, tabs: [CollapsingTab<ID>],
-                 selection: Binding<ID>, windowWidth: CGFloat, agentInSidebar: Bool, onSelect: @escaping () -> Void,
+                 selection: Binding<ID>, windowWidth: CGFloat, agentInSidebar: Bool,
+                 sidebar: Binding<NavigationSplitViewVisibility>?, onSelect: @escaping () -> Void,
                  content: Trailing?) {
         self.agentInSidebar = agentInSidebar
+        self.sidebar = sidebar
         self.agent = agent
         self.history = history
         self.tabs = tabs
@@ -201,6 +205,13 @@ public struct AgentsMainToolbar<ID: Hashable, Trailing: ToolbarContent>: Toolbar
         // Browser-style history, mirrored on ⌘[ / ⌘].
         ToolbarItemGroup(placement: .navigation) {
             AgentsToolbarHistoryButtons(history)
+        }
+        // With the sidebar closed its toggle follows Back and Forward, so the
+        // Agent button and the history stay where they are in every mode.
+        if let sidebar, sidebar.wrappedValue == .detailOnly {
+            ToolbarItem(placement: .navigation) {
+                AgentsSidebarToggle(visibility: sidebar)
+            }
         }
         // A single tab needs no tab bar.
         // The bar draws its own glass and hugs its visible tabs; the item
@@ -232,9 +243,10 @@ extension AgentsMainToolbar where Trailing == AgentsNoTrailing {
     /// A toolbar with nothing after the tabs.
     public init(agent: AgentsToolbarAgent?, history: AgentsToolbarHistory, tabs: [CollapsingTab<ID>],
                 selection: Binding<ID>, windowWidth: CGFloat, agentInSidebar: Bool = false,
+                sidebar: Binding<NavigationSplitViewVisibility>? = nil,
                 onSelect: @escaping () -> Void = {}) {
         self.init(agent: agent, history: history, tabs: tabs, selection: selection, windowWidth: windowWidth,
-                  agentInSidebar: agentInSidebar, onSelect: onSelect, content: nil)
+                  agentInSidebar: agentInSidebar, sidebar: sidebar, onSelect: onSelect, content: nil)
     }
 }
 
@@ -293,8 +305,9 @@ extension View {
     /// ``AgentsMainToolbar`` so the button is in one place at a time. The item
     /// is declared either way (removing it left an empty glass pill) and only
     /// its content comes and goes.
-    public func agentsSidebarToolbar(_ agent: AgentsToolbarAgent, visible: Bool) -> some View {
-        modifier(AgentsSidebarToolbar(agent: agent, visible: visible))
+    public func agentsSidebarToolbar(_ agent: AgentsToolbarAgent, visible: Bool,
+                                     sidebar: Binding<NavigationSplitViewVisibility>? = nil) -> some View {
+        modifier(AgentsSidebarToolbar(agent: agent, visible: visible, sidebar: sidebar))
     }
 
     /// Gives the window the toolbar's chrome: the width the tab bar needs,
@@ -468,20 +481,44 @@ public struct AgentsToolbarStrip<ID: Hashable, Trailing: View>: View {
 private struct AgentsSidebarToolbar: ViewModifier {
     let agent: AgentsToolbarAgent
     let visible: Bool
+    let sidebar: Binding<NavigationSplitViewVisibility>?
 
     func body(content: Content) -> some View {
-        content.toolbar { AgentsSidebarItem(agent: agent, visible: visible) }
+        content.toolbar { AgentsSidebarItem(agent: agent, visible: visible, sidebar: sidebar) }
+    }
+}
+
+/// The sidebar's own show-and-hide button, drawn here so it can sit in the
+/// same place in every mode; the system's is removed from these windows.
+struct AgentsSidebarToggle: View {
+    @Binding var visibility: NavigationSplitViewVisibility
+
+    var body: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                visibility = visibility == .detailOnly ? .all : .detailOnly
+            }
+        } label: {
+            Label(visibility == .detailOnly ? "Show Sidebar" : "Hide Sidebar", systemImage: "sidebar.left")
+        }
+        .help(visibility == .detailOnly ? "Show the sidebar (⌃⌘S)" : "Hide the sidebar (⌃⌘S)")
     }
 }
 
 private struct AgentsSidebarItem: ToolbarContent {
     let agent: AgentsToolbarAgent
     let visible: Bool
+    let sidebar: Binding<NavigationSplitViewVisibility>?
 
     var body: some ToolbarContent {
         ToolbarItem(placement: .automatic) {
             if visible { AgentsToolbarButton(agent) }
         }
         .sharedBackgroundVisibility(.hidden)
+        if let sidebar {
+            ToolbarItem(placement: .automatic) {
+                if visible { AgentsSidebarToggle(visibility: sidebar) }
+            }
+        }
     }
 }
