@@ -312,3 +312,175 @@ final class LaneTitleSyncTests: XCTestCase {
         XCTAssertNil(store.sessions["a"]?.customTitle, "the settled session title is not taken back")
     }
 }
+
+final class RenameBothWaysTests: XCTestCase {
+    private func decide(state: LaneState?, runsWhileBusy: Bool) -> AgentRenameOutcome {
+        AgentRenameOutcome.decide(command: "/rename x", enabled: true, attached: true, agentInForeground: true,
+                                  state: state, runsWhileBusy: runsWhileBusy, input: { .empty })
+    }
+
+    func testClaudeTakesARenameWhileATurnIsRunningButStillNotAtAPermissionPrompt() {
+        XCTAssertEqual(decide(state: .running, runsWhileBusy: false), .busy)
+        XCTAssertEqual(decide(state: .running, runsWhileBusy: true), .sent)
+        XCTAssertEqual(decide(state: .permissionRequested, runsWhileBusy: true), .askingPermission)
+    }
+
+    private func listed(name: String?, worker: Bool?, id: String = "6db6dcf2") -> LaneStatus {
+        LaneStatus(agent: "claude", state: .running, lane: name, directory: "/work", sessionID: "6db6dcf2-295a-489f-ba55-67beb2d1de68",
+                   event: ClaudeAgentsList.event, agentID: id, workerRunning: worker)
+    }
+
+    @MainActor
+    private func store(_ backend: ClaudeBackgroundLaneBackend, defaults: UserDefaults) -> AgentLaneStore {
+        let store = AgentLaneStore(configuration: .init(termProgram: "test", sessionFileDirectory: nil, summaryCacheFile: nil,
+                                                        pullRequestLedgerFile: nil, pullRequestSeedFile: nil),
+                                   backends: [backend], statusFeed: nil, defaults: defaults)
+        store.sync(lanes: [AgentLane(id: "b", title: "B", backendID: backend.id)])
+        return store
+    }
+
+    @MainActor
+    func testTheDaemonsNameForASessionBecomesTheRowsNameWithNoFileToRead() throws {
+        let store = store(ClaudeBackgroundLaneBackend(), defaults: UserDefaults(suiteName: "rename-both-\(UUID().uuidString)")!)
+        let session = try XCTUnwrap(store.sessions["b"])
+        session.update(record: listed(name: "Renamed in the session", worker: true),
+                       polled: listed(name: "Renamed in the session", worker: true))
+        XCTAssertEqual(session.polledName, "Renamed in the session")
+        store.adoptDaemonTitle(of: session)
+        XCTAssertNil(session.customTitle, "a title is taken once it reads the same twice")
+        store.adoptDaemonTitle(of: session)
+        XCTAssertEqual(session.customTitle, "Renamed in the session")
+        XCTAssertFalse(session.titleSync.hasPending, "taking the name never queues it back")
+    }
+
+    @MainActor
+    func testAHookRecordsTmuxNameIsNotATitle() throws {
+        let store = store(ClaudeBackgroundLaneBackend(), defaults: UserDefaults(suiteName: "rename-both-\(UUID().uuidString)")!)
+        let session = try XCTUnwrap(store.sessions["b"])
+        let hook = LaneStatus(agent: "claude", state: .done, lane: "tmux-name", event: "Stop")
+        session.update(record: hook, polled: hook)
+        XCTAssertNil(session.polledName)
+    }
+
+    @MainActor
+    func testARowNotOpenHereIsRenamedThroughItsOwnAttachWhileItsSessionRuns() throws {
+        let store = store(ClaudeBackgroundLaneBackend(), defaults: UserDefaults(suiteName: "rename-both-\(UUID().uuidString)")!)
+        let session = try XCTUnwrap(store.sessions["b"])
+        XCTAssertNil(store.headlessRenameLaunch(for: session), "nothing is listed for it")
+        session.update(record: listed(name: "Old", worker: true), polled: listed(name: "Old", worker: true))
+        let launch = try XCTUnwrap(store.headlessRenameLaunch(for: session))
+        XCTAssertTrue(launch.arguments.joined(separator: " ").contains("attach"))
+        XCTAssertTrue(launch.arguments.joined(separator: " ").contains("6db6dcf2"))
+        XCTAssertFalse(launch.arguments.joined(separator: " ").contains("--bg"), "it never starts a session")
+    }
+
+    @MainActor
+    func testAStoppedSessionIsNeverStartedToRenameIt() throws {
+        let store = store(ClaudeBackgroundLaneBackend(), defaults: UserDefaults(suiteName: "rename-both-\(UUID().uuidString)")!)
+        let session = try XCTUnwrap(store.sessions["b"])
+        session.update(record: listed(name: "Old", worker: false), polled: listed(name: "Old", worker: false))
+        XCTAssertNil(store.headlessRenameLaunch(for: session))
+        session.update(record: listed(name: "Old", worker: nil), polled: listed(name: "Old", worker: nil))
+        XCTAssertNil(store.headlessRenameLaunch(for: session))
+    }
+
+    @MainActor
+    func testAQueuedRenameSurvivesARestart() throws {
+        let defaults = UserDefaults(suiteName: "rename-both-\(UUID().uuidString)")!
+        let first = store(ClaudeBackgroundLaneBackend(), defaults: defaults)
+        first.rename("b", to: "Mine")
+        XCTAssertTrue(first.sessions["b"]?.titleSync.hasPending ?? false)
+        let second = store(ClaudeBackgroundLaneBackend(), defaults: defaults)
+        XCTAssertEqual(second.sessions["b"]?.customTitle, "Mine")
+        XCTAssertEqual(second.sessions["b"]?.titleSync.pending, "Mine")
+    }
+
+    func testTheDaemonListSaysWhetherAWorkerRunsTheSession() {
+        let data = Data("""
+        [{"id":"aaaaaaaa","sessionId":"aaaaaaaa-0000-0000-0000-000000000000","name":"Live","cwd":"/w","kind":"background","pid":10,"status":"idle","state":"done"},
+         {"id":"bbbbbbbb","sessionId":"bbbbbbbb-0000-0000-0000-000000000000","name":"Waiting","cwd":"/w","kind":"background","state":"blocked"}]
+        """.utf8)
+        let records = ClaudeAgentsList.parse(data)
+        XCTAssertEqual(records.map(\.workerRunning), [true, false])
+    }
+}
+
+final class HeadlessAgentRenameTests: XCTestCase {
+    private func script(_ body: String) throws -> TerminalLaunch {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("attach-\(UUID().uuidString).sh")
+        try body.write(to: url, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+        addTeardownBlock { try? FileManager.default.removeItem(at: url) }
+        return TerminalLaunch(executable: "/bin/sh", arguments: [url.path], directory: NSHomeDirectory())
+    }
+
+    private let quick = HeadlessAgentRename.Timing(ready: 3, confirm: 3, gap: 0.05)
+
+    func testPlainTextJoinsWordsClaudeDrawsWithCursorMoves() {
+        XCTAssertEqual(HeadlessAgentRename.plain("\u{1B}[1mSession\u{1B}[14Grenamed\u{1B}[22Gto:\u{1B}[26Gnew\r\n"), "Session renamed to: new")
+    }
+
+    private let prompt = "rule=$(printf '\\342\\224\\200%.0s' 1 2 3 4 5 6 7 8 9 10)\nprintf '%s\\n' \"$rule\"\nprintf '\\342\\235\\257\\302\\240\\0337\\n%s\\0338' \"$rule\"\n"
+
+    func testTypesTheCommandOnlyOnceTheEmptyInputLineShowsAndReportsClaudesConfirmation() async throws {
+        let launch = try script(prompt + """
+        read line
+        case "$line" in
+          "/rename New name") printf '\\nSession\\033[14Grenamed\\033[22Gto:\\033[26GNew name\\n'; sleep 1 ;;
+          *) printf 'unexpected %s\\n' "$line" ;;
+        esac
+        """)
+        let renamed = await HeadlessAgentRename.run(launch, command: "/rename New name",
+                                                    environment: ProcessInfo.processInfo.environment, timing: quick)
+        XCTAssertTrue(renamed)
+    }
+
+    private func neverTyped(_ screen: String) async throws {
+        let marker = FileManager.default.temporaryDirectory.appendingPathComponent("typed-\(UUID().uuidString)")
+        addTeardownBlock { try? FileManager.default.removeItem(at: marker) }
+        let launch = try script(screen + "\nread line\necho \"$line\" > '\(marker.path)'\n")
+        let short = HeadlessAgentRename.Timing(ready: 1.2, confirm: 0.6, gap: 0.05)
+        let renamed = await HeadlessAgentRename.run(launch, command: "/rename X",
+                                                    environment: ProcessInfo.processInfo.environment, timing: short)
+        XCTAssertFalse(renamed)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path), "nothing was typed")
+    }
+
+    func testRefusesAScreenThatNeverShowsAnInputLine() async throws {
+        try await neverTyped("printf 'starting\\n'")
+    }
+
+    func testRefusesAPermissionPromptEvenWithAnInputLineLookingEmpty() async throws {
+        try await neverTyped(prompt + "printf '\\nDo you want to proceed?\\n'")
+    }
+
+    func testRefusesATrustPromptAndANumberedMenu() async throws {
+        try await neverTyped("printf 'Do you trust this folder?\\n'")
+        try await neverTyped("printf '\\342\\235\\257 1. Yes\\n  2. No\\n'")
+    }
+
+    func testRefusalReadsQuestionsAndMenusOnly() {
+        XCTAssertTrue(HeadlessAgentRename.refusal(in: ["  Do you want to make this edit?"]))
+        XCTAssertTrue(HeadlessAgentRename.refusal(in: ["Do you trust this folder?"]))
+        XCTAssertTrue(HeadlessAgentRename.refusal(in: ["❯ 1. Yes", "  2. No"]))
+        XCTAssertTrue(HeadlessAgentRename.refusal(in: ["Proceed? (y/n)"]))
+        XCTAssertFalse(HeadlessAgentRename.refusal(in: ["❯ ", "⏵⏵ bypass permissions on (shift+tab to cycle)", "v2.1.332 build 1.5"]))
+    }
+
+    @MainActor
+    func testAnAskingOrBlockedSessionIsNeverAttachedForARename() throws {
+        let backend = ClaudeBackgroundLaneBackend()
+        let store = AgentLaneStore(configuration: .init(termProgram: "test", sessionFileDirectory: nil, summaryCacheFile: nil,
+                                                        pullRequestLedgerFile: nil, pullRequestSeedFile: nil),
+                                   backends: [backend], statusFeed: nil,
+                                   defaults: UserDefaults(suiteName: "rename-refuse-\(UUID().uuidString)")!)
+        store.sync(lanes: [AgentLane(id: "b", title: "B", backendID: backend.id)])
+        let session = try XCTUnwrap(store.sessions["b"])
+        for state in [LaneState.permissionRequested, .waitingForInput] {
+            let listed = LaneStatus(agent: "claude", state: state, lane: "x", directory: "/w", sessionID: "6db6dcf2-295a-489f-ba55-67beb2d1de68",
+                                    event: ClaudeAgentsList.event, agentID: "6db6dcf2", workerRunning: true)
+            session.update(record: listed, polled: listed)
+            XCTAssertNil(store.headlessRenameLaunch(for: session), "\(state)")
+        }
+    }
+}

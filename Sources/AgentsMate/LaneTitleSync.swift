@@ -24,7 +24,10 @@ struct LaneTitleSync: Equatable {
     private var awaiting: (name: String, until: Date)?
     private var candidate: String?
 
-    init(acknowledged: String? = nil) { self.acknowledged = acknowledged }
+    init(acknowledged: String? = nil, pending: String? = nil) {
+        self.acknowledged = acknowledged
+        self.pending = pending
+    }
 
     static func == (a: Self, b: Self) -> Bool {
         a.acknowledged == b.acknowledged && a.pending == b.pending && a.awaiting?.name == b.awaiting?.name

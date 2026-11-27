@@ -368,6 +368,15 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
     /// listed, so it is still running.
     private(set) var polledRecord: LaneStatus?
 
+    /// The name Claude's daemon lists the lane's session under, which is its
+    /// `/rename` title: what a Claude background session on this Mac or
+    /// another one says when there is no conversation file to read it from.
+    var polledName: String? {
+        guard let record = polledRecord, record.event == ClaudeAgentsList.event else { return nil }
+        let name = record.lane?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name?.isEmpty == false ? name : nil
+    }
+
     /// What this Mac knows about a session that runs on another Mac, when
     /// the lane's status comes from that Mac.
     struct RemoteStatus: Equatable, Sendable {

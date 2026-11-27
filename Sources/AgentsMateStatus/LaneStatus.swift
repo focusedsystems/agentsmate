@@ -44,10 +44,15 @@ public struct LaneStatus: Codable, Equatable, Sendable {
     /// The short id the agent's own tools know the session by, such as the
     /// one `claude attach` takes for a background session.
     public var agentID: String?
+    /// For a record read from `claude agents --json`: whether a worker
+    /// process is running the session now. A session listed without one
+    /// waits for someone to attach it, and attaching starts it again.
+    public var workerRunning: Bool?
 
     public init(agent: String, state: LaneState, lane: String? = nil, directory: String? = nil,
                 sessionID: String? = nil, message: String? = nil, event: String, updatedAt: Date = Date(),
-                transcriptPath: String? = nil, agentID: String? = nil) {
+                transcriptPath: String? = nil, agentID: String? = nil, workerRunning: Bool? = nil) {
+        self.workerRunning = workerRunning
         self.agentID = agentID
         self.transcriptPath = transcriptPath
         self.agent = agent

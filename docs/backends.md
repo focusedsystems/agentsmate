@@ -40,9 +40,15 @@ attaches the id `claude --bg` prints. Once the list shows exactly one session
 for an attached row, the row keeps that id, so it is attached and restored by
 id from then on. Duplicating such a lane opens an ordinary new
 lane on the app's new-lane backend rather than another background session. `ClaudeAgentsStatusSource` reads its state from
-`claude agents --json`; add it to a `LaneStatusFeed`'s `sources`. It has no
-`renameCommand`: the session's name is how every device attaches it, so
-renaming a lane leaves it alone.
+`claude agents --json`; add it to a `LaneStatusFeed`'s `sources`. Its
+`renameCommand` is `/rename %@`, and the name Claude lists the session under
+is its `/rename` title, so the row follows a rename made inside the session
+whether it runs here or on another Mac. A rename made on the row reaches a
+session running (not stopped) in the daemon even when the row is not open
+here or the agent is mid-turn: the app attaches the session in a
+pseudo-terminal of its own, types the command, waits for Claude to confirm,
+and detaches. A stopped session is never started for it; the rename waits,
+and is kept across restarts.
 
 ### Could it replace tmux for Claude lanes?
 

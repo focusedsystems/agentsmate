@@ -77,13 +77,16 @@ public enum AgentRenameOutcome: Equatable, Sendable {
 
     /// Whether to type the command, from what is known about the lane. The
     /// input line is read last and only when everything else allows a send.
+    /// `runsWhileBusy` is for an agent that runs a slash command at once
+    /// while a turn is under way, as Claude Code does.
     static func decide(command: String?, enabled: Bool, attached: Bool, agentInForeground: Bool,
-                       state: LaneState?, input: () -> AgentPromptLine.Reading) -> AgentRenameOutcome {
+                       state: LaneState?, runsWhileBusy: Bool = false,
+                       input: () -> AgentPromptLine.Reading) -> AgentRenameOutcome {
         guard command != nil else { return .notSupported }
         guard enabled else { return .disabled }
         guard attached else { return .notAttached }
         guard agentInForeground else { return .agentNotInForeground }
-        if state == .running { return .busy }
+        if state == .running, !runsWhileBusy { return .busy }
         if state == .permissionRequested { return .askingPermission }
         switch input() {
         case .empty: return .sent

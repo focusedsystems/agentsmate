@@ -2092,6 +2092,7 @@ public final class AgentLaneStore: ObservableObject {
         if let value = session.customTitle {
             guard value != before else { return }
             session.titleSync.rowRenamed(to: value)
+            saveTitleSync(id)
             flushPendingRename(id, showNotice: true)
         } else {
             session.titleSync.rowReset(sessionTitle: session.sessionTitle)
@@ -2118,7 +2119,9 @@ public final class AgentLaneStore: ObservableObject {
         let command = session.backend.renameCommand.flatMap { LaneRename.command(format: $0, name: name) }
         let outcome = AgentRenameOutcome.decide(command: command, enabled: renamesAgentSession,
                                                 attached: session.isAttached, agentInForeground: session.acceptsText,
-                                                state: session.record?.state, input: session.readInputLine)
+                                                state: session.record?.state,
+                                                runsWhileBusy: runsRenameWhileBusy(session),
+                                                input: session.readInputLine)
         if outcome == .sent, let command { session.typeCommand(command) }
         session.showRenameNotice(outcome.notice)
         return outcome
@@ -2133,23 +2136,88 @@ public final class AgentLaneStore: ObservableObject {
         let command = session.backend.renameCommand.flatMap { LaneRename.command(format: $0, name: name) }
         let outcome = AgentRenameOutcome.decide(command: command, enabled: renamesAgentSession,
                                                 attached: session.isAttached, agentInForeground: session.acceptsText,
-                                                state: session.record?.state, input: session.readInputLine)
+                                                state: session.record?.state,
+                                                runsWhileBusy: runsRenameWhileBusy(session),
+                                                input: session.readInputLine)
         switch outcome {
         case .sent:
             if let command { session.typeCommand(command) }
             session.titleSync.typed()
+            saveTitleSync(id)
             session.showRenameNotice(nil)
         case .notSupported, .disabled:
             session.titleSync.rowReset(sessionTitle: session.sessionTitle)
             saveTitleSync(id)
         case .notAttached, .agentNotInForeground, .busy, .askingPermission, .inputNotEmpty, .inputUnknown:
+            if let command, startHeadlessRename(id, command: command, name: name) { return }
             if showNotice { session.showRenameNotice(outcome.notice) }
         }
+    }
+
+    /// Whether the lane's agent runs a rename at once while a turn is under
+    /// way: Claude Code does, whether it runs in a tmux lane or in a
+    /// background session.
+    func runsRenameWhileBusy(_ session: AgentLaneSession) -> Bool {
+        if session.backend is ClaudeBackgroundLaneBackend { return true }
+        if let command = session.backend as? CommandLaneBackend, command.statusAgent?.lowercased() == "claude" { return true }
+        return session.record?.agent == "claude"
+    }
+
+    /// How long a lane waits to try a rename through its own attach again
+    /// after one failed.
+    static let headlessRetryDelay: TimeInterval = 60
+
+    /// The attach a rename without a terminal runs, for a lane whose Claude
+    /// session the daemon lists as running (here or on the Mac it runs on):
+    /// nil when the lane's own terminal can take the rename, the session is
+    /// asking permission or a question (its screen would take Return as the answer), or it is stopped, since attaching would start it.
+    func headlessRenameLaunch(for session: AgentLaneSession) -> TerminalLaunch? {
+        guard !session.isAttached,
+              ![.permissionRequested, .waitingForInput].contains(session.record?.state),
+              ![.permissionRequested, .waitingForInput].contains(session.polledRecord?.state),
+              let listed = session.polledRecord, listed.event == ClaudeAgentsList.event, listed.state != .ended, listed.workerRunning == true,
+              let agentID = listed.agentID, HostSessions.isValidAgentID(agentID) else { return nil }
+        let host = remoteStatusHost(for: session.lane)
+        return HostSessions.launch(.claude(id: agentID, host: host), lane: session.lane, shell: AgentLaneSession.loginShell,
+                                   config: configuration.hostSessions ?? HostSessionsConfiguration())
+    }
+
+    private var headlessRenames: [AgentLane.ID: Date] = [:]
+
+    /// Rename the lane's Claude session through an attach of its own, off
+    /// the main thread. True when one is under way; the rename stays queued
+    /// until the agent's title shows it, so a failed one is tried again.
+    private func startHeadlessRename(_ id: AgentLane.ID, command: String, name: String) -> Bool {
+        guard let session = sessions[id], let launch = headlessRenameLaunch(for: session) else { return false }
+        if let until = headlessRenames[id], until > Date() { return true }
+        headlessRenames[id] = .distantFuture
+        var environment = AgentLaneSession.scrubbed(ProcessInfo.processInfo.environment)
+        environment.removeValue(forKey: "AGENTSMATE_LANE")
+        Task { [weak self] in
+            let renamed = await HeadlessAgentRename.run(launch, command: command, environment: environment)
+            await MainActor.run {
+                guard let self else { return }
+                self.headlessRenames[id] = renamed ? nil : Date().addingTimeInterval(Self.headlessRetryDelay)
+                guard renamed, let session = self.sessions[id], session.titleSync.pending == name else { return }
+                session.titleSync.typed()
+                self.saveTitleSync(id)
+            }
+        }
+        return true
     }
 
     /// Retry every queued rename.
     func flushPendingRenames() {
         for (id, session) in sessions where session.titleSync.hasPending { flushPendingRename(id) }
+    }
+
+    /// A lane with no conversation file to read here (a background session,
+    /// or one on another Mac) takes its title from the name the daemon lists
+    /// its session under, which is its `/rename` title. The others read their file.
+    func adoptDaemonTitle(of session: AgentLaneSession) {
+        guard let name = session.polledName,
+              LaneTranscriptCache.Source(session.record).flatMap({ transcripts.path(for: $0) }) == nil else { return }
+        adopt(sessionTitle: name, for: session.id)
     }
 
     /// Take a session title read from the agent: the row follows it when it
@@ -2167,6 +2235,11 @@ public final class AgentLaneStore: ObservableObject {
         var all = defaults.dictionary(forKey: keys.titleSync) as? [String: String] ?? [:]
         all[id] = sessions[id]?.titleSync.acknowledged
         defaults.set(all, forKey: keys.titleSync)
+        // A rename not yet delivered outlives the app: the row keeps its name,
+        // and the agent is told at the next chance.
+        var waiting = defaults.dictionary(forKey: keys.titlePending) as? [String: String] ?? [:]
+        waiting[id] = sessions[id]?.titleSync.pending
+        defaults.set(waiting, forKey: keys.titlePending)
     }
 
     /// The person's switch for renaming the agent's session with its lane,
@@ -2560,7 +2633,11 @@ public final class AgentLaneStore: ObservableObject {
         session.onAttentionChange = { [weak self] _ in self?.updateBadge() }
         session.onUserInteraction = { [weak self] session in self?.claimOwnership(of: session) }
         session.customTitle = layout.names[id]
-        session.titleSync = LaneTitleSync(acknowledged: (defaults.dictionary(forKey: keys.titleSync) as? [String: String])?[id])
+        session.titleSync = LaneTitleSync(acknowledged: (defaults.dictionary(forKey: keys.titleSync) as? [String: String])?[id],
+                                          pending: session.customTitle.flatMap { name in
+                                              (defaults.dictionary(forKey: keys.titlePending) as? [String: String])?[id]
+                                                  .flatMap { $0 == name ? $0 : nil }
+                                          })
         session.onShortcut = { [weak self] shortcut in self?.handle(shortcut, from: id) ?? false }
         session.shortcutResolver = { [weak self] event in self?.shortcuts.terminalShortcut(for: event) }
         session.onOpenLink = { [weak self] url in self?.onOpenLink?(url, id) ?? false }
@@ -3132,6 +3209,7 @@ public final class AgentLaneStore: ObservableObject {
                                                       localPolled: polled, now: now)
             }
             session.update(record: record, polled: polled, remote: remote)
+            adoptDaemonTitle(of: session)
             guard !detachedIDs.contains(session.id) else { continue }
             if let own = ownedSession(for: session.lane) {
                 owned[session.id] = own
@@ -3309,7 +3387,10 @@ public final class AgentLaneStore: ObservableObject {
                 self.readingTranscripts = false
                 self.transcripts = cache
                 var selectedChanged = false
-                for (id, title) in titles { self.adopt(sessionTitle: title, for: id) }
+                // A session's own file gives its title; one with no file here (a
+                // background session, or one on another Mac) gives the name the
+                // daemon lists it under, which is the same title.
+                for (id, title) in titles { self.adopt(sessionTitle: title ?? self.sessions[id]?.polledName, for: id) }
                 self.flushPendingRenames()
                 for (id, source) in wanted {
                     guard let path = cache.path(for: source), let transcript = changed[path] else { continue }
@@ -3464,6 +3545,8 @@ public struct AgentsModeKeys: Sendable {
     public var renameAgentSession: String { prefix + "renameAgentSession" }
     /// The agent session title each row has already settled with, by lane.
     public var titleSync: String { prefix + "titleSync" }
+    /// Row names the agent's session has not been told yet.
+    public var titlePending: String { prefix + "titlePending" }
     /// The person's sidebar shape, over the app's defaults
     /// (``AgentSidebarSettingsSection``).
     public var showsSectionHeadings: String { prefix + "showsSectionHeadings" }
