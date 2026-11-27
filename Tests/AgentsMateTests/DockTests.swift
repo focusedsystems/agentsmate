@@ -84,6 +84,44 @@ final class HistoryPaletteTests: XCTestCase {
 }
 
 @MainActor
+final class LaneHistoryStartTests: XCTestCase {
+    private func makeStore() -> AgentLaneStore {
+        let store = AgentLaneStore(configuration: .init(termProgram: "T", sessionFileDirectory: nil),
+                                   backends: [CommandLaneBackend.shell], statusFeed: nil,
+                                   defaults: UserDefaults(suiteName: "agentsmate-hist-\(UUID().uuidString)")!)
+        store.sync(lanes: [AgentLane(id: "a", title: "Alpha", directory: URL(fileURLWithPath: "/w/alpha"), backendID: "shell"),
+                           AgentLane(id: "b", title: "Beta", directory: URL(fileURLWithPath: "/w/beta"), backendID: "shell")])
+        return store
+    }
+
+    func testBackReturnsToTheLaneShownBeforeTheFirstOpen() {
+        let store = makeStore()
+        XCTAssertEqual(store.selectedID, "a")
+        store.open("b", focus: false)
+        XCTAssertTrue(store.canGoBack)
+        store.goBack()
+        XCTAssertEqual(store.selectedID, "a")
+        XCTAssertTrue(store.canGoForward)
+        store.goForward()
+        XCTAssertEqual(store.selectedID, "b")
+        store.detachAll()
+    }
+
+    func testBackAndForwardKeysAreTerminalShortcutsOnlyWhenThereIsSomewhereToGo() {
+        let store = makeStore()
+        XCTAssertFalse(store.handle(.back, from: "a"))
+        store.open("b", focus: false)
+        XCTAssertTrue(store.handle(.back, from: "b"))
+        XCTAssertEqual(store.selectedID, "a")
+        XCTAssertTrue(store.handle(.forward, from: "a"))
+        XCTAssertEqual(store.selectedID, "b")
+        XCTAssertEqual(LaneShortcutAction.back.terminalShortcut, .back)
+        XCTAssertEqual(LaneShortcutAction.forward.terminalShortcut, .forward)
+        store.detachAll()
+    }
+}
+
+@MainActor
 final class AgentsLaunchTests: XCTestCase {
     func testLaunchOpensAgentsModeButNotFullScreenByDefault() {
         let defaults = UserDefaults(suiteName: "agentsmate-launch-\(UUID().uuidString)")!

@@ -516,7 +516,11 @@ public final class AgentLaneStore: ObservableObject {
 
     private func recordVisit(_ id: AgentLane.ID) {
         guard !navigatingHistory, history.indices.contains(historyIndex) ? history[historyIndex] != id : true else { return }
-        history = Array(history.prefix(historyIndex + 1)) + [id]
+        var trail = Array(history.prefix(historyIndex + 1))
+        // The lane already showing counts as visited, so the first move away
+        // from it (or from one picked another way) can be undone.
+        if let current = selectedID, current != id, current != trail.last, sessions[current] != nil { trail.append(current) }
+        history = trail + [id]
         if history.count > 100 { history.removeFirst(history.count - 100) }
         historyIndex = history.count - 1
     }
@@ -3071,6 +3075,12 @@ public final class AgentLaneStore: ObservableObject {
         case .clear: sessions[id]?.view.clearScreen()
         case .next: cycle(by: 1)
         case .previous: cycle(by: -1)
+        case .back:
+            guard canGoBack else { return false }
+            goBack()
+        case .forward:
+            guard canGoForward else { return false }
+            goForward()
         case .select(let n): open(index: n)
         case .maximize:
             guard dockVisible else { return false }
