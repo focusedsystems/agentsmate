@@ -2170,9 +2170,11 @@ public final class AgentLaneStore: ObservableObject {
     /// The attach a rename without a terminal runs, for a lane whose Claude
     /// session the daemon lists as running (here or on the Mac it runs on):
     /// nil when the lane's own terminal can take the rename, the session is
-    /// asking permission, or it is stopped, since attaching would start it.
+    /// asking permission or a question (its screen would take Return as the answer), or it is stopped, since attaching would start it.
     func headlessRenameLaunch(for session: AgentLaneSession) -> TerminalLaunch? {
-        guard !session.isAttached, session.record?.state != .permissionRequested,
+        guard !session.isAttached,
+              ![.permissionRequested, .waitingForInput].contains(session.record?.state),
+              ![.permissionRequested, .waitingForInput].contains(session.polledRecord?.state),
               let listed = session.polledRecord, listed.event == ClaudeAgentsList.event, listed.state != .ended, listed.workerRunning == true,
               let agentID = listed.agentID, HostSessions.isValidAgentID(agentID) else { return nil }
         let host = remoteStatusHost(for: session.lane)

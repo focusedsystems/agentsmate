@@ -420,12 +420,13 @@ final class HeadlessAgentRenameTests: XCTestCase {
         XCTAssertEqual(HeadlessAgentRename.plain("\u{1B}[1mSession\u{1B}[14Grenamed\u{1B}[22Gto:\u{1B}[26Gnew\r\n"), "Session renamed to: new")
     }
 
-    func testTypesTheCommandOnceThePromptShowsAndReportsClaudesConfirmation() async throws {
-        let launch = try script("""
-        printf '\\342\\235\\257 '
+    private let prompt = "rule=$(printf '\\342\\224\\200%.0s' 1 2 3 4 5 6 7 8 9 10)\nprintf '%s\\n' \"$rule\"\nprintf '\\342\\235\\257\\302\\240\\0337\\n%s\\0338' \"$rule\"\n"
+
+    func testTypesTheCommandOnlyOnceTheEmptyInputLineShowsAndReportsClaudesConfirmation() async throws {
+        let launch = try script(prompt + """
         read line
         case "$line" in
-          "/rename New name") printf 'Session\\033[14Grenamed\\033[22Gto:\\033[26GNew name\\n'; sleep 1 ;;
+          "/rename New name") printf '\\nSession\\033[14Grenamed\\033[22Gto:\\033[26GNew name\\n'; sleep 1 ;;
           *) printf 'unexpected %s\\n' "$line" ;;
         esac
         """)
@@ -434,18 +435,52 @@ final class HeadlessAgentRenameTests: XCTestCase {
         XCTAssertTrue(renamed)
     }
 
-    func testReportsFailureWhenTheScreenNeverShowsAPromptAndTypesNothing() async throws {
+    private func neverTyped(_ screen: String) async throws {
         let marker = FileManager.default.temporaryDirectory.appendingPathComponent("typed-\(UUID().uuidString)")
         addTeardownBlock { try? FileManager.default.removeItem(at: marker) }
-        let launch = try script("""
-        printf 'trust this folder?\\n'
-        read line
-        echo "$line" > '\(marker.path)'
-        """)
-        let short = HeadlessAgentRename.Timing(ready: 0.6, confirm: 0.6, gap: 0.05)
+        let launch = try script(screen + "\nread line\necho \"$line\" > '\(marker.path)'\n")
+        let short = HeadlessAgentRename.Timing(ready: 1.2, confirm: 0.6, gap: 0.05)
         let renamed = await HeadlessAgentRename.run(launch, command: "/rename X",
                                                     environment: ProcessInfo.processInfo.environment, timing: short)
         XCTAssertFalse(renamed)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path), "nothing was typed")
+    }
+
+    func testRefusesAScreenThatNeverShowsAnInputLine() async throws {
+        try await neverTyped("printf 'starting\\n'")
+    }
+
+    func testRefusesAPermissionPromptEvenWithAnInputLineLookingEmpty() async throws {
+        try await neverTyped(prompt + "printf '\\nDo you want to proceed?\\n'")
+    }
+
+    func testRefusesATrustPromptAndANumberedMenu() async throws {
+        try await neverTyped("printf 'Do you trust this folder?\\n'")
+        try await neverTyped("printf '\\342\\235\\257 1. Yes\\n  2. No\\n'")
+    }
+
+    func testRefusalReadsQuestionsAndMenusOnly() {
+        XCTAssertTrue(HeadlessAgentRename.refusal(in: ["  Do you want to make this edit?"]))
+        XCTAssertTrue(HeadlessAgentRename.refusal(in: ["Do you trust this folder?"]))
+        XCTAssertTrue(HeadlessAgentRename.refusal(in: ["❯ 1. Yes", "  2. No"]))
+        XCTAssertTrue(HeadlessAgentRename.refusal(in: ["Proceed? (y/n)"]))
+        XCTAssertFalse(HeadlessAgentRename.refusal(in: ["❯ ", "⏵⏵ bypass permissions on (shift+tab to cycle)", "v2.1.332 build 1.5"]))
+    }
+
+    @MainActor
+    func testAnAskingOrBlockedSessionIsNeverAttachedForARename() throws {
+        let backend = ClaudeBackgroundLaneBackend()
+        let store = AgentLaneStore(configuration: .init(termProgram: "test", sessionFileDirectory: nil, summaryCacheFile: nil,
+                                                        pullRequestLedgerFile: nil, pullRequestSeedFile: nil),
+                                   backends: [backend], statusFeed: nil,
+                                   defaults: UserDefaults(suiteName: "rename-refuse-\(UUID().uuidString)")!)
+        store.sync(lanes: [AgentLane(id: "b", title: "B", backendID: backend.id)])
+        let session = try XCTUnwrap(store.sessions["b"])
+        for state in [LaneState.permissionRequested, .waitingForInput] {
+            let listed = LaneStatus(agent: "claude", state: state, lane: "x", directory: "/w", sessionID: "6db6dcf2-295a-489f-ba55-67beb2d1de68",
+                                    event: ClaudeAgentsList.event, agentID: "6db6dcf2", workerRunning: true)
+            session.update(record: listed, polled: listed)
+            XCTAssertNil(store.headlessRenameLaunch(for: session), "\(state)")
+        }
     }
 }

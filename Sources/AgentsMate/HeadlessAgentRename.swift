@@ -27,7 +27,6 @@ final class HeadlessAgentRename: LocalProcessDelegate, @unchecked Sendable {
 
     /// What Claude's screen shows once a session is attached and takes
     /// input, and once a rename has gone through.
-    static let promptMarker = "❯"
     static let confirmation = "Session renamed to"
     static let settle: TimeInterval = 0.5
 
@@ -93,19 +92,31 @@ final class HeadlessAgentRename: LocalProcessDelegate, @unchecked Sendable {
     }
 
     func dataReceived(slice: ArraySlice<UInt8>) {
+        screen.feed(buffer: slice)
         output += String(decoding: slice, as: UTF8.self)
         if output.count > 200_000 { output = String(output.suffix(100_000)) }
         switch stage {
         case .starting:
-            guard output.contains(Self.promptMarker) else { return }
-            stage = .typed
-            output = ""
-            // The screen is still drawing around the prompt; give it a moment.
+            if Self.refusal(onScreen: screen) { return finish(false) }
+            generation += 1
+            let seen = generation
+            // Judge the screen once it has stopped drawing.
             queue.asyncAfter(deadline: .now() + Self.settle) { [weak self] in
-                guard let self, self.stage == .typed else { return }
+                guard let self, self.stage == .starting, self.generation == seen else { return }
+                if Self.refusal(onScreen: self.screen) { return self.finish(false) }
+                // Only a real, empty input line is typed into.
+                guard AgentPromptLine.read(self.screen) == .empty else { return }
+                self.stage = .typed
+                self.output = ""
                 self.process?.send(data: ArraySlice(Array(self.command.utf8)))
                 self.queue.asyncAfter(deadline: .now() + self.gap) { [weak self] in
-                    self?.process?.send(data: ArraySlice([0x0D]))
+                    guard let self, self.stage == .typed else { return }
+                    // Return is sent only to a line that holds exactly what was typed.
+                    guard !Self.refusal(onScreen: self.screen), Self.typedLine(on: self.screen) == self.command else {
+                        self.process?.send(data: ArraySlice([0x15]))
+                        return self.finish(false)
+                    }
+                    self.process?.send(data: ArraySlice([0x0D]))
                 }
             }
         case .typed:
@@ -113,6 +124,51 @@ final class HeadlessAgentRename: LocalProcessDelegate, @unchecked Sendable {
         case .done:
             break
         }
+    }
+
+    // MARK: Screen
+
+    private let screen = Terminal(delegate: ScreenDelegate(), options: TerminalOptions(cols: 120, rows: 40))
+    private var generation = 0
+
+    private final class ScreenDelegate: TerminalDelegate {
+        func send(source: Terminal, data: ArraySlice<UInt8>) {}
+    }
+
+    /// The screen's rows as text.
+    static func rows(of terminal: Terminal) -> [String] {
+        (0..<terminal.rows).map { y in
+            guard let line = terminal.getLine(row: y) else { return "" }
+            return String((0..<min(line.count, terminal.cols)).map { terminal.getCharacter(for: line[$0]) })
+                .map { $0 == "\0" || $0 == "\u{00A0}" ? " " : $0 }.reduce(into: "") { $0.append($1) }
+        }
+    }
+
+    /// Whether a question, a trust prompt or a numbered menu is showing, so
+    /// that Return would answer it rather than run a command.
+    static func refusal(onScreen terminal: Terminal) -> Bool {
+        refusal(in: rows(of: terminal))
+    }
+
+    static func refusal(in rows: [String]) -> Bool {
+        for row in rows {
+            let text = row.lowercased()
+            if text.contains("do you want") || text.contains("trust this") || text.contains("trust the files")
+                || text.contains("(y/n)") || text.contains("[y/n]") { return true }
+            let trimmed = text.trimmingCharacters(in: .whitespaces)
+            let unmarked = trimmed.drop(while: { "❯>›│ ".contains($0) })
+            if let dot = unmarked.firstIndex(of: "."), unmarked.startIndex != dot,
+               unmarked[..<dot].allSatisfy(\.isNumber), unmarked[unmarked.index(after: dot)...].first == " " { return true }
+        }
+        return false
+    }
+
+    /// What follows the marker on the input line under the cursor.
+    static func typedLine(on terminal: Terminal) -> String? {
+        let rows = rows(of: terminal)
+        let y = terminal.getCursorLocation().y
+        guard rows.indices.contains(y), let marker = rows[y].firstIndex(where: { AgentPromptLine.markers.contains($0) }) else { return nil }
+        return rows[y][rows[y].index(after: marker)...].trimmingCharacters(in: .whitespaces)
     }
 
     func getWindowSize() -> winsize {
