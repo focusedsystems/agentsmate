@@ -136,8 +136,9 @@ public struct ClaudeBackgroundLaneBackend: LaneBackend {
 
     /// Start a new background session named `name` in the lane's folder,
     /// read the short id `claude --bg` prints, and attach that id.
-    static func startLine(claude: String, name: String, arguments: [String], recordingTo file: String? = nil) -> String {
-        let start = ([claude, "--bg", "-n", ShellQuote.quote(name)] + arguments.map(ShellQuote.quote)).joined(separator: " ")
+    static func startLine(claude: String, name: String?, arguments: [String], recordingTo file: String? = nil) -> String {
+        let named = name.map { ["-n", ShellQuote.quote($0)] } ?? []
+        let start = ([claude, "--bg"] + named + arguments.map(ShellQuote.quote)).joined(separator: " ")
         // `backgrounded · <id> · <name>`, then `claude attach <id>` among the hints.
         let parse = "sed -n -e 's/^backgrounded [^ ]* \\([A-Za-z0-9][A-Za-z0-9-]*\\) .*/\\1/p'"
             + " -e 's/^ *claude attach \\([A-Za-z0-9][A-Za-z0-9-]*\\).*/\\1/p' | head -n 1"

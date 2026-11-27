@@ -710,6 +710,7 @@ public struct AgentLaneDetail<Empty: View>: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .textBackgroundColor))
         .agentLanePalette(store)
+        .agentLaneResumePicker(store)
         // The dialogs every lane menu asks for (rename, icon, stop, switch,
         // new section) are presented here, once, whichever menu asked.
         .modifier(LaneMenuSheets(store: store, presentation: store.menus))

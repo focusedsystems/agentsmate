@@ -30,6 +30,7 @@ public struct AgentLaneInspector<Empty: View>: View {
         }
         .background(Color(nsColor: .textBackgroundColor))
         .agentLanePalette(store)
+        .agentLaneResumePicker(store)
         .onAppear {
             store.isShowing = true
             store.openSelectedOnShow(focus: false)
