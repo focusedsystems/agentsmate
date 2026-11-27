@@ -105,6 +105,9 @@ public struct DisplayedExport: Codable, Equatable, Sendable {
         case idle
         case notAttached = "not_attached"
         case stopped
+        /// The session runs on another Mac that has not answered lately, so
+        /// what it is doing is not known.
+        case unknown
 
         /// The states that say a session is running.
         public var claimsRunning: Bool { self == .active || self == .working || self == .needsYou }
@@ -156,12 +159,26 @@ public struct DisplayedExport: Codable, Equatable, Sendable {
         /// `terminal` (a plain terminal or command). Added without a new
         /// schema version; a file without it reads as nil.
         public var runKind: String?
+        /// Whether a terminal here is attached to the session. Never the
+        /// state itself: a row can be attached here and working, idle or
+        /// anything else. Same value as ``attached``. Added without a new
+        /// schema version.
+        public var attachedHere: Bool?
+        /// The Mac the state was read from, when it is not this one. Added
+        /// without a new schema version; nil for a session that runs here.
+        public var statusHost: String?
+        /// When that reading was taken. Added without a new schema version.
+        public var statusAt: Date?
 
         public init(section: String? = nil, title: String, laneID: String, backend: String, agent: String? = nil,
                     sessionID: String? = nil, attachedSessionID: String? = nil, sessionName: String? = nil, host: String? = nil, folder: String? = nil,
                     state: State, attached: Bool = false, selected: Bool = false, isParallel: Bool = false,
                     isTopLevel: Bool = true, collapsed: Bool = false, column: String? = nil, ownerApp: String? = nil,
-                    sessionTitle: String? = nil, hostKind: String? = nil, runKind: String? = nil) {
+                    sessionTitle: String? = nil, hostKind: String? = nil, runKind: String? = nil,
+                    statusHost: String? = nil, statusAt: Date? = nil) {
+            self.attachedHere = attached
+            self.statusHost = statusHost
+            self.statusAt = statusAt
             self.section = section
             self.title = title
             self.laneID = laneID
@@ -190,7 +207,8 @@ public struct DisplayedExport: Codable, Equatable, Sendable {
                  attachedSessionID = "attached_session_id",
                  sessionName = "session_name", host, folder, state, attached, selected,
                  isParallel = "is_parallel", isTopLevel = "is_top_level", collapsed, column, ownerApp = "owner_app",
-                 sessionTitle = "session_title", hostKind = "host_kind", runKind = "run_kind"
+                 sessionTitle = "session_title", hostKind = "host_kind", runKind = "run_kind",
+                 attachedHere = "attached_here", statusHost = "status_host", statusAt = "status_at"
         }
 
         public func encode(to encoder: Encoder) throws {
@@ -216,6 +234,9 @@ public struct DisplayedExport: Codable, Equatable, Sendable {
             try c.encode(sessionTitle, forKey: .sessionTitle)
             try c.encode(hostKind, forKey: .hostKind)
             try c.encode(runKind, forKey: .runKind)
+            try c.encode(attached, forKey: .attachedHere)
+            try c.encode(statusHost, forKey: .statusHost)
+            try c.encode(statusAt, forKey: .statusAt)
         }
     }
 

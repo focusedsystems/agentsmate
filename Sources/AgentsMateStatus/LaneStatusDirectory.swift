@@ -43,6 +43,12 @@ public struct LaneStatusDirectory: Sendable {
         return d
     }()
 
+    /// A record as another Mac's status folder holds it, one file's bytes, or
+    /// nil when they are not a record.
+    public static func decode(_ data: Data) -> LaneStatus? {
+        (try? decoder.decode(LaneStatus.self, from: data))?.normalized
+    }
+
     /// Record a status. An ended conversation outside a lane removes its
     /// record, so one-off sessions leave nothing behind.
     public func write(_ status: LaneStatus) throws {

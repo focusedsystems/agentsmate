@@ -57,7 +57,8 @@ final class DisplayedSchemaTests: XCTestCase {
         let first = try XCTUnwrap((object["rows"] as? [[String: Any]])?.first)
         XCTAssertEqual(Set(first.keys), ["section", "title", "lane_id", "backend", "agent", "session_id", "attached_session_id",
                                          "session_name", "host", "folder", "state", "attached", "selected", "is_parallel",
-                                         "is_top_level", "collapsed", "column", "owner_app", "session_title", "host_kind", "run_kind"])
+                                         "is_top_level", "collapsed", "column", "owner_app", "session_title", "host_kind", "run_kind",
+                                         "attached_here", "status_host", "status_at"])
         XCTAssertTrue(first["session_name"] is NSNull)
         XCTAssertEqual(first["state"] as? String, "working")
         XCTAssertEqual(first["written_at"] as? String, nil)
@@ -66,7 +67,7 @@ final class DisplayedSchemaTests: XCTestCase {
 
     func testRoundTripsAndEveryStateNameIsSpelledAsDocumented() throws {
         XCTAssertEqual(DisplayedExport.State.allCases.map(\.rawValue),
-                       ["active", "working", "needs_you", "idle", "not_attached", "stopped"])
+                       ["active", "working", "needs_you", "idle", "not_attached", "stopped", "unknown"])
         let value = export(rows: DisplayedExport.State.allCases.map { row($0.rawValue, state: $0) })
         let back = try JSONDecoder.displayed.decode(DisplayedExport.self, from: value.encoded())
         XCTAssertEqual(back, value)

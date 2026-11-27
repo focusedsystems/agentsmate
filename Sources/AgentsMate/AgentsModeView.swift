@@ -1109,6 +1109,10 @@ struct LaneRow: View {
         case .notOpened, .detached:
             Circle().strokeBorder(Color.secondary, lineWidth: 1).frame(width: 7, height: 7)
                 .background(Circle().fill(Color(nsColor: .windowBackgroundColor)))
+        case .unknown:
+            Circle().strokeBorder(Color.secondary.opacity(0.6), style: StrokeStyle(lineWidth: 1, dash: [2, 1.5]))
+                .frame(width: 7, height: 7)
+                .background(Circle().fill(Color(nsColor: .windowBackgroundColor)))
         case .running:
             Circle().fill(Color.green).frame(width: 7, height: 7)
         case .permissionRequested:

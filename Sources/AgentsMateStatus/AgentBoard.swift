@@ -45,7 +45,7 @@ public enum AgentBoard {
             case .needsYou: return .needsYou
             case .working: return .working
             case .active, .idle: return .idleOrDone
-            case .notAttached, .stopped: return .notRunning
+            case .notAttached, .stopped, .unknown: return .notRunning
             }
         }
 

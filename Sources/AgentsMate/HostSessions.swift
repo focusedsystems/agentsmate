@@ -61,9 +61,13 @@ public struct HostSessionListing: Equatable, Sendable {
     /// False when the bindings command failed, so which lanes are bound is
     /// not known and launch attaches none of the host's lanes.
     public var bindingsKnown: Bool
+    /// The lane status records in the host's status folder (the files the
+    /// hooks and `agentsmate-status` write), as that host holds them.
+    public var records: [LaneStatus]
 
     public init(claude: [LaneStatus] = [], tmux: [String] = [], bindings: [String: String] = [:],
-                bindingsKnown: Bool = true) {
+                bindingsKnown: Bool = true, records: [LaneStatus] = []) {
+        self.records = records
         self.claude = claude
         self.tmux = tmux
         self.bindings = bindings
@@ -97,6 +101,8 @@ enum HostSessions {
         }
         var tmux: String { "<<agentsmate:\(nonce):tmux>>" }
         var bindings: String { "<<agentsmate:\(nonce):bindings>>" }
+        /// Before the host's lane status files, one record to a line.
+        var records: String { "<<agentsmate:\(nonce):records>>" }
         /// Followed on its line by the bindings command's exit status.
         var status: String { "<<agentsmate:\(nonce):status>>" }
         var end: String { "<<agentsmate:\(nonce):end>>" }
@@ -106,18 +112,30 @@ enum HostSessions {
     /// by a mark on a line of its own, then the bindings command's exit
     /// status and the end mark. Each listing may fail on its own and is
     /// then empty; the end mark is what says the host answered.
-    static func script(_ config: HostSessionsConfiguration, marks: Marks) -> String {
+    /// The `sh` command that prints each lane status file under a host's
+    /// status folder as one line: the folder is `$AGENTSMATE_STATUS_DIR`,
+    /// else `$XDG_STATE_HOME/agentsmate/lanes`, else
+    /// `~/.local/state/agentsmate/lanes`, as the writers choose it.
+    static let recordsCommand = #"d="${AGENTSMATE_STATUS_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/agentsmate/lanes}"; "# +
+        #"for f in "$d"/*.json; do [ -f "$f" ] && { tr -d '\n' < "$f"; echo; }; done"#
+
+    /// With `statusOnly`, the lighter ask that keeps remote status current:
+    /// Claude's session list, the tmux names and the status files, without
+    /// running the bindings command.
+    static func script(_ config: HostSessionsConfiguration, marks: Marks, statusOnly: Bool = false) -> String {
         var lines = [ShellQuote.quote(config.claude) + " agents --json 2>/dev/null",
                      "echo; echo " + ShellQuote.quote(marks.tmux),
                      ShellQuote.quote(config.tmux) + " list-sessions -F '#{session_name}' 2>/dev/null",
                      "echo; echo " + ShellQuote.quote(marks.bindings)]
         // In sh, so a login shell's own rules (zsh ending the whole script
         // on a glob that matches nothing) never cut the listing short.
-        if let bindings = config.bindingsCommand, !bindings.isEmpty {
+        if !statusOnly, let bindings = config.bindingsCommand, !bindings.isEmpty {
             lines.append("/bin/sh -c " + ShellQuote.quote(bindings) + " 2>/dev/null; s=$?")
         } else {
             lines.append("s=0")
         }
+        lines.append("echo; echo " + ShellQuote.quote(marks.records))
+        lines.append("/bin/sh -c " + ShellQuote.quote(recordsCommand) + " 2>/dev/null")
         lines.append("echo; echo " + ShellQuote.quote(marks.status) + "$s")
         lines.append("echo " + ShellQuote.quote(marks.end))
         return lines.joined(separator: "; ")
@@ -126,9 +144,9 @@ enum HostSessions {
     /// The process that lists `host`'s sessions: the script in a login shell
     /// here when `host` is nil, else the same over ssh in batch mode. Nil
     /// for a host name ssh cannot be handed safely.
-    static func command(host: String?, config: HostSessionsConfiguration,
-                        marks: Marks = Marks()) -> (executable: String, arguments: [String])? {
-        let script = script(config, marks: marks)
+    static func command(host: String?, config: HostSessionsConfiguration, marks: Marks = Marks(),
+                        statusOnly: Bool = false) -> (executable: String, arguments: [String])? {
+        let script = script(config, marks: marks, statusOnly: statusOnly)
         guard let host else { return (config.shell, ["-lc", script]) }
         guard AgentHosts.isValidName(host) else { return nil }
         let remote = ShellQuote.quote(config.shell) + " -lc " + ShellQuote.quote(script)
@@ -145,31 +163,38 @@ enum HostSessions {
             return found.count == 1 ? found[0] : nil
         }
         let statusLines = lines.indices.filter { lines[$0].hasPrefix(marks.status) }
+        let recordMarks = lines.indices.filter { lines[$0] == marks.records }
         guard let tmux = only(marks.tmux), let bindings = only(marks.bindings), let end = only(marks.end),
-              statusLines.count == 1, case let status = statusLines[0],
+              statusLines.count == 1, case let status = statusLines[0], recordMarks.count <= 1,
               tmux < bindings, bindings < status, status < end,
+              recordMarks.first.map({ bindings < $0 && $0 < status }) ?? true,
               let code = Int(lines[status].dropFirst(marks.status.count)) else { return nil }
+        let recordsAt = recordMarks.first
+        let records = (recordsAt.map { Array(lines[($0 + 1)..<status]) } ?? []).compactMap { line -> LaneStatus? in
+            let text = line.trimmingCharacters(in: .whitespaces)
+            return text.isEmpty ? nil : LaneStatusDirectory.decode(Data(text.utf8))
+        }
         let claude = ClaudeAgentsList.parse(Data(lines[..<tmux].joined(separator: "\n").utf8))
         let names = lines[(tmux + 1)..<bindings].filter { !$0.isEmpty }
         // Any failure, a missing command included, means the bindings are
         // not known.
         let bindingsKnown = code == 0
         var bound: [String: String] = [:]
-        for line in lines[(bindings + 1)..<status] {
+        for line in lines[(bindings + 1)..<(recordsAt ?? status)] {
             let fields = line.split(separator: "\t", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
             guard fields.count == 2, !fields[0].isEmpty, isValidAgentID(fields[1]) else { continue }
             bound[fields[0]] = fields[1]
         }
         return HostSessionListing(claude: claude, tmux: Array(names), bindings: bindingsKnown ? bound : [:],
-                                  bindingsKnown: bindingsKnown)
+                                  bindingsKnown: bindingsKnown, records: records)
     }
 
     /// Ask one host. Nil means unknown: ssh failed, timed out, or the
     /// output did not reach the end mark.
-    static func list(host: String?, config: HostSessionsConfiguration) async -> HostSessionListing? {
+    static func list(host: String?, config: HostSessionsConfiguration, statusOnly: Bool = false) async -> HostSessionListing? {
         let marks = Marks()
-        guard let command = command(host: host, config: config, marks: marks) else { return nil }
-        let timeout = config.timeout
+        guard let command = command(host: host, config: config, marks: marks, statusOnly: statusOnly) else { return nil }
+        let timeout = statusOnly ? min(config.timeout, 10) : config.timeout
         return await Task.detached(priority: .utility) { () -> HostSessionListing? in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: command.executable)
