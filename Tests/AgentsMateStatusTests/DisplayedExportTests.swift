@@ -58,7 +58,7 @@ final class DisplayedSchemaTests: XCTestCase {
         XCTAssertEqual(Set(first.keys), ["section", "title", "lane_id", "backend", "agent", "session_id", "attached_session_id",
                                          "session_name", "host", "folder", "state", "attached", "selected", "is_parallel",
                                          "is_top_level", "collapsed", "column", "owner_app", "session_title", "host_kind", "run_kind",
-                                         "attached_here", "status_host", "status_at"])
+                                         "attached_here", "status_host", "status_at", "runs_on", "runs_on_kind", "meant_for"])
         XCTAssertTrue(first["session_name"] is NSNull)
         XCTAssertEqual(first["state"] as? String, "working")
         XCTAssertEqual(first["written_at"] as? String, nil)
