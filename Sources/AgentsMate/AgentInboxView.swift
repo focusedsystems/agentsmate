@@ -46,13 +46,14 @@ extension AgentLaneStore {
     }
 
     /// Open a pull request link the agent posted, through
-    /// ``onOpenPullRequest`` or else the default browser. A link that is
+    /// ``onOpenPullRequest`` or else AgentsMate.app when it is installed, or
+    /// the default browser. A link that is
     /// not a trusted pull request address (``PullRequestLink/isTrusted(_:)``)
     /// is never opened or handed to the hook; the result is then false.
     @discardableResult
     public func openPullRequest(_ url: URL) -> Bool {
         guard PullRequestLink.isTrusted(url) else { return false }
-        if let onOpenPullRequest { onOpenPullRequest(url) } else { NSWorkspace.shared.open(url) }
+        if let onOpenPullRequest { onOpenPullRequest(url) } else { AgentsMateRouting.open(url) }
         return true
     }
 }

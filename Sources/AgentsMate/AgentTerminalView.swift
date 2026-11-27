@@ -390,8 +390,10 @@ open class AgentTerminalView: LocalProcessTerminalView {
         if TerminalLinks.opensInSystem(url) { openInSystem(url) }
     }
 
-    /// Opens a link the app left, after the scheme check. Tests replace it.
-    var openInSystem: (URL) -> Void = { NSWorkspace.shared.open($0) }
+    /// Opens a link the app left, after the scheme check: a pull request,
+    /// pipeline or commit link goes to AgentsMate.app when it is installed.
+    /// Tests replace it.
+    var openInSystem: (URL) -> Void = { AgentsMateRouting.open($0) }
 
     /// Stands in as SwiftTerm's terminal delegate so its own link opener
     /// (an OSC 8 link on a ⌘-release) comes through `openLink(_:)` rather
