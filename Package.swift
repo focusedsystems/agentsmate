@@ -21,6 +21,8 @@ let package = Package(
     dependencies: [
         // 1.12 added Metal shaders, which the Command Line Tools cannot compile.
         .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", "1.11.2"..<"1.12.0"),
+        // The Development and Projects views AgentsMate.app shows over every app's repos.
+        .package(url: "https://github.com/focusedsystems/devmate.git", revision: "12ef829e6d7c24b14173e20c3dbe5b93d366c494"),
     ],
     targets: [
         .target(name: "AgentsMateStatus"),
@@ -36,11 +38,23 @@ let package = Package(
         ),
         .target(name: "AgentsMateChat", dependencies: ["AgentsMateStatus"]),
         .executableTarget(name: "agentsmate-status", dependencies: ["AgentsMateStatus"]),
-        .executableTarget(name: "AgentsMateApp", dependencies: ["AgentsMate", "AgentsMateStatus"],
+        .target(
+            name: "AgentsMateDevelopment",
+            dependencies: [
+                "AgentsMateStatus",
+                .product(name: "DevMateCore", package: "devmate"),
+                .product(name: "DevMateAzure", package: "devmate"),
+                .product(name: "DevMateGitHub", package: "devmate"),
+                .product(name: "DevMateUI", package: "devmate"),
+            ]
+        ),
+        .executableTarget(name: "AgentsMateApp", dependencies: ["AgentsMate", "AgentsMateDevelopment", "AgentsMateStatus"],
                           exclude: ["Resources"]),
         .testTarget(name: "AgentsMateStatusTests", dependencies: ["AgentsMateStatus"]),
         .testTarget(name: "AgentsMateUpdatesTests", dependencies: ["AgentsMateUpdates"]),
         .testTarget(name: "AgentsMateTests", dependencies: ["AgentsMate"]),
+        .testTarget(name: "AgentsMateDevelopmentTests",
+                    dependencies: ["AgentsMateDevelopment", "AgentsMateStatus", .product(name: "DevMateCore", package: "devmate")]),
         .testTarget(name: "AgentsMateChatTests", dependencies: ["AgentsMateChat"]),
     ],
     swiftLanguageModes: [.v6]

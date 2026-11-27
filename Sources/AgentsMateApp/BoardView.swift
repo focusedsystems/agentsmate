@@ -50,19 +50,8 @@ struct BoardView: View {
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .searchable(text: $query, placement: .toolbar, prompt: "Filter")
-        .toolbar {
-            ToolbarItem(placement: .principal) {
-                Picker("Show", selection: $showsAll) {
-                    Text("Active").tag(false)
-                    Text("All Lanes").tag(true)
-                }
-                .pickerStyle(.segmented)
-                .help("Active shows running sessions; All Lanes adds stopped ones")
-            }
-            ToolbarItem {
-                Button { model.refresh(remote: true) } label: { Label("Refresh", systemImage: "arrow.clockwise") }
-                    .help("Ask every Mac again (⌘R)")
-            }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
+            model.refresh(remote: true)
         }
         .confirmationDialog(confirmingStop.map { "Stop “\($0.title)”?" } ?? "",
                             isPresented: Binding(get: { confirmingStop != nil }, set: { if !$0 { confirmingStop = nil } }),
@@ -86,6 +75,15 @@ struct BoardView: View {
             total(cards.filter { $0.column == .working }.count, "working", "bolt.fill", .blue)
             total(cards.filter { $0.column == .idleOrDone }.count, "idle or done", "moon.fill", .secondary)
             Spacer()
+            Picker("Show", selection: $showsAll) {
+                Text("Active").tag(false)
+                Text("All Lanes").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+            .help("Active shows running sessions; All Lanes adds stopped ones")
+            Divider().frame(height: 18)
             ForEach(["claude", "codex"], id: \.self) { agent in
                 FilterChip(title: agent.capitalized, count: model.cards.filter { visible($0) && $0.agent == agent }.count,
                            isOn: agentFilter == agent) {

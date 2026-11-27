@@ -32,6 +32,7 @@ final class BoardModel: ObservableObject {
     }
 
     func start() {
+        guard localTimer == nil else { return }
         refresh(remote: true)
         localTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.refresh(remote: false) }
@@ -70,8 +71,12 @@ final class BoardModel: ObservableObject {
                 snapshot.runningApps = running
             }
             snapshots[host] = snapshot
-            hostStates[host] = .answered(Date())
-        } else {
+            // Publish an answer only when it is news: a Mac that has answered
+            // keeps its badge, and its tooltip time moves on every half minute.
+            if case .answered(let at) = hostStates[host], Date().timeIntervalSince(at) < 30 {} else {
+                hostStates[host] = .answered(Date())
+            }
+        } else if hostStates[host] != .unreachable {
             hostStates[host] = .unreachable
         }
         let next = AgentBoard.cards(from: Array(snapshots.values), localHost: localHost)
