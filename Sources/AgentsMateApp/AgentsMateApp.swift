@@ -8,16 +8,17 @@ import AgentsMateStatus
 struct AgentsMateApp: App {
     @StateObject private var model = BoardModel()
     @StateObject private var hub = DevelopmentHub()
+    @StateObject private var ask = AskModel()
     @State private var selection: AgentBoard.Card.ID?
     @AppStorage("selectedTab") private var tabRaw = AgentsTab.agents.rawValue
 
     var body: some Scene {
         Window("AgentsMate", id: "board") {
-            RootView(model: model, hub: hub, selection: $selection, tabRaw: $tabRaw)
+            RootView(model: model, ask: ask, hub: hub, selection: $selection, tabRaw: $tabRaw)
                 .frame(minWidth: 820, minHeight: 480)
         }
         .defaultSize(width: 1280, height: 820)
-        .commands { BoardCommands(model: model, hub: hub, selection: $selection, tabRaw: $tabRaw) }
+        .commands { BoardCommands(model: model, ask: ask, hub: hub, selection: $selection, tabRaw: $tabRaw) }
     }
 }
 
@@ -26,6 +27,7 @@ struct AgentsMateApp: App {
 /// but shows none, since the menu bar already names the app.
 private struct RootView: View {
     @ObservedObject var model: BoardModel
+    @ObservedObject var ask: AskModel
     @ObservedObject var hub: DevelopmentHub
     @Binding var selection: AgentBoard.Card.ID?
     @Binding var tabRaw: String
@@ -35,7 +37,7 @@ private struct RootView: View {
     var body: some View {
         Group {
             if tab == .agents {
-                BoardView(model: model, selection: $selection)
+                BoardView(model: model, ask: ask, selection: $selection)
             } else {
                 DevelopmentTabView(hub: hub, tab: tab)
             }
@@ -61,6 +63,7 @@ private struct RootView: View {
 
 private struct BoardCommands: Commands {
     @ObservedObject var model: BoardModel
+    @ObservedObject var ask: AskModel
     let hub: DevelopmentHub
     @Binding var selection: AgentBoard.Card.ID?
     @Binding var tabRaw: String
@@ -96,6 +99,12 @@ private struct BoardCommands: Commands {
             }
         }
         CommandMenu("Agent") {
+            Button("Ask About Lanes…") {
+                tabRaw = AgentsTab.agents.rawValue
+                ask.focus()
+            }
+            .keyboardShortcut("k")
+            Divider()
             Button("Open in App") { if let selected { model.open(selected) } }
                 .keyboardShortcut("o")
                 .disabled(selected.map { $0.app != nil || model.attachCommand($0) != nil } != true)

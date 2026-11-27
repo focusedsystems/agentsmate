@@ -138,15 +138,20 @@ final class BoardModel: ObservableObject {
         return "exec /usr/bin/ssh -t -- " + ShellWords.quote(card.host) + " " + ShellWords.quote(remote)
     }
 
-    /// Attach the session in a new Terminal window, through a one-off
-    /// `.command` file that removes itself.
+    /// Attach the session in a new Terminal window.
     func openInTerminal(_ card: AgentBoard.Card) {
         guard let line = attachCommand(card) else { NSSound.beep(); return }
+        runInTerminal(line, title: card.title)
+    }
+
+    /// Run `line` in a new Terminal window, through a one-off `.command` file
+    /// that removes itself.
+    func runInTerminal(_ line: String, title: String) {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("agentsmate-attach", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let file = dir.appendingPathComponent(UUID().uuidString + ".command")
         let script = "#!/bin/zsh\nrm -f " + ShellWords.quote(file.path) + "\nprintf '\\e]0;%s\\a' "
-            + ShellWords.quote(card.title) + "\n" + line + "\n"
+            + ShellWords.quote(title) + "\n" + line + "\n"
         guard FileManager.default.createFile(atPath: file.path, contents: Data(script.utf8),
                                              attributes: [.posixPermissions: 0o700]) else { NSSound.beep(); return }
         let terminal = URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app")
