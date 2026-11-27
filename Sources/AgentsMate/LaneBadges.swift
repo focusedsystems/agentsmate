@@ -83,49 +83,25 @@ public struct LaneBadges: Equatable, Sendable {
     }
 }
 
-/// The three small marks at the end of a row's metadata line: where it runs,
-/// how, and which agent. Secondary colour, a tooltip on each, and one spoken
-/// label for the group.
+/// The one mark at the end of a row's metadata line: a globe on a lane that
+/// runs on another Mac, with where, how and which agent in its tooltip and
+/// spoken label. A lane on this Mac carries no mark.
 struct LaneBadgeStrip: View {
     let badges: LaneBadges
 
     var body: some View {
         HStack(spacing: 5) {
-            if badges.hostKind == .local {
-                mark(badges.hostSymbol, help: "Runs on \(badges.hostLabel)")
-            } else {
-                remoteMark(help: "Runs on \(badges.hostLabel)")
-            }
-            mark(badges.runSymbol, help: "Runs as \(badges.runName)")
-            if let symbol = LaneBadges.symbol(forAgent: badges.agent) {
-                mark(symbol, help: "Agent: \(badges.agentName)", weight: .bold)
+            if badges.hostKind == .remote {
+                Image(systemName: "globe")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 14, height: 12)
+                    .help("Runs on \(badges.hostLabel) · \(badges.summary)")
             }
         }
         .fixedSize()
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(badges.summary)
-    }
-
-    /// A Mac mini in a cloud: it runs on another Mac, out of this one's reach.
-    private func remoteMark(help: String) -> some View {
-        ZStack {
-            Image(systemName: "cloud")
-                .font(.system(size: 14, weight: .regular))
-            Image(systemName: "macmini")
-                .font(.system(size: 6, weight: .semibold))
-                .offset(y: 1)
-        }
-        .foregroundStyle(.secondary)
-        .frame(width: 16, height: 12)
-        .help(help)
-    }
-
-    private func mark(_ name: String, help: String, weight: Font.Weight = .regular) -> some View {
-        Image(systemName: name)
-            .font(.system(size: 10, weight: weight))
-            .foregroundStyle(.secondary)
-            .frame(width: 12, height: 12)
-            .help(help)
     }
 }
 
