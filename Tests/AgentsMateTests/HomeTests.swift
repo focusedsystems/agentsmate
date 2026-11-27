@@ -111,6 +111,26 @@ final class HomeLaunchTests: XCTestCase {
         XCTAssertFalse(store.sessions["a"]!.isStarted)
     }
 
+    func testOneLaneSkipsHomeAndStartsNothing() {
+        let defaults = UserDefaults(suiteName: "agentsmate-home-\(UUID().uuidString)")!
+        let store = makeStore(defaults: defaults)
+        store.sync(lanes: [AgentLane(id: "a", title: "A", backendID: "shell")])
+        store.openSelectedOnShow()
+        XCTAssertFalse(store.isHomeShown)
+        XCTAssertEqual(store.selectedID, "a")
+        XCTAssertFalse(store.sessions["a"]!.isStarted)
+    }
+
+    func testOneLaneLeavesHomeWhenAgentsModeIsEnteredAgain() {
+        let store = makeStore()
+        store.sync(lanes: [AgentLane(id: "a", title: "A", backendID: "shell")])
+        store.showHome()
+        XCTAssertTrue(store.isHomeShown)
+        store.openSelectedOnShow()
+        XCTAssertFalse(store.isHomeShown)
+        XCTAssertFalse(store.sessions["a"]!.isStarted)
+    }
+
     func testLaunchCanStillShowTheSelectedLane() {
         let store = makeStore(launchShows: .selectedLane)
         store.openSelectedOnShow()
