@@ -87,7 +87,7 @@ public struct AgentsToolbarSearchField<Results: View>: View {
             .frame(width: width)
             .fixedSize(horizontal: true, vertical: false)
             .help(help)
-            .popover(isPresented: showsPopover ? showResults : .constant(false), arrowEdge: .bottom) {
+            .transientPopover(isPresented: showsPopover ? showResults : .constant(false), arrowEdge: .bottom, keepsOpenForTextFieldClicks: true) {
                 results()
             }
     }
