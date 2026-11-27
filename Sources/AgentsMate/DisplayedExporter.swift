@@ -152,6 +152,7 @@ extension AgentLaneStore {
         let backend = self.backend(id: lane.backendID)
         let agent = laneAgent(lane)
         let badges = laneBadges(for: lane)
+        let marker = laneRunsOn(for: lane)
         let running = session.record.flatMap { $0.state == .ended ? nil : $0 }
         let parallel = parallelOwner(of: lane.id) != nil
         let ownID = lane.agentSessionID ?? ownedSession(for: lane)?.agentID
@@ -171,7 +172,8 @@ extension AgentLaneStore {
             isTopLevel: !(nested && parallel), collapsed: collapsed, column: column,
             ownerApp: ownerApp(of: session), sessionTitle: session.subtitle,
             hostKind: badges.hostKind.rawValue, runKind: badges.runKind.rawValue,
-            statusHost: session.remoteStatus?.host, statusAt: session.remoteStatus?.at)
+            statusHost: session.remoteStatus?.host, statusAt: session.remoteStatus?.at,
+            runsOn: marker?.hostName, runsOnKind: marker?.kind.rawValue, meantFor: marker?.meantFor)
     }
 
     /// Everything the sidebar and All Agents show now, in the order they show it.

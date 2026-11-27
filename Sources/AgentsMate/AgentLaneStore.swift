@@ -1084,6 +1084,8 @@ public final class AgentLaneStore: ObservableObject {
 
     /// The hosts registry (``AgentHosts``), when this Mac has one.
     @Published public private(set) var agentHosts: AgentHosts?
+    /// For tests: a hosts registry without files.
+    func setAgentHostsForTesting(_ hosts: AgentHosts?) { agentHosts = hosts }
     /// Keeps the lane list in step with the hub's; nil without the registry.
     var sharedLanes: SharedLaneSync?
 

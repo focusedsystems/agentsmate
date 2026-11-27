@@ -228,7 +228,8 @@ public struct AgentLaneSidebar<Accessory: View>: View {
                         icon: look.icon, tintHex: look.tintHex, showsIcon: showsIcons, showsPullRequests: showsPullRequests,
                         isNested: parallelPlacement == ParallelSessionPlacement.nested.rawValue
                             && !group.isDetached && store.parallelOwner(of: lane.id) != nil,
-                        badges: store.laneBadges(for: lane))
+                        badges: store.laneBadges(for: lane),
+                        runsOn: store.laneRunsOn(for: lane))
                     .tag(lane.id)
                     // A found session follows its folder's row, as a row of
                     // its own with that row's icon (or indented under it,
@@ -760,6 +761,19 @@ struct LaneTerminalPane: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if let marker = store.laneRunsOn(for: session.lane) {
+                HStack(spacing: 8) {
+                    LaneRunsOnChip(marker: marker)
+                    if let meant = marker.meantFor {
+                        Text("Meant to run on \(meant)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
+                .background(.bar)
+                Divider()
+            }
             if session.isStarted {
                 TerminalHost(session: session, store: store)
                     .id("\(session.id)#\(session.generation)")
@@ -844,6 +858,7 @@ struct LaneRow: View {
     var isNested = false
     /// Where, how and by which agent the lane runs; nil draws no marks.
     var badges: LaneBadges? = nil
+    var runsOn: LaneRunsOn? = nil
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -882,6 +897,9 @@ struct LaneRow: View {
                         .fixedSize(horizontal: false, vertical: true)
                 } else if !status.isEmpty, badges == nil {
                     statusText(status)
+                }
+                if let runsOn {
+                    LaneRunsOnChip(marker: runsOn).padding(.top, 1)
                 }
                 let carriesStatus = (detail != nil || badges != nil) && !status.isEmpty
                 if carriesStatus || hasPullRequestPills || badges != nil {
@@ -1002,6 +1020,7 @@ struct LaneRow: View {
             : session.needsAttention ? "\(session.status.title), new" : session.status.title
         var parts = [loadStage?.title ?? status]
         if let badges { parts.append(badges.summary) }
+        if let runsOn { parts.append(runsOn.help) }
         if let subtitle = session.subtitle { parts.append(subtitle) }
         if let notice = session.renameNotice { parts.append(notice) }
         if let summary = session.summary, !summary.isEmpty { parts.append(summary) }
