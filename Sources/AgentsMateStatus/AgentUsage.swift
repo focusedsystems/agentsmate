@@ -163,7 +163,7 @@ public struct CodexSessionUsageSource: AgentUsageSource {
     /// window at all. With none of those, the `cached` reset an earlier read
     /// found stands in, rolled forward a week at a time; every reset found
     /// while depleted is passed to `remember` for that.
-    static func usage(fromNewestFirst texts: [String], now: Date = Date(),
+    public static func usage(fromNewestFirst texts: [String], now: Date = Date(),
                       authoritative: () -> Date? = { nil },
                       older: () -> [String] = { [] },
                       cached: () -> Date? = { nil },
@@ -265,7 +265,18 @@ public struct CodexSessionUsageSource: AgentUsageSource {
         // A spend limit of the member's own carries its reset.
         let spendReset = ((limits["individual_limit"] as? [String: Any])?["resets_at"] as? NSNumber)
             .map { Date(timeIntervalSince1970: $0.doubleValue) }
-        return AgentUsage(agent: "Codex", windows: windows, note: reached, resetsAt: spendReset)
+        // The record's own time, so a reading from another Mac can be told
+        // apart from an older one here.
+        let stamp = (object["timestamp"] as? String).flatMap(Self.recordDate) ?? now
+        return AgentUsage(agent: "Codex", windows: windows, note: reached, readAt: stamp, resetsAt: spendReset)
+    }
+
+    static func recordDate(_ text: String) -> Date? {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = f.date(from: text) { return d }
+        f.formatOptions = [.withInternetDateTime]
+        return f.date(from: text)
     }
 
     static func find(_ key: String, in value: Any) -> Any? {
