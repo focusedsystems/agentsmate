@@ -6,6 +6,7 @@ import AgentsMateStatus
 /// app it belongs to.
 struct BoardView: View {
     @ObservedObject var model: BoardModel
+    @ObservedObject var ask: AskModel
     @Binding var selection: AgentBoard.Card.ID?
     @AppStorage("showsAll") private var showsAll = false
     /// Only cards on this Mac; empty for every Mac.
@@ -38,6 +39,8 @@ struct BoardView: View {
     var body: some View {
         let cards = filtered
         VStack(spacing: 0) {
+            AskBar(ask: ask, model: model)
+            Divider()
             header(cards)
             Divider()
             HStack(alignment: .top, spacing: 12) {
