@@ -92,6 +92,13 @@ public final class AgentLaneStore: ObservableObject {
         /// whole path components (``laneFolder(_:isInside:)``), never a raw
         /// string prefix.
         public var agentAllowedForFolder: (@Sendable (LaneAgentKind, URL) -> Bool)? = nil
+        /// Whether a session name is already taken for a new lane's variant
+        /// beyond what the sidebar knows: a session running on the lane's host
+        /// (this Mac or another), or a resume ledger that still maps the name
+        /// to an old conversation. A variant it reports taken is skipped, so a
+        /// new lane never attaches or resumes something old. It runs on the
+        /// main actor while a lane is added, so keep it quick.
+        public var variantOccupied: (@Sendable (_ backendID: String, _ sessionName: String, _ host: String?) -> Bool)? = nil
         /// The id of the app's inbox window scene (a `Window` holding
         /// ``AgentInboxView``). Set, the sidebar's foot gets an inbox button
         /// with a badge, and the Agent menu an Agent Inbox item.
@@ -2484,6 +2491,7 @@ public final class AgentLaneStore: ObservableObject {
         // so the copy asks for a lane of its own: the next free number.
         lane.variant = nil
         lane.variant = freeVariant(for: lane)
+        if backends[lane.backendID]?.keepsRunningWhenDetached == true { lane.startsNewSession = true }
         let name = session.title.nextCopyName(taken: copyNamesTaken(in: lane.path))
         // A Claude background copy starts a session of its own, named after
         // itself, and binds only the id that start prints.
@@ -2563,9 +2571,36 @@ public final class AgentLaneStore: ObservableObject {
             candidate.variant = variant
             return backend.sessionName(for: candidate).map(running.contains) ?? false
         }
+        let retired = Set(retiredVariants(backendID: lane.backendID, path: path))
+        func occupied(_ variant: String) -> Bool {
+            var candidate = lane
+            candidate.variant = variant
+            guard let name = backend.sessionName(for: candidate) else { return false }
+            return configuration.variantOccupied?(lane.backendID, name, lane.host) ?? false
+        }
         var n = 2
-        while used.contains(String(n)) || live(String(n)) { n += 1 }
+        while used.contains(String(n)) || retired.contains(String(n)) || live(String(n)) || occupied(String(n)) { n += 1 }
         return String(n)
+    }
+
+    // MARK: Variants of closed lanes
+
+    private func retiredKey(_ backendID: String, _ path: String) -> String { backendID + "|" + path }
+
+    /// The variants lanes in a folder had when they were closed. A closed
+    /// lane's session or resume entry can outlive its row, and a new lane
+    /// that reused its variant would attach or resume it.
+    func retiredVariants(backendID: String, path: String) -> [String] {
+        (defaults.dictionary(forKey: keys.retiredVariants) as? [String: [String]])?[retiredKey(backendID, path)] ?? []
+    }
+
+    func retireVariant(of lane: AgentLane) {
+        guard let variant = lane.variant, let backend = backends[lane.backendID], backend.keepsRunningWhenDetached else { return }
+        var all = defaults.dictionary(forKey: keys.retiredVariants) as? [String: [String]] ?? [:]
+        let key = retiredKey(lane.backendID, normalizedPath(lane.path))
+        guard !(all[key] ?? []).contains(variant) else { return }
+        all[key, default: []].append(variant)
+        defaults.set(all, forKey: keys.retiredVariants)
     }
 
     // MARK: New lane in a section
@@ -2629,6 +2664,7 @@ public final class AgentLaneStore: ObservableObject {
                              directory: folder, backendID: backendID, isClosable: true, section: section)
         lane.variant = freeVariant(for: lane)
         if let variant = lane.variant { lane.title += " \(variant)" }
+        lane.startsNewSession = backends[backendID]?.keepsRunningWhenDetached == true
         // A person's move wins over a lane's own section, so record this
         // one as theirs: the lane stays where its + was pressed.
         layout.move(lane.id, to: section)
@@ -3149,6 +3185,7 @@ public final class AgentLaneStore: ObservableObject {
             return
         }
         let closed = lanes[index]
+        retireVariant(of: closed)
         restoredPending.remove(id)
         if !detachedIDs.contains(id) { sharedLanes?.closed(id) }
         defer {
@@ -3651,6 +3688,7 @@ public struct AgentsModeKeys: Sendable {
     public var renameAgentSession: String { prefix + "renameAgentSession" }
     /// The agent session title each row has already settled with, by lane.
     public var titleSync: String { prefix + "titleSync" }
+    public var retiredVariants: String { prefix + "retiredVariants" }
     /// Row names the agent's session has not been told yet.
     public var titlePending: String { prefix + "titlePending" }
     /// The person's sidebar shape, over the app's defaults
