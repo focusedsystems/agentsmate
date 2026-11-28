@@ -97,8 +97,11 @@ public final class AgentLaneStore: ObservableObject {
         /// (this Mac or another), or a resume ledger that still maps the name
         /// to an old conversation. A variant it reports taken is skipped, so a
         /// new lane never attaches or resumes something old. It runs on the
-        /// main actor while a lane is added, so keep it quick.
-        public var variantOccupied: (@Sendable (_ backendID: String, _ sessionName: String, _ host: String?) -> Bool)? = nil
+        /// main actor while a lane is added, so keep it quick. The default is
+        /// ``VariantOccupancy/standard``: a tmux session of that name on the
+        /// lane's host, or a resume ledger entry under it. Set nil to skip the
+        /// check, or your own closure to replace it.
+        public var variantOccupied: (@Sendable (_ backendID: String, _ sessionName: String, _ host: String?) -> Bool)? = VariantOccupancy.standardIsOccupied
         /// The id of the app's inbox window scene (a `Window` holding
         /// ``AgentInboxView``). Set, the sidebar's foot gets an inbox button
         /// with a badge, and the Agent menu an Agent Inbox item.
