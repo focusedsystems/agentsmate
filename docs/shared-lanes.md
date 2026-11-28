@@ -101,6 +101,13 @@ Every write reads the list, merges it, and writes it back:
 - A lane whose `closed` time is at or after its `updated` stays closed, so a
   Mac that has not synced for a while cannot bring it back.
 - A close older than seven days, or older than the lane it names, is dropped.
+- Lanes that attach one backend session are one lane. Two rows with the same
+  backend, host and folder (a folder's session is named by the folder and its
+  variant), or the same `sessionName` or `agentSessionID`, are duplicates. The
+  one listed first stays and the others are closed, so every Mac drops them.
+  Loading a list, or any row already open, is repaired the same way. A new lane
+  in a folder that already has one gets the next variant, and a row's name is
+  never taken from a session another row also attaches.
 
 The hub writes to a temporary file beside the list and renames it over the
 list. Another Mac reads the list with

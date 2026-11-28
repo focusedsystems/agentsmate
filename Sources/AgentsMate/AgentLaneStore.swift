@@ -92,6 +92,13 @@ public final class AgentLaneStore: ObservableObject {
         /// whole path components (``laneFolder(_:isInside:)``), never a raw
         /// string prefix.
         public var agentAllowedForFolder: (@Sendable (LaneAgentKind, URL) -> Bool)? = nil
+        /// Whether a session name is already taken for a new lane's variant
+        /// beyond what the sidebar knows: a session running on the lane's host
+        /// (this Mac or another), or a resume ledger that still maps the name
+        /// to an old conversation. A variant it reports taken is skipped, so a
+        /// new lane never attaches or resumes something old. It runs on the
+        /// main actor while a lane is added, so keep it quick.
+        public var variantOccupied: (@Sendable (_ backendID: String, _ sessionName: String, _ host: String?) -> Bool)? = nil
         /// The id of the app's inbox window scene (a `Window` holding
         /// ``AgentInboxView``). Set, the sidebar's foot gets an inbox button
         /// with a badge, and the Agent menu an Agent Inbox item.
@@ -832,6 +839,7 @@ public final class AgentLaneStore: ObservableObject {
     /// them; a fixed lane that disappears is detached; terminals are kept.
     /// A fixed lane the person reopened as another agent keeps that agent.
     public func sync(lanes appLanes: [AgentLane]) {
+        syncedRowIDs = Set(appLanes.map(\.id))
         let overrides = backendOverrides
         let fixed = appLanes.map { lane -> AgentLane in
             guard let backendID = overrides[lane.id], backends[backendID] != nil else { return lane }
@@ -866,6 +874,14 @@ public final class AgentLaneStore: ObservableObject {
     @discardableResult
     public func add(_ lane: AgentLane, focus: Bool = true, open shouldOpen: Bool = true,
                     after anchor: AgentLane.ID? = nil) -> AgentLaneSession? {
+        var lane = lane
+        if sessions[lane.id] == nil, lane.isClosable, lane.sessionName == nil, lane.agentSessionID == nil,
+           sharesBackendSession(of: lane) {
+            // A lane in an occupied folder would attach the lane there:
+            // it gets the next variant, a session of its own.
+            lane.variant = nil
+            lane.variant = freeVariant(for: lane)
+        }
         if sessions[lane.id] == nil {
             if let anchor, let index = lanes.firstIndex(where: { $0.id == anchor }) {
                 lanes.insert(lane, at: index + 1)
@@ -1008,6 +1024,8 @@ public final class AgentLaneStore: ObservableObject {
             }
         }
         if already { return nil }
+        // Another row already attaches this session: it is the same lane.
+        if sharesSession(with: saved, in: path) { return nil }
         var lane = AgentLane(id: saved.id ?? UUID().uuidString,
                              title: saved.sessionName ?? (path as NSString?)?.lastPathComponent ?? "Lane",
                              directory: path.map { URL(fileURLWithPath: $0, isDirectory: true) },
@@ -1135,6 +1153,63 @@ public final class AgentLaneStore: ObservableObject {
             || layout.pinned.contains(id) || layout.assignments[id] != nil
     }
 
+    /// Whether a lane the person opened already attaches the session `saved`
+    /// would, so it must not become a second row.
+    private func sharesSession(with saved: LaneWorkspace.Lane, in path: String?) -> Bool {
+        let wrapper = wrapperCommand(for: AgentLane(id: "", title: "", backendID: saved.backendID))
+        let candidate = SharedLaneList.Lane(
+            id: saved.id ?? "", directory: path, backendID: saved.backendID, command: wrapper?.command,
+            variantFlag: wrapper?.variantFlag, variant: saved.variant, host: saved.host,
+            sessionName: saved.sessionName, agentSessionID: saved.agentSessionID)
+        guard let key = SharedLaneList.sessionKey(of: candidate) else { return false }
+        return sharedLaneEntries().contains { $0.id != saved.id && SharedLaneList.sessionKey(of: $0) == key }
+    }
+
+    /// Tell the store which rows the app regenerates on every launch (rows it
+    /// lists itself), so a duplicate check never closes one: such a row would
+    /// only come back. Rows the app hands to ``sync(lanes:)`` count already.
+    public var isGeneratedRow: ((AgentLane) -> Bool)?
+
+    private var syncedRowIDs: Set<AgentLane.ID> = []
+
+    /// The rows the app regenerates, which are never collapsed or closed as
+    /// duplicates, and win over a lane the person opened with the same session.
+    var generatedRowIDs: Set<String> {
+        Set(lanes.filter { syncedRowIDs.contains($0.id) || isGeneratedRow?($0) == true }.map(\.id))
+    }
+
+    /// Close every row that attaches a session another row attaches, keeping
+    /// the oldest, so the sidebar never lists one session twice. The sessions
+    /// keep running, and the close reaches the other Macs.
+    func collapseDuplicateLanes() {
+        let duplicates = SharedLaneList.duplicates(in: sharedLaneEntries(), generated: generatedRowIDs)
+        for id in duplicates.keys.sorted() {
+            guard let lane = lanes.first(where: { $0.id == id }), lane.isClosable else { continue }
+            sharedLanes?.closed(id)
+            removeSharedLane(id)
+        }
+    }
+
+    /// Whether a lane not yet added would attach a session a lane here has.
+    private func sharesBackendSession(of lane: AgentLane) -> Bool {
+        guard let backend = backends[lane.backendID], backend.keepsRunningWhenDetached,
+              let name = backend.sessionName(for: lane) else { return false }
+        return lanes.contains { other in
+            other.id != lane.id && other.backendID == lane.backendID && other.host == lane.host
+                && !detachedIDs.contains(other.id) && backend.sessionName(for: other) == name
+        }
+    }
+
+    /// Whether another lane resolves to the same backend session as `id`.
+    func sharesBackendSession(_ id: AgentLane.ID) -> Bool {
+        guard let lane = lanes.first(where: { $0.id == id }), let backend = backends[lane.backendID],
+              let name = backend.sessionName(for: lane) else { return false }
+        return lanes.contains { other in
+            other.id != id && other.backendID == lane.backendID && other.host == lane.host
+                && backend.sessionName(for: other) == name
+        }
+    }
+
     /// The lanes the person opened, as the shared list records them, in
     /// list order, and after them the rows the app lists itself that the
     /// person named, pinned, coloured or filed (`overlay` entries, which
@@ -1180,7 +1255,9 @@ public final class AgentLaneStore: ObservableObject {
         let before = Dictionary(captured.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         var current = Dictionary(sharedLaneEntries().map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         let live = Set(list.lanes.map(\.id))
-        for close in list.closed where !live.contains(close.id) && current[close.id]?.overlay != true && current[close.id] != nil {
+        let generated = generatedRowIDs
+        for close in list.closed where !live.contains(close.id) && current[close.id]?.overlay != true && current[close.id] != nil
+            && !generated.contains(close.id) {
             removeSharedLane(close.id)
             current.removeValue(forKey: close.id)
         }
@@ -1205,6 +1282,7 @@ public final class AgentLaneStore: ObservableObject {
             }
         }
         applySharedOrder(list, captured: captured)
+        collapseDuplicateLanes()
     }
 
     /// Take the name, icon, colour, section and pin an entry carries,
@@ -2255,6 +2333,9 @@ public final class AgentLaneStore: ObservableObject {
         session.update(sessionTitle: title)
         guard renamesAgentSession else { return }
         let before = session.titleSync
+        // Rows on one session cannot each take its title: it would paint
+        // them all alike, so each keeps its own name.
+        if sharesBackendSession(id) { return }
         if let name = session.titleSync.observe(title: title, rowName: session.customTitle) { setName(id, to: name) }
         if session.titleSync != before { saveTitleSync(id) }
     }
@@ -2410,6 +2491,7 @@ public final class AgentLaneStore: ObservableObject {
         // so the copy asks for a lane of its own: the next free number.
         lane.variant = nil
         lane.variant = freeVariant(for: lane)
+        if backends[lane.backendID]?.keepsRunningWhenDetached == true { lane.startsNewSession = true }
         let name = session.title.nextCopyName(taken: copyNamesTaken(in: lane.path))
         // A Claude background copy starts a session of its own, named after
         // itself, and binds only the id that start prints.
@@ -2489,9 +2571,36 @@ public final class AgentLaneStore: ObservableObject {
             candidate.variant = variant
             return backend.sessionName(for: candidate).map(running.contains) ?? false
         }
+        let retired = Set(retiredVariants(backendID: lane.backendID, path: path))
+        func occupied(_ variant: String) -> Bool {
+            var candidate = lane
+            candidate.variant = variant
+            guard let name = backend.sessionName(for: candidate) else { return false }
+            return configuration.variantOccupied?(lane.backendID, name, lane.host) ?? false
+        }
         var n = 2
-        while used.contains(String(n)) || live(String(n)) { n += 1 }
+        while used.contains(String(n)) || retired.contains(String(n)) || live(String(n)) || occupied(String(n)) { n += 1 }
         return String(n)
+    }
+
+    // MARK: Variants of closed lanes
+
+    private func retiredKey(_ backendID: String, _ path: String) -> String { backendID + "|" + path }
+
+    /// The variants lanes in a folder had when they were closed. A closed
+    /// lane's session or resume entry can outlive its row, and a new lane
+    /// that reused its variant would attach or resume it.
+    func retiredVariants(backendID: String, path: String) -> [String] {
+        (defaults.dictionary(forKey: keys.retiredVariants) as? [String: [String]])?[retiredKey(backendID, path)] ?? []
+    }
+
+    func retireVariant(of lane: AgentLane) {
+        guard let variant = lane.variant, let backend = backends[lane.backendID], backend.keepsRunningWhenDetached else { return }
+        var all = defaults.dictionary(forKey: keys.retiredVariants) as? [String: [String]] ?? [:]
+        let key = retiredKey(lane.backendID, normalizedPath(lane.path))
+        guard !(all[key] ?? []).contains(variant) else { return }
+        all[key, default: []].append(variant)
+        defaults.set(all, forKey: keys.retiredVariants)
     }
 
     // MARK: New lane in a section
@@ -2555,6 +2664,7 @@ public final class AgentLaneStore: ObservableObject {
                              directory: folder, backendID: backendID, isClosable: true, section: section)
         lane.variant = freeVariant(for: lane)
         if let variant = lane.variant { lane.title += " \(variant)" }
+        lane.startsNewSession = backends[backendID]?.keepsRunningWhenDetached == true
         // A person's move wins over a lane's own section, so record this
         // one as theirs: the lane stays where its + was pressed.
         layout.move(lane.id, to: section)
@@ -3075,6 +3185,7 @@ public final class AgentLaneStore: ObservableObject {
             return
         }
         let closed = lanes[index]
+        retireVariant(of: closed)
         restoredPending.remove(id)
         if !detachedIDs.contains(id) { sharedLanes?.closed(id) }
         defer {
@@ -3577,6 +3688,7 @@ public struct AgentsModeKeys: Sendable {
     public var renameAgentSession: String { prefix + "renameAgentSession" }
     /// The agent session title each row has already settled with, by lane.
     public var titleSync: String { prefix + "titleSync" }
+    public var retiredVariants: String { prefix + "retiredVariants" }
     /// Row names the agent's session has not been told yet.
     public var titlePending: String { prefix + "titlePending" }
     /// The person's sidebar shape, over the app's defaults

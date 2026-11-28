@@ -4,10 +4,11 @@ import AgentsMateStatus
 
 private func date(_ seconds: TimeInterval) -> Date { Date(timeIntervalSince1970: 1_800_000_000 + seconds) }
 
+/// Each lane is a session of its own: lanes in one folder with one variant are one lane.
 private func lane(_ id: String, title: String? = nil, variant: String? = nil, order: Int = 0,
                   updated: TimeInterval) -> SharedLaneList.Lane {
     SharedLaneList.Lane(id: id, title: title, directory: "~/work", backendID: "w", command: "lane-wrapper",
-                        variantFlag: "-n", variant: variant, order: order, updated: date(updated))
+                        variantFlag: "-n", variant: variant ?? "v\(id)", order: order, updated: date(updated))
 }
 
 final class SharedLaneListTests: XCTestCase {
@@ -322,7 +323,7 @@ final class SharedLaneStoreTests: XCTestCase {
     }
 
     private func folderLane(_ id: String) -> AgentLane {
-        AgentLane(id: id, title: "Work", directory: URL(fileURLWithPath: "/tmp/shared-work"), backendID: "w", isClosable: true)
+        AgentLane(id: id, title: "Work", directory: URL(fileURLWithPath: "/tmp/shared-work-\(id)"), backendID: "w", isClosable: true)
     }
 
     func testTwoVariantsInOneFolderSurviveSnapshotSaveAndRestore() throws {
@@ -401,7 +402,7 @@ final class SharedLaneStoreTests: XCTestCase {
         XCTAssertEqual(hub.list?.lanes.map(\.id), ["main", copy.id])
         XCTAssertEqual(hub.list?.lane(copy.id)?.variant, "2")
         XCTAssertEqual(hub.list?.lane(copy.id)?.host, "mini-1")
-        XCTAssertEqual(hub.list?.lane("main")?.directory, "/tmp/shared-work")
+        XCTAssertEqual(hub.list?.lane("main")?.directory, "/tmp/shared-work-main")
 
         let second = makeStore(sharing: hub, me: "laptop")
         sync(second)

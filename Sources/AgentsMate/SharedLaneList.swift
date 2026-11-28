@@ -121,7 +121,8 @@ public struct SharedLaneList: Equatable, Sendable {
     /// on a tie), the newest close per id is kept, a lane closed at or after
     /// its `updated` is dropped, and closes older than a week, or older than
     /// the lane they name, are forgotten.
-    public static func merge(_ copies: [SharedLaneList], now: Date = SharedLaneList.now()) -> SharedLaneList {
+    public static func merge(_ copies: [SharedLaneList], now: Date = SharedLaneList.now(),
+                             generated: Set<String> = []) -> SharedLaneList {
         var closedAt: [String: Date] = [:]
         var lanes: [String: Lane] = [:]
         var firstSeen: [String] = []
@@ -139,10 +140,19 @@ public struct SharedLaneList: Equatable, Sendable {
                 }
             }
         }
-        let live = firstSeen.compactMap { id -> Lane? in
+        var live = firstSeen.compactMap { id -> Lane? in
             guard let lane = lanes[id] else { return nil }
             if let at = closedAt[id], at >= lane.updated { return nil }
             return lane
+        }
+        // Rows on one backend session are one lane: the oldest stays, and the
+        // rest are closed so every other copy drops them too.
+        let duplicates = duplicates(in: live, generated: generated)
+        if !duplicates.isEmpty {
+            for lane in live where duplicates[lane.id] != nil {
+                closedAt[lane.id] = max(now, lane.updated)
+            }
+            live.removeAll { duplicates[$0.id] != nil }
         }
         let liveIDs = Set(live.map(\.id))
         let cutoff = now.addingTimeInterval(-tombstoneLifetime)
@@ -172,7 +182,7 @@ public struct SharedLaneList: Equatable, Sendable {
     /// lanes after a reboot.
     public static func reconcile(local: [Lane], base: SharedLaneList, remote: SharedLaneList,
                                  closing: [Closed], restores: Bool = true, edited: Date? = nil,
-                                 now: Date = SharedLaneList.now()) -> SharedLaneList {
+                                 now: Date = SharedLaneList.now(), generated: Set<String> = []) -> SharedLaneList {
         let moved = movedLanes(local: local, base: base)
         let reordered = !moved.isEmpty
         let stamped = local.map { lane -> Lane in
@@ -200,7 +210,8 @@ public struct SharedLaneList: Equatable, Sendable {
             }
             return lane
         }
-        var merged = merge([remote, SharedLaneList(lanes: stamped, closed: closing, restore: restores)], now: now)
+        var merged = merge([remote, SharedLaneList(lanes: stamped, closed: closing, restore: restores)], now: now,
+                           generated: generated)
         for index in merged.lanes.indices { merged.lanes[index].order = index }
         return merged
     }

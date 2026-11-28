@@ -515,6 +515,9 @@ public final class AgentLaneSession: NSObject, ObservableObject, Identifiable, L
         env["TERM_PROGRAM"] = configuration.termProgram
         env["COLORFGBG"] = (view.colorScheme ?? .light).colorFgBg
         env["AGENTSMATE_LANE"] = lane.id
+        // A lane that must start a session of its own tells the wrapper not
+        // to adopt the old conversation or ledger entry its session name had.
+        if lane.startsNewSession { env["AGENTSMATE_LANE_FRESH"] = "1" }
         if let url = configuration.sessionFileDirectory?.appendingPathComponent(Self.fileName(lane.id) + ".json") {
             try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             metadataURL = url
